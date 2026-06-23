@@ -8,6 +8,16 @@ e-ink photo frame: a reverse-engineering reference, runnable tools, a full custo
 firmware with features the stock product never had, and a self-hostable backend.
 Everything is developed in public.
 
+**Status**
+
+| Component | State |
+|---|---|
+| `documentation/` | **published** |
+| `firmware/` | not public yet |
+| `server/` | not public yet |
+| `web-usb/` | not public yet |
+| `scripts/` | not public yet |
+
 ---
 
 ## Motivation
