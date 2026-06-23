@@ -156,6 +156,8 @@ stock). Full breakdown in [`documentation/device.md`](documentation/device.md).
 
 ---
 
-## License
+## Author & license
 
-[MPL-2.0](LICENSE).
+Created and maintained by **Jan-Stefan Janetzky (GottZ)** — [git@gottz.de](mailto:git@gottz.de).
+
+Licensed under the [Mozilla Public License 2.0](LICENSE). Copyright © 2026 Jan-Stefan Janetzky.
