@@ -166,6 +166,27 @@ stock). Full breakdown in [`documentation/device.md`](documentation/device.md).
 
 ---
 
+## Disclaimer
+
+open-picpak is an independent, community-run project. It is **not affiliated with,
+authorized by, or endorsed by AUTOHEART TECH CO., LTD**, the maker of PicPak.
+"PicPak" / "PICPAK" and any related names or marks are the property of AUTOHEART TECH
+CO., LTD and are used here only to identify the hardware this project targets.
+
+This is **clean-room, interoperability** work: it documents and reimplements the
+device's behavior through reverse engineering. **No vendor source code, firmware
+binaries, assets, keys or secrets are included or redistributed** (see the air-gap
+note above). Studying and testing how a program you own behaves — and reverse
+engineering for interoperability — are expressly permitted under EU law (Directive
+2009/24/EC, Arts. 5–6; in Germany § 69e UrhG), and computer programs "as such" are
+not patentable in the EU (Art. 52 EPC). The author lives in Germany (EU) and is not a
+US citizen. Comparable open-source projects stand on the same footing despite pressure
+from original vendors — e.g. VideoLAN/VLC.
+
+None of this is legal advice.
+
+---
+
 ## Author & license
 
 Created and maintained by **Jan-Stefan Janetzky (GottZ)** — [git@gottz.de](mailto:git@gottz.de).
