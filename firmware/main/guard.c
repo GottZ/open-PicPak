@@ -121,7 +121,9 @@ void guard_check_and_run(void)
              prev, fresh, d.new_count, d.safe_mode, thr);
     if (d.safe_mode)
         safe_mode(d.new_count);          /* never returns */
-    xTaskCreate(stable_task, "guard_stable", 3072, NULL, 4, NULL);
+    /* 8192: the NVS commit in nvs_set_bad() overflows a 3072-byte stack on a full or
+     * fragmented NVS -> stack-protection panic in this task (~stable_ms after boot). */
+    xTaskCreate(stable_task, "guard_stable", 8192, NULL, 4, NULL);
 }
 
 void guard_mark_stable(void) { nvs_set_bad(0); }
