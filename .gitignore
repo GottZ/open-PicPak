@@ -1,0 +1,8 @@
+# Internal planning & engineering artifacts — never published (air-gap).
+# Inventory/design/masterplan live here locally; only finished, stubbed docs
+# and code are committed to the public repo.
+.project/
+
+# Scratch / build
+*.tmp
+*.log
