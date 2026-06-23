@@ -13,3 +13,8 @@ firmware/sdkconfig
 firmware/sdkconfig.old
 firmware/dependencies.lock
 firmware/managed_components/
+
+# Generated assets (source of truth: screens-src/gen_screens.py + fonts)
+firmware/main/screens.h
+firmware/screens-src/screens.h
+firmware/screens-src/*.png

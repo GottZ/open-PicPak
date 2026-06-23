@@ -57,10 +57,16 @@ Defaults: threshold = 4, stable-uptime = 20000 ms (compile-time defaults in `gua
 
 ## Build
 
+`main/screens.h` is a build artifact (not committed) — generate it first from
+`screens-src/gen_screens.py` (needs Python 3 + Pillow + the bundled fonts), then build:
+
 ```sh
+python3 screens-src/gen_screens.py        # writes main/screens.h (host needs Pillow)
 docker run --rm -v "$PWD":/project -w /project espressif/idf:v5.5.3 \
   bash -lc "idf.py set-target esp32c3 build"
 ```
+
+The build fails fast with a clear message if `screens.h` is missing.
 
 Host unit test (guard logic, no hardware):
 

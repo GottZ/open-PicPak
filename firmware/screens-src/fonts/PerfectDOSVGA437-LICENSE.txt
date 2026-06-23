@@ -1,0 +1,27 @@
+Perfect DOS VGA 437
+===================
+
+Designer : Zeh Fernando
+Source   : http://www.fatorcaos.com.br  (zehfernando.com)
+Version  : 1.0 (2003)
+
+License
+-------
+Published by the author as free for personal and commercial use, and
+distributed widely on that basis (e.g. dafont.com, fontriver.com). The font
+carries no formal license text -- neither embedded in the TrueType name table
+nor shipped alongside it by the author.
+
+Note on provenance: the font is a TrueType recreation of the IBM VGA 8x16
+text-mode font (code page 437). The "free for personal and commercial use"
+statement is the author's, not a formal license.
+
+Use in this project
+-------------------
+Used only at build time by screens-src/gen_screens.py to render the static
+setup screens (monospace URL / CLI text). It is not part of the firmware
+binary beyond the rendered bitmaps.
+
+If a clearly-licensed alternative is preferred, replace it with a CC0/OFL VGA
+font (e.g. PixelOperator Mono, CC0) and regenerate the screens -- the rest of
+the screens already use PixelOperator (CC0).

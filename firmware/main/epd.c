@@ -138,6 +138,11 @@ void epd_write_full(const uint8_t *buf)
     if (!s_init_done) epd_init();
     epd_set_ram_area(0, 0, EPD_W, EPD_H);
     epd_cmd(0x10);
+    /* Plain linear block transfer -- the framebuffer arrives panel-ready. The panel's gate
+     * scan (factory PSR 0x07,0x29) is Y-mirrored vs a top-to-bottom image, so the data is
+     * pre-mirrored at the source instead of per-frame here: the baked setup screens are
+     * generated vertically flipped, and the server renders the image flipped too. No
+     * per-frame transform on the device. */
     epd_data(buf, EPD_FRAME_BYTES);
     ESP_LOGI(TAG, "frame written (%d B)", EPD_FRAME_BYTES);
 }
