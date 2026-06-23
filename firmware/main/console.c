@@ -15,10 +15,7 @@
 #include "esp_idf_version.h"
 
 #define CON_LINE_MAX 160
-#define WINDOW_MS    3000      /* setup window when config already exists */
-#define SETUP_WINDOW_MS 180000 /* setup mode (forced / no config): long enough to
-                                  provision via web tool or CLI, but not infinite ->
-                                  an idle device eventually proceeds (screen + sleep) */
+#define WINDOW_MS    3000      /* brief first-char peek when config already exists */
 #define CONSOLE_STAY (-1)      /* internal sentinel: command handled, loop continues */
 
 static bool s_io_ready;
@@ -47,11 +44,19 @@ static int read_char(int timeout_ms)
 }
 
 /* Reads a line with echo. Waits for the FIRST character up to first_to_ms
- * (-1 = forever), then blocks until CR/LF. Returns the length, -1 if no
- * character arrived within the window (no input). */
+ * (-1 = forever; 0 = block while a USB host stays attached, give up only on disconnect),
+ * then blocks until CR/LF. Returns the length, -1 if no character arrived (no input). */
 static int read_line(char *buf, size_t cap, int first_to_ms)
 {
-    int ch = read_char(first_to_ms);
+    int ch;
+    if (first_to_ms == 0) {
+        /* No creds / forced setup = the console is the ONLY control path. Don't time out
+         * into a no-op sleep/restart; stay open while a host can still type. Give up only
+         * when the USB host actually disconnects (field: the caller then sleeps). */
+        do { ch = read_char(500); } while (ch < 0 && usb_serial_jtag_is_connected());
+    } else {
+        ch = read_char(first_to_ms);
+    }
     if (ch < 0) return -1;
     size_t pos = 0;
     for (;;) {
@@ -220,9 +225,10 @@ console_action_t console_run(uint32_t boot_count, uint32_t *sleep_secs_out, bool
 
     console_action_t action = CONSOLE_PROCEED;
     char line[CON_LINE_MAX];
-    /* First-char window: a brief 3s peek only when config exists AND setup was not
-     * forced; otherwise a long setup window so the web tool / CLI has time to provision. */
-    int first_to = (have && !force_open) ? WINDOW_MS : SETUP_WINDOW_MS;
+    /* First-char window: a brief 3s peek only when config exists AND setup was not forced.
+     * Otherwise (no creds / forced setup) stay open while a USB host is attached -- the
+     * console is then the only way to provision; timing out into sleep/restart does nothing. */
+    int first_to = (have && !force_open) ? WINDOW_MS : 0;
     int n = read_line(line, sizeof(line), first_to);
     if (n < 0) {
         printf("\r\n(no setup -> normal run)\r\n");
@@ -231,12 +237,11 @@ console_action_t console_run(uint32_t boot_count, uint32_t *sleep_secs_out, bool
             int a = handle(line, boot_count);
             if (a != CONSOLE_STAY) { action = (console_action_t)a; break; }
             printf("> ");
-            /* Inactivity timeout instead of blocking forever: if the console stays
-             * without further input after a command (host port closed or USB
-             * disconnected), it would otherwise hang FOREVER in read_bytes -> the
-             * device would never run run_cycle/deep sleep. After WINDOW_MS without a
-             * line -> normal run. */
-            n = read_line(line, sizeof(line), WINDOW_MS);
+            /* Between commands: the config-exists path uses a short inactivity timeout (3s)
+             * to proceed to a normal run. In setup mode (force_open) stay open while a USB
+             * host is attached and give up only on disconnect -- the device never hangs
+             * forever without a host, but the console stays usable as long as one is there. */
+            n = read_line(line, sizeof(line), force_open ? 0 : WINDOW_MS);
             if (n < 0) {
                 printf("\r\n(console timeout -> normal run)\r\n");
                 break;
