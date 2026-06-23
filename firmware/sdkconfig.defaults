@@ -1,0 +1,46 @@
+# PicPak FW defaults — ESP32-C3, native USB-Serial-JTAG console, 16MB DIO/80m flash.
+CONFIG_IDF_TARGET="esp32c3"
+
+# Console/log over native USB-Serial-JTAG (appears as /dev/ttyACM0)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+
+# Flash as verified on stock/custom FW: DIO, 16MB, 80MHz
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# Custom partition table (nvs for provisioning, ota_0/ota_1 for OTA)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# OTA rollback: an app freshly booted via OTA starts in state PENDING_VERIFY and must
+# confirm itself as functional via esp_ota_mark_app_valid_cancel_rollback(). If the
+# confirmation stays out until the next reboot, the bootloader falls back to the
+# previous partition -> no brick from a broken FW.
+# CAUTION: a deep-sleep wake IS a reboot -> mark_valid must run within the same boot
+# cycle after the OTA (in run_cycle after a successful WiFi connect).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# WiFi current spikes collapse the USB supply -> brownout reset loop.
+# Detector off for USB test operation (reconsider for battery field operation later).
+CONFIG_ESP_BROWNOUT_DET=n
+
+# The console installs the interrupt-driven USB-Serial-JTAG VFS; with it the WiFi
+# event handler (sys_evt task) also logs over the deeper VFS path. The default stack
+# of 2304 B is then not enough -> "Stack protection fault" on connect. Give reserve
+# (RAM is plentiful).
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+
+# The main task (run_cycle) calls snprintf (timing-report URL) + the WiFi/HTTP stack
+# -> the default ~3.5 KB is too tight ("Stack protection fault" in the main task, SP
+# just below the bound). Give reserve (RAM is plentiful).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
+# HTTPS: compile in the ESP-IDF root cert bundle -> esp_http_client can verify against
+# public CAs (crt_bundle_attach in net.c/ota.c). FULL covers the common roots incl.
+# ISRG Root X1/X2 (Let's Encrypt). The protocol is decided solely by the url config
+# (https:// -> TLS+verify, http:// -> no-op). Costs ~100 KB flash; irrelevant with
+# 4 MB OTA slots.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y

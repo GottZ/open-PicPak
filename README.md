@@ -13,7 +13,7 @@ Everything is developed in public.
 | Component | State |
 |---|---|
 | `documentation/` | **published** |
-| `firmware/` | not public yet |
+| `firmware/` | **started** — recovery guard (first component) |
 | `server/` | not public yet |
 | `web-usb/` | not public yet |
 | `scripts/` | not public yet |
@@ -87,6 +87,8 @@ A full suite, built clean:
 - [x] [`documentation/image-pipeline.md`](documentation/image-pipeline.md) —
       RGB→palette (BT.601 + Atkinson) with a runnable JS reference
 - [x] MPL-2.0 license
+- [x] [`firmware/`](firmware/) — ESP-IDF firmware scaffold with its **first component, the
+      recovery guard** (bootloop → USB-reachable safe-mode); host-tested + on-device validated
 
 ### What I planned
 
@@ -99,6 +101,9 @@ clean and gets refined on the way — then going far past what the stock firmwar
 - [ ] custom-firmware notes (adaptive TX, OTA block transfer, streaming-header pitfall)
 
 **`firmware/` — custom ESP-IDF firmware (C)**
+- [x] **recovery guard** — bootloop detection → USB-reachable safe-mode (WiFi/EPD off,
+      esptool + console stay up); reset-reason-agnostic, fresh-app reset, NVS-tunable
+      threshold/stable-uptime. Host-tested + on-device validated.
 - [ ] **TOML config store** — on-device config (rotation, intervals, OTA URL,
       endpoints); WiFi/IP **stubbed off** (DHCP + WiFi disabled until configured)
 - [ ] **control actions** — named actions (`reboot`, `test-wifi`, …) triggered from
