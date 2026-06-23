@@ -98,34 +98,39 @@ clean and gets refined on the way — then going far past what the stock firmwar
 - [ ] reverse-engineering methodology (ESP-image → ELF, radare2, Ghidra, blutter)
 - [ ] custom-firmware notes (adaptive TX, OTA block transfer, streaming-header pitfall)
 
-**`firmware/` — custom ESP-IDF firmware**
-- [ ] **USB mass-storage config interface** — a virtual filesystem overlay where text
-      files are the configuration UI, **TOML** as the language *(untested concept)*
-- [ ] **`control/` action folder** — deleting a named "file" runs that action
-      (`reboot`, `test-wifi`, …)
-- [ ] **WiFi / IP config via TOML** — stubbed with DHCP and WiFi **disabled** until
-      configured
-- [ ] **embedded fonts** — pixel fonts for on-device text + simple shape rendering
-      *(feasibility to confirm)*
+**`firmware/` — custom ESP-IDF firmware (C)**
+- [ ] **TOML config store** — on-device config (rotation, intervals, OTA URL,
+      endpoints); WiFi/IP **stubbed off** (DHCP + WiFi disabled until configured)
+- [ ] **control actions** — named actions (`reboot`, `test-wifi`, …) triggered from
+      the config tool
+- [ ] **embedded fonts + simple shapes** — Adafruit-GFX-style 1-bit glyph blitter into
+      the framebuffer (text, lines, rects), ~0 extra RAM *(confirmed feasible)*
 - [ ] **self-debug screen** — serial, MACs, WiFi status, IP / subnet / gateway, …
 - [ ] **playlist & rotation** — rotate stored images, configurable cycle interval,
       remote **sync playlist** (poll for updates on an interval — not yet implemented),
       single-frame remote (Home-Assistant-style backend), OTA URL
-- [ ] **virtual `picture/` folder** — stored images exposed as editable,
+- [ ] **image store** — stored frames, exposed to the config tool as editable
       color-indexed PNGs
+- [ ] **BLE / WiFi, swappable** — never both at once (RAM budget = the larger, not the
+      sum); configurable swap (BLE for provisioning/OTA ↔ WiFi run-cycle), NimBLE
 - [ ] **BLE-stack re-implementation** — keep the original PicPak app able to manage
       stored images (on-flash storage format TBD)
-- [ ] **use the upper 16 MB of flash** — make the currently unaddressed region usable
-      *(research: swapping / code paging — TBD)*
-- [ ] **Lua interpreter** — user scripting on the device
+- [ ] **use the upper flash region** — make the unaddressed 16→32 MB usable for bulk
+      image storage *(research — data only, not code)*
+- [ ] **optional on-device scripting** — Lua or Berry, if the RAM budget allows
+      *(not a hard requirement)*
 
 **`server/` — Docker backend**
 - [ ] **serial-number differentiation** — serve separate frames per device
 - [ ] single-frame remote backend, generalized from the Home Assistant PoC
 - [ ] serves the `web-usb/` tool as static assets
 
-**`web-usb/` — browser tool (served by the server)**
+**`web-usb/` — browser config & flashing tool (served by the server)**
+> Replaces a USB mass-storage interface — impossible on the ESP32-C3 (no USB-OTG) —
+> with the same file-like UX over two transports: **Web-USB** (WebSerial, on the
+> cable) and **Web-WiFi** (HTTP, on the network).
 - [ ] flashing & stock backup / restore (esptool-js — no native install)
+- [ ] config form (writes the device TOML), control-action buttons, image gallery
 - [ ] image editor / uploader (built on the `image-pipeline.md` JS reference)
 
 **`scripts/` — host-side tooling**
@@ -140,7 +145,7 @@ clean and gets refined on the way — then going far past what the stock firmwar
 documentation/   reference & reverse-engineering docs        (published)
 firmware/        custom ESP-IDF firmware                     (planned)
 server/          self-hostable Docker backend; serves web-usb (planned)
-web-usb/         browser flashing + image editor/uploader    (planned)
+web-usb/         browser config + flashing tool              (planned)
 scripts/         host-side scripts / CLI tooling             (planned)
 ```
 
