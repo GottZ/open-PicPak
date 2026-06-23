@@ -31,6 +31,7 @@ inferred from app strings `[inf]`.
 |---|---|
 | Product | PicPak — 4.2″ four-color e-paper photo frame |
 | SoC | Espressif **ESP32-C3** (RISC-V single-core @ 160 MHz, rev v0.4) |
+| RAM | 400 KB on-chip SRAM (no PSRAM); 8 KB RTC SRAM retained in deep sleep |
 | Wireless | BLE only on stock firmware (no Wi-Fi linked, see §10) |
 | Radio/power | one RF PHY shared by BLE/Wi-Fi; brownout-sensitive at TX peaks (see §11) |
 | Display | 4.2″ **400 × 300** four-color (BWRY) e-paper, panel ID `0x060401` |
@@ -45,6 +46,10 @@ inferred from app strings `[inf]`.
 ## 2. SoC — ESP32-C3
 
 - RISC-V single core, 160 MHz, silicon revision **v0.4**.
+- **On-chip memory (datasheet):** 400 KB SRAM (16 KB of it configurable as cache),
+  384 KB ROM, and 8 KB RTC FAST SRAM that survives deep sleep (used for wake
+  counters / a log ring across sleep cycles). **No PSRAM** — the ESP32-C3 has no
+  external-RAM support, so the 400 KB SRAM is the entire RAM budget for any firmware.
 - **Native USB-Serial/JTAG** controller (no external USB bridge). Enumerates as
   VID `0x303A` / PID `0x1001`, appears as `/dev/ttyACM0` (Linux). `[hw]`
 - USB data lines: **D− = GPIO18**, **D+ = GPIO19**. Stock probe routines avoid
