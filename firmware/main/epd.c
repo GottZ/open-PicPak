@@ -75,12 +75,13 @@ static void epd_set_ram_area(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
     epd_data(d, sizeof(d));
 }
 
-/* Panel init sequence for the 0x060401 panel. Interoperability information: the panel is
- * selected by its own hardware ID, so this sequence is a property of the panel hardware (the
- * configuration it requires to operate) rather than a firmware-version secret -- any firmware
- * driving this panel must use the equivalent setup. The register map (PSR/PWRR/BTST/PLL/CDI/
- * TRES/GSST/...) is the public UC81xx-class command set; the values are the panel's required
- * tuning, validated on hardware.
+/* Panel init sequence for the 0x060401 panel. The register map (PSR/PWRR/BTST/PLL/CDI/TRES/
+ * GSST/...) is the public UC81xx-class command set. The specific VALUES are the MANUFACTURER'S
+ * FACTORY CALIBRATION for this panel -- empirically tuned by the vendor for these exact display
+ * characteristics; they are not arbitrary, and reproducing them is what makes the panel work
+ * correctly. The panel is selected by its own hardware ID, so this is a property of the panel
+ * hardware (the configuration it requires to operate), not a firmware-version secret; carried
+ * here as interoperability information.
  * Deliberately NOT set (the panel keeps its OTP/reset defaults): 0x03 POFS, 0x41 TSE,
  * 0x60 TCON, 0x82 VDCS (VCOM = OTP default), 0xE3 PWS, 0xE0. */
 static void epd_init_panel(void)
