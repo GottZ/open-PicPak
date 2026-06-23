@@ -96,8 +96,8 @@ static void epd_init_panel(void)
     epd_cmd(0x65); { uint8_t d[] = {0x00, 0x00, 0x00, 0x00}; epd_data(d, 4); }              /* GSST */
     epd_cmd(0xE7); epd_data1(0x96);
     epd_cmd(0xE9); epd_data1(0x01);
-    epd_cmd(0xFF); epd_data1(0xA5);                                                         /* Vendor-spezifisch (undokumentiert) */
-    epd_cmd(0x04);                                                                          /* PowerOn (Stock: in Refresh-Helper; hier beibehalten, getestet) */
+    epd_cmd(0xFF); epd_data1(0xA5);                                                         /* Vendor-specific (undocumented) */
+    epd_cmd(0x04);                                                                          /* PowerOn (stock keeps it in the refresh helper; retained here, tested) */
     wait_busy("power_on", 2000);
     ESP_LOGI(TAG, "panel init (0x060401 factory seq) + power on done");
 }

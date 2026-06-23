@@ -1,4 +1,4 @@
-/* Generiert aus picpak prepare_image (flip_vertical=False) — Phase-1-Orientierungstest */
+/* Generated from picpak prepare_image (flip_vertical=False) — phase-1 orientation test */
 #pragma once
 #include <stdint.h>
 static const uint8_t test_image[30000] = {
