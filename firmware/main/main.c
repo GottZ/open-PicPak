@@ -33,11 +33,13 @@
 #include "ota.h"
 #include "guard.h"
 #include "store.h"      /* littlefs "fs" persistence mount (Berry key-value backing store) */
+#include "netberry.h"   /* Berry net surface (wifi_ functions + http_get) for the policy phase */
 #include "screens.h"   /* baked-in 400x300 BWRY setup screens (onboarding / console) */
 #include "berry.h"
 #include "fb.h"         /* Berry graphics stdlib -> the 30000-byte framebuffer */
 #include "dev.h"        /* Berry device stdlib: mac/serial/chip/uptime/battery + nvs_str */
 #include "render_script.h"  /* RENDER_BE: embedded Berry render script (generated from render.be) */
+#include "policy_script.h"  /* POLICY_BE: embedded Berry net-phase script (generated from policy.be) */
 
 #define DEFAULT_WAKE_S 3600   /* 1 h, if the server delivers no header */
 #define RETRY_WAKE_S   300    /* on WiFi/download error or missing config */
@@ -193,6 +195,24 @@ static bool berry_render(void)
     return r == BE_OK;
 }
 
+/* Net-phase Berry: runs with WiFi UP (after the connect + OTA self-verify, before net_wifi_stop).
+ * Registers the net + store + rtc + dev surface, NOT fb (no drawing here -- the render phase,
+ * which runs after net_wifi_stop with RF off, owns the framebuffer). Best-effort: a script
+ * failure only logs, never blocks the cycle. POLICY_BE starts as a benign observe/record script;
+ * the multi-WLAN / rotation policy replaces it later. */
+static void berry_policy(void)
+{
+    bvm *vm = be_vm_new();
+    net_register(vm);
+    store_register(vm);
+    rtc_register(vm);
+    dev_register(vm);
+    int r = be_loadstring(vm, POLICY_BE);
+    if (r == BE_OK) r = be_pcall(vm, 0);
+    if (r != BE_OK) { ESP_LOGE(TAG, "Berry policy failed (res=%d)", r); be_dumpexcept(vm); }
+    be_vm_delete(vm);
+}
+
 /* Best-effort WiFi (OTA-validate now; script/image pull in a later wave) -> render the
  * frame ON-DEVICE via Berry -> display. The device is autonomous: it renders even with
  * no network. Returns the next sleep duration. */
@@ -205,6 +225,9 @@ static uint32_t run_cycle_inner(const picpak_cfg_t *cfg)
          * if not running in PENDING_VERIFY. */
         ota_mark_valid_if_pending();
         cfg_set_verified(true);
+        /* Net-phase Berry while WiFi is still up (after OTA self-verify, before the RF goes
+         * off). This is the only window with an active link AND the OTA health path done. */
+        berry_policy();
         /* RF off BEFORE the EPD charge-pump peak (brownout decoupling), then settle so
          * the supply recovers between the WiFi peak and the EPD peak. */
         net_wifi_stop();

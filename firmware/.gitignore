@@ -12,3 +12,5 @@ components/qrcodegen/
 main/render_script.h
 # generated 16px glyph table (from a TTF via host/gen_font16.py)
 main/font16.h
+# generated net-phase Berry script (from main/policy.be via host/gen_policy.py)
+main/policy_script.h

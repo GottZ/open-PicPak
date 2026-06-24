@@ -14,6 +14,10 @@ endif()
 if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/font16.h")
     message(FATAL_ERROR "main/font16.h is missing -- generate it first: python3 host/gen_font16.py (needs Pillow)")
 endif()
+# policy_script.h is generated from main/policy.be (the net-phase Berry script). Build artifact, not committed.
+if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/policy_script.h")
+    message(FATAL_ERROR "main/policy_script.h is missing -- generate it first: python3 host/gen_policy.py")
+endif()
 
 idf_component_register(SRCS "main.c" "epd.c" "net.c" "netberry.c" "config.c" "console.c" "led.c" "logbuf.c" "ota.c" "guard.c" "fb.c" "dev.c" "store.c"
                        INCLUDE_DIRS "."
