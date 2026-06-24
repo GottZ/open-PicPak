@@ -90,6 +90,11 @@ A full suite, built clean:
 - **Built a fully working Home Assistant WiFi pull-frame in a day** on custom ESP-IDF
   firmware: wake (timer/button) → WiFi → fetch a server-rendered image → display →
   deep sleep, with **SHA-256-verified OTA over WiFi** and brownout-hardened transfers.
+- **Built a recovery guard** — bootloop detection → USB-reachable safe-mode (WiFi/EPD off,
+  esptool + console stay up); reset-reason-agnostic, fresh-app reset, NVS-tunable
+  threshold/stable-uptime. Host-tested + on-device validated.
+- **Decided on-device scripting: Berry** — config *and* procedural graphics in one VM;
+  RAM feasibility validated on the C3 (VM ~3 KB, coexists with WiFi + framebuffer, no PSRAM).
 
 ### What I published
 
@@ -118,9 +123,6 @@ clean and gets refined on the way — then going far past what the stock firmwar
 - [ ] custom-firmware notes (adaptive TX, OTA block transfer, streaming-header pitfall)
 
 **`firmware/` — custom ESP-IDF firmware (C)**
-- [x] **recovery guard** — bootloop detection → USB-reachable safe-mode (WiFi/EPD off,
-      esptool + console stay up); reset-reason-agnostic, fresh-app reset, NVS-tunable
-      threshold/stable-uptime. Host-tested + on-device validated.
 - [~] **config-/logic-engine (Berry, not TOML)** — config *is* a Berry script fetched per wake
       (rotation, intervals, OTA URL, triggers/actions); the device exposes a small pinned C stdlib,
       the script decides. Feasibility validated on-device; seed in
@@ -143,10 +145,6 @@ clean and gets refined on the way — then going far past what the stock firmwar
       stored images (on-flash storage format TBD)
 - [ ] **use the upper flash region** — make the unaddressed 16→32 MB usable for bulk
       image storage *(research — data only, not code)*
-- [x] **on-device scripting decided: Berry** — config *and* procedural graphics in one VM;
-      on-device RAM feasibility validated (VM ~3 KB, coexists with WiFi + framebuffer on the C3,
-      no PSRAM). This is now the basis for the config-/logic-engine above, not an optional extra.
-
 **`server/` — Docker backend**
 - [ ] **serial-number differentiation** — serve separate frames per device
 - [ ] single-frame remote backend, generalized from the Home Assistant PoC
