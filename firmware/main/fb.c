@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "font8x8.h"
+#include "font16.h"   /* generated 16px glyph table (host/gen_font16.py); bit0 = leftmost */
 
 #define W EPD_W
 #define H EPD_H
@@ -109,6 +110,27 @@ static void fb_text(int x, int y, const char *s, int code, int scale)
     }
 }
 
+/* 16px bitmap font (font16.h). Structurally identical to fb_text but FONT16_W x FONT16_H
+ * per glyph (one uint16_t per row, bit0 = leftmost), monospace advance. */
+static void fb_text16(int x, int y, const char *s, int code, int scale)
+{
+    if (scale < 1) scale = 1;
+    for (int i = 0; s[i]; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (ch < FONT16_LO || ch > FONT16_HI) ch = '?';
+        const unsigned short *g = font16[ch - FONT16_LO];
+        for (int r = 0; r < FONT16_H; r++) {
+            unsigned short bits = g[r];
+            for (int c = 0; c < FONT16_W; c++)
+                if (bits & (1u << c)) {
+                    int bx = x + (i * FONT16_W + c) * scale, by = y + r * scale;
+                    for (int sy = 0; sy < scale; sy++)
+                        for (int sx = 0; sx < scale; sx++) px(bx + sx, by + sy, code);
+                }
+        }
+    }
+}
+
 void fb_dump_serial(void)
 {
     printf("\nFBDUMP_BEGIN\n");
@@ -137,10 +159,23 @@ static int l_triangle(bvm *vm)
                 be_toint(vm,5), be_toint(vm,6), be_toint(vm,7));
     be_return_nil(vm);
 }
+/* text/text16 are hardened (arity + type gate at the entry) because the on-device screen
+ * scripts feed them dynamic, possibly-nil strings -- e.g. text(x,y, wifi_ip()) when
+ * wifi_ip() is nil. Never be_toint/be_tostring an unchecked slot (be_assert is a release no-op). */
 static int l_text(bvm *vm)
 {
-    int scale = be_top(vm) >= 5 ? be_toint(vm, 5) : 1;
+    if (be_top(vm) < 4 || !be_isint(vm,1) || !be_isint(vm,2) || !be_isstring(vm,3) || !be_isint(vm,4))
+        be_return_nil(vm);
+    int scale = (be_top(vm) >= 5 && be_isint(vm,5)) ? be_toint(vm, 5) : 1;
     fb_text(be_toint(vm,1), be_toint(vm,2), be_tostring(vm,3), be_toint(vm,4), scale);
+    be_return_nil(vm);
+}
+static int l_text16(bvm *vm)
+{
+    if (be_top(vm) < 4 || !be_isint(vm,1) || !be_isint(vm,2) || !be_isstring(vm,3) || !be_isint(vm,4))
+        be_return_nil(vm);
+    int scale = (be_top(vm) >= 5 && be_isint(vm,5)) ? be_toint(vm, 5) : 1;
+    fb_text16(be_toint(vm,1), be_toint(vm,2), be_tostring(vm,3), be_toint(vm,4), scale);
     be_return_nil(vm);
 }
 
@@ -156,4 +191,5 @@ void fb_register(bvm *vm)
     be_regfunc(vm, "circle",   l_circle);
     be_regfunc(vm, "triangle", l_triangle);
     be_regfunc(vm, "text",     l_text);
+    be_regfunc(vm, "text16",   l_text16);
 }

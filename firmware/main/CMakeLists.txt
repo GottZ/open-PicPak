@@ -10,6 +10,10 @@ endif()
 if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/render_script.h")
     message(FATAL_ERROR "main/render_script.h is missing -- generate it first: python3 host/gen_render.py")
 endif()
+# font16.h is the 16px glyph table baked from a TTF (host/gen_font16.py, needs Pillow). Build artifact, not committed.
+if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/font16.h")
+    message(FATAL_ERROR "main/font16.h is missing -- generate it first: python3 host/gen_font16.py (needs Pillow)")
+endif()
 
 idf_component_register(SRCS "main.c" "epd.c" "net.c" "config.c" "console.c" "led.c" "logbuf.c" "ota.c" "guard.c" "fb.c" "dev.c" "store.c"
                        INCLUDE_DIRS "."

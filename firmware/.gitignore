@@ -7,3 +7,5 @@ components/littlefs/
 .littlefs-src/
 # generated render script (from main/render.be via host/gen_render.py)
 main/render_script.h
+# generated 16px glyph table (from a TTF via host/gen_font16.py)
+main/font16.h
