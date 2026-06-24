@@ -1,6 +1,7 @@
 #include "net.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "esp_wifi.h"
@@ -66,6 +67,7 @@ typedef struct {
 static net_cache_t s_cache;
 static bool s_cache_loaded;
 static esp_netif_ip_info_t s_got;   /* most recently DHCP-obtained IP (-> cache) */
+static char s_ssid[33];             /* SSID of the current/last attempt (for net_ssid, survives stop) */
 
 static void cache_load(void)
 {
@@ -186,11 +188,14 @@ static bool try_connect(const char *ssid, const char *pass, int timeout_ms, bool
     s_static_mode = static_ip;
     s_pinned = pin;
 
+    strncpy(s_ssid, ssid, sizeof(s_ssid) - 1);   /* remember for net_ssid (survives net_wifi_stop) */
+    s_ssid[sizeof(s_ssid) - 1] = '\0';
+
     wifi_config_t wc = { 0 };
     strncpy((char *)wc.sta.ssid, ssid, sizeof(wc.sta.ssid) - 1);
     strncpy((char *)wc.sta.password, pass, sizeof(wc.sta.password) - 1);
     wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;   /* allows WPA2..WPA3 */
-    wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;            /* WPA3-SAE (network "Zuhause") */
+    wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;            /* WPA3-SAE (Hash-to-Element + hunting-and-pecking) */
     wc.sta.pmf_cfg.capable = true;
     if (pin) {
         memcpy(wc.sta.bssid, s_cache.bssid, sizeof(wc.sta.bssid));
@@ -232,6 +237,26 @@ static bool try_connect(const char *ssid, const char *pass, int timeout_ms, bool
     EventBits_t bits = xEventGroupWaitBits(s_wifi_eg, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                            pdTRUE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
     return (bits & WIFI_CONNECTED_BIT) != 0;
+}
+
+/* After a cold (DHCP) connect, cache BSSID/channel/IP/DNS for the next warm connect. */
+static void cache_cold(const char *ssid)
+{
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return;
+    memcpy(s_cache.bssid, ap.bssid, sizeof(s_cache.bssid));
+    s_cache.channel = ap.primary;
+    s_cache.ip = s_got.ip.addr; s_cache.gw = s_got.gw.addr; s_cache.mask = s_got.netmask.addr;
+    esp_netif_dns_info_t dns;
+    s_cache.dns = (esp_netif_get_dns_info(s_netif, ESP_NETIF_DNS_MAIN, &dns) == ESP_OK
+                   && dns.ip.type == ESP_IPADDR_TYPE_V4) ? dns.ip.u_addr.ip4.addr : 0;
+    strncpy(s_cache.ssid, ssid, sizeof(s_cache.ssid) - 1);
+    s_cache.ssid[sizeof(s_cache.ssid) - 1] = '\0';   /* -> SSID-change detection */
+    s_cache.valid = 1;
+    cache_store();
+    ESP_LOGI(TAG, "netcache: ch=%u bssid=%02x:%02x:%02x:%02x:%02x:%02x ip=" IPSTR,
+             s_cache.channel, ap.bssid[0], ap.bssid[1], ap.bssid[2],
+             ap.bssid[3], ap.bssid[4], ap.bssid[5], IP2STR(&s_got.ip));
 }
 
 bool net_wifi_connect(const char *ssid, const char *pass, int timeout_ms)
@@ -285,27 +310,7 @@ bool net_wifi_connect(const char *ssid, const char *pass, int timeout_ms)
     if (ok && s_tx_idx != start_idx)
         tx_idx_save(s_tx_idx);
 
-    if (ok && !s_static_mode) {
-        /* connected cold (DHCP) -> cache BSSID/channel/IP for the next warm connect. */
-        wifi_ap_record_t ap;
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-            memcpy(s_cache.bssid, ap.bssid, sizeof(s_cache.bssid));
-            s_cache.channel = ap.primary;
-            s_cache.ip = s_got.ip.addr; s_cache.gw = s_got.gw.addr; s_cache.mask = s_got.netmask.addr;
-            /* Cache the DNS resolver from the DHCP lease too (usually the internal
-             * resolver) -> the next warm/static connect can re-set it (see above). */
-            esp_netif_dns_info_t dns;
-            s_cache.dns = (esp_netif_get_dns_info(s_netif, ESP_NETIF_DNS_MAIN, &dns) == ESP_OK
-                           && dns.ip.type == ESP_IPADDR_TYPE_V4) ? dns.ip.u_addr.ip4.addr : 0;
-            strncpy(s_cache.ssid, ssid, sizeof(s_cache.ssid) - 1);
-            s_cache.ssid[sizeof(s_cache.ssid) - 1] = '\0';   /* -> SSID-change detection */
-            s_cache.valid = 1;
-            cache_store();
-            ESP_LOGI(TAG, "netcache: ch=%u bssid=%02x:%02x:%02x:%02x:%02x:%02x ip=" IPSTR,
-                     s_cache.channel, ap.bssid[0], ap.bssid[1], ap.bssid[2],
-                     ap.bssid[3], ap.bssid[4], ap.bssid[5], IP2STR(&s_got.ip));
-        }
-    }
+    if (ok && !s_static_mode) cache_cold(ssid);   /* cache BSSID/channel/IP for the next warm connect */
     if (ok) {
         int64_t scan_auth = (s_t_conn > s_t_start) ? (s_t_conn - s_t_start) / 1000 : -1;
         int64_t dhcp = (s_t_ip > s_t_conn) ? (s_t_ip - s_t_conn) / 1000 : -1;
@@ -333,6 +338,93 @@ void net_wifi_stop(void)
     esp_wifi_stop();
     s_started = false;
     s_connected = false;
+}
+
+bool net_wifi_try(const char *ssid, const char *pass, int timeout_ms)
+{
+    /* Forcing connect (CB1): unlike net_wifi_connect this does NOT short-circuit on
+     * s_connected -- a scan-match / password-rotation policy must be able to (re)associate
+     * against the SSID/pass it passes. If already associated, drop it first so the new
+     * config takes effect, then a fresh cold attempt at base TX (fail-fast: the caller
+     * iterates candidates and wants a quick yes/no, not the multi-second TX climb). */
+    if (!s_wifi_eg) s_wifi_eg = xEventGroupCreate();
+    cache_load();
+    net_init_once();
+
+    if (s_connected) {
+        s_stopping = true;
+        esp_wifi_disconnect();
+        s_connected = false;
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (s_cache.valid && strncmp(s_cache.ssid, ssid, sizeof(s_cache.ssid)) != 0) {
+        ESP_LOGI(TAG, "wifi_try: SSID change -> connect cache discarded");
+        net_cache_clear();
+    }
+    s_tx_idx = 0;
+    bool ok = try_connect(ssid, pass, timeout_ms, false);
+    if (ok && !s_static_mode) cache_cold(ssid);
+    ESP_LOGI(TAG, "wifi_try \"%s\": %s", ssid, ok ? "connected" : "failed");
+    return ok;
+}
+
+bool net_ip(char *buf, size_t cap)
+{
+    if (!buf || cap < 16 || s_got.ip.addr == 0) return false;
+    snprintf(buf, cap, IPSTR, IP2STR(&s_got.ip));
+    return true;
+}
+
+bool net_ssid(char *buf, size_t cap)
+{
+    if (!buf || cap < 1 || s_ssid[0] == '\0') return false;
+    strncpy(buf, s_ssid, cap - 1);
+    buf[cap - 1] = '\0';
+    return true;
+}
+
+bool net_rssi(int *out)
+{
+    /* H2: RSSI is only meaningful while the RF is on and associated. */
+    if (!out || !s_connected) return false;
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return false;
+    *out = ap.rssi;
+    return true;
+}
+
+int net_wifi_scan(net_ap_t *out, int max)
+{
+    if (!out || max <= 0) return -1;
+    if (!s_wifi_eg) s_wifi_eg = xEventGroupCreate();
+    net_init_once();
+    /* H1: a scan on an active STA triggers STA_DISCONNECTED -> suppress the auto-reconnect
+     * during the scan window. The caller (multi-WLAN policy) scans BEFORE the final connect. */
+    s_stopping = true;
+    if (!s_started) {
+        esp_wifi_set_max_tx_power(s_tx_steps[s_tx_idx]);
+        if (esp_wifi_start() != ESP_OK) { s_stopping = false; return -1; }
+        s_started = true;
+    }
+    wifi_scan_config_t sc = { 0 };                    /* active scan, all channels */
+    if (esp_wifi_scan_start(&sc, true) != ESP_OK) { s_stopping = false; return -1; }
+    uint16_t found = 0;
+    esp_wifi_scan_get_ap_num(&found);
+    uint16_t want = found < (uint16_t)max ? found : (uint16_t)max;
+    wifi_ap_record_t *recs = calloc(want ? want : 1, sizeof(wifi_ap_record_t));
+    if (!recs) { s_stopping = false; return -1; }
+    uint16_t got = want;
+    esp_wifi_scan_get_ap_records(&got, recs);
+    for (uint16_t i = 0; i < got; i++) {
+        strncpy(out[i].ssid, (char *)recs[i].ssid, sizeof(out[i].ssid) - 1);
+        out[i].ssid[sizeof(out[i].ssid) - 1] = '\0';
+        out[i].rssi = recs[i].rssi;
+        out[i].auth = (uint8_t)recs[i].authmode;
+    }
+    free(recs);
+    s_connected = false;     /* the scan dropped any prior association */
+    s_stopping = false;
+    return (int)got;
 }
 
 void net_last_connect_ms(int32_t *scan_auth, int32_t *dhcp)

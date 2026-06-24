@@ -91,6 +91,7 @@ static void print_help(void)
            "  GUARD [CLEAR|THRESHOLD n|UPTIME ms]  bootloop-guard: status / clear / tune\r\n"
            "  STORE OK|LIST|GET k|SET k v|DEL k   littlefs key-value store\r\n"
            "  RTC STAT|GET k|SET k v|DEL k        RTC-RAM key-value (ephemeral)\r\n"
+           "  NET SCAN|TRY ssid pass|IP|SSID|RSSI|STOP   Berry net surface\r\n"
            "  ERASE                   delete config\r\n"
            "  HELP                    this help\r\n");
 }
@@ -260,6 +261,46 @@ static int handle(char *line, uint32_t boot_count)
             else printf(rtc_remove(arg) ? "OK   rtc deleted\r\n" : "ERR  not found\r\n");
         } else {
             printf("ERR  usage: RTC STAT|GET k|SET k v|DEL k\r\n");
+        }
+    } else if (strcasecmp(cmd, "NET") == 0) {
+        /* Berry net surface, exercised from the console (scan / connect test / provisioning). */
+        char *sub = rest;
+        char *arg = strchr(rest, ' ');
+        if (arg) { *arg++ = '\0'; while (*arg == ' ') arg++; }
+        else arg = rest + strlen(rest);
+        if (strcasecmp(sub, "SCAN") == 0) {
+            net_ap_t aps[20];
+            int n = net_wifi_scan(aps, 20);
+            if (n < 0) { printf("ERR  scan failed\r\n"); }
+            else {
+                for (int i = 0; i < n; i++)
+                    printf("  %-32s rssi=%d auth=%u\r\n", aps[i].ssid, (int)aps[i].rssi, aps[i].auth);
+                printf("NET %d AP(s)\r\n", n);
+            }
+        } else if (strcasecmp(sub, "TRY") == 0) {
+            char *pass = strchr(arg, ' ');
+            if (pass) { *pass++ = '\0'; while (*pass == ' ') pass++; }
+            else pass = arg + strlen(arg);
+            if (arg[0] == '\0') { printf("ERR  usage: NET TRY <ssid> <pass>\r\n"); }
+            else {
+                bool ok = net_wifi_try(arg, pass, 20000);
+                char ip[20];
+                if (ok && net_ip(ip, sizeof ip)) printf("NET try \"%s\": connected ip=%s\r\n", arg, ip);
+                else printf("NET try \"%s\": %s\r\n", arg, ok ? "connected (no ip)" : "FAILED");
+            }
+        } else if (strcasecmp(sub, "IP") == 0) {
+            char ip[20];
+            if (net_ip(ip, sizeof ip)) printf("NET ip=%s\r\n", ip); else printf("NET (no ip)\r\n");
+        } else if (strcasecmp(sub, "SSID") == 0) {
+            char s[33];
+            if (net_ssid(s, sizeof s)) printf("NET ssid=%s\r\n", s); else printf("NET (no ssid)\r\n");
+        } else if (strcasecmp(sub, "RSSI") == 0) {
+            int r;
+            if (net_rssi(&r)) printf("NET rssi=%d\r\n", r); else printf("NET (not connected)\r\n");
+        } else if (strcasecmp(sub, "STOP") == 0) {
+            net_wifi_stop(); printf("OK   wifi stopped\r\n");
+        } else {
+            printf("ERR  usage: NET SCAN|TRY ssid pass|IP|SSID|RSSI|STOP\r\n");
         }
     } else if (strcasecmp(cmd, "HELP") == 0 || strcasecmp(cmd, "?") == 0) {
         print_help();

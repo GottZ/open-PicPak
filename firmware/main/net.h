@@ -9,6 +9,25 @@
  * on a stale cache it automatically falls back to a full scan + DHCP. */
 bool net_wifi_connect(const char *ssid, const char *pass, int timeout_ms);
 
+/* Forcing connect for the Berry net policy (scan-match / password-rotation): unlike
+ * net_wifi_connect it does NOT short-circuit on an existing association -- it (re)associates
+ * against the passed SSID/pass and returns the real result. Cold, base TX, fail-fast. */
+bool net_wifi_try(const char *ssid, const char *pass, int timeout_ms);
+
+/* Getters for the Berry net surface. net_ip: the IP snapshot (survives net_wifi_stop, valid
+ * until overwritten); net_ssid: SSID of the current/last attempt; net_rssi: only while
+ * associated (false otherwise). All return false when no value is available. */
+bool net_ip(char *buf, size_t cap);
+bool net_ssid(char *buf, size_t cap);
+bool net_rssi(int *out);
+
+/* A scanned access point. */
+typedef struct { char ssid[33]; int8_t rssi; uint8_t auth; } net_ap_t;
+
+/* Active scan; fills out[0..max-1], returns the count (<= max) or -1 on error. Drops any
+ * current association (suppressed auto-reconnect) -> scan BEFORE the final connect. */
+int net_wifi_scan(net_ap_t *out, int max);
+
 /* Discard the connect cache -> the next connect does a full scan + DHCP and
  * re-caches. For tests (cold baseline vs. warm) and after a network change. */
 void net_cache_clear(void);
