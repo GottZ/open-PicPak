@@ -13,6 +13,8 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
+#include "berry.h"
 
 /* Mount the "fs" littlefs partition (by label). No-abort; sets the internal mount flag.
  * Call exactly once, strictly after the bootloop guard, before any Berry VM. */
@@ -20,3 +22,14 @@ void store_mount(void);
 
 /* True iff the filesystem is mounted and writable (separates "key absent" from "FS gone"). */
 bool store_fs_ok(void);
+
+/* Register the Berry key-value bindings (store_set/get/del/has/keys/ok) on a VM,
+ * like fb_register/dev_register. */
+void store_register(bvm *vm);
+
+/* Console-facing raw helpers (no Berry) for the STORE verbs. All honour store_fs_ok()
+ * and never mount. store_fetch: NUL-terminates buf if it fits, returns byte length or -1. */
+bool store_put(const char *key, const char *val);
+long store_fetch(const char *key, char *buf, size_t cap);
+bool store_remove(const char *key);
+void store_list(void);

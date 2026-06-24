@@ -89,7 +89,7 @@ static void print_help(void)
            "  NETCLR                  discard connect cache (BSSID/IP) -> next connect cold\r\n"
            "  OTA                     OTA status: running/boot/next partition + image state\r\n"
            "  GUARD [CLEAR|THRESHOLD n|UPTIME ms]  bootloop-guard: status / clear / tune\r\n"
-           "  STORE OK                littlefs persistence store: mounted & writable?\r\n"
+           "  STORE OK|LIST|GET k|SET k v|DEL k   littlefs key-value store\r\n"
            "  ERASE                   delete config\r\n"
            "  HELP                    this help\r\n");
 }
@@ -199,16 +199,38 @@ static int handle(char *line, uint32_t boot_count)
                    guard_bad_boots(), guard_threshold(), guard_stable_ms());
         }
     } else if (strcasecmp(cmd, "STORE") == 0) {
-        /* Only the mount-status query for now. STORE never mounts itself and must report
-         * the real state even in safe mode (where the store is intentionally not mounted). */
+        /* littlefs key-value store. STORE never mounts itself and reports the real state
+         * even in safe mode (where the store is intentionally not mounted). GET prints text
+         * values; binary values (Berry bytes) are shown up to the first NUL. */
         char *sub = rest;
-        char *n = strchr(rest, ' ');
-        if (n) { *n++ = '\0'; while (*n == ' ') n++; }
+        char *arg = strchr(rest, ' ');
+        if (arg) { *arg++ = '\0'; while (*arg == ' ') arg++; }
+        else arg = rest + strlen(rest);   /* "" */
         if (strcasecmp(sub, "OK") == 0) {
             printf("STORE %s\r\n", store_fs_ok() ? "ok (fs mounted, writable)"
                                                  : "unavailable (no fs partition / mount failed)");
+        } else if (strcasecmp(sub, "LIST") == 0) {
+            store_list();
+        } else if (strcasecmp(sub, "GET") == 0) {
+            if (arg[0] == '\0') { printf("ERR  usage: STORE GET <key>\r\n"); }
+            else {
+                char vbuf[256];
+                long len = store_fetch(arg, vbuf, sizeof vbuf);
+                if (len < 0) printf("STORE (nil) \"%s\" not found\r\n", arg);
+                else printf("STORE %s = \"%s\" (%ld B)\r\n", arg, vbuf, len);
+            }
+        } else if (strcasecmp(sub, "SET") == 0) {
+            char *val = strchr(arg, ' ');
+            if (val) { *val++ = '\0'; while (*val == ' ') val++; }
+            else val = arg + strlen(arg);   /* empty value allowed */
+            if (arg[0] == '\0') printf("ERR  usage: STORE SET <key> <value>\r\n");
+            else printf(store_put(arg, val) ? "OK   stored\r\n"
+                                            : "ERR  store failed (bad key / FS down / full)\r\n");
+        } else if (strcasecmp(sub, "DEL") == 0) {
+            if (arg[0] == '\0') printf("ERR  usage: STORE DEL <key>\r\n");
+            else printf(store_remove(arg) ? "OK   deleted\r\n" : "ERR  not found / FS down\r\n");
         } else {
-            printf("ERR  usage: STORE OK\r\n");
+            printf("ERR  usage: STORE OK|LIST|GET k|SET k v|DEL k\r\n");
         }
     } else if (strcasecmp(cmd, "HELP") == 0 || strcasecmp(cmd, "?") == 0) {
         print_help();
