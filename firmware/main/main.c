@@ -32,6 +32,7 @@
 #include "logbuf.h"
 #include "ota.h"
 #include "guard.h"
+#include "store.h"      /* littlefs "fs" persistence mount (Berry key-value backing store) */
 #include "screens.h"   /* baked-in 400x300 BWRY setup screens (onboarding / console) */
 #include "berry.h"
 #include "fb.h"         /* Berry graphics stdlib -> the 30000-byte framebuffer */
@@ -328,6 +329,11 @@ void app_main(void)
     }
     ota_record_boot();   /* reset-proof diagnostics (NVS): boot counter + reset reason (after nvs_init) */
     guard_check_and_run();   /* bootloop guard: enters USB-only safe mode if looping (never returns then) */
+
+    /* Mount the littlefs "fs" store STRICTLY AFTER the guard (so a FS defect can never mask
+     * a bootloop) and never aborting: a missing/corrupt partition just degrades to
+     * store_fs_ok()==false and the device runs autonomously. */
+    store_mount();
 
     led_init();
     led_on();   /* awake: LED on as soon as the device runs */

@@ -6,9 +6,16 @@
 # Large slots only cost flash reservation, NOT the OTA download (only the actual
 # binary goes over WiFi). 16MB: from 0x820000 ~7.9MB remain free.
 # App partitions must be 0x10000-aligned -> ota_0 from 0x20000 (otadata before it).
+# fs (littlefs: Berry key-value store, later image blobs) is ADDITIVE behind ota_1 -> it
+# moves no earlier partition, so the stock NVS @ 0x9000 stays intact. littlefs has no own
+# SubType in IDF, so it uses the "spiffs" data SubType (mounted by LABEL "fs", not subtype).
+# 7.0MB from 0x820000; ~0.875MB (0xE0000) of the 16MB stay reserve (coredump disabled).
+# A device without this row gets it ONLY via an esptool partition-table reflash (never OTA,
+# which writes app slots only) -> store.c degrades to s_fs_ok=false when "fs" is absent.
 # Name,     Type, SubType,  Offset,    Size
 nvs,        data, nvs,      0x9000,    0x6000
 phy_init,   data, phy,      0xf000,    0x1000
 otadata,    data, ota,      0x10000,   0x2000
 ota_0,      app,  ota_0,    0x20000,   0x400000
 ota_1,      app,  ota_1,    0x420000,  0x400000
+fs,         data, spiffs,   0x820000,  0x700000

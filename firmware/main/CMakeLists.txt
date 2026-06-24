@@ -11,6 +11,6 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/ren
     message(FATAL_ERROR "main/render_script.h is missing -- generate it first: python3 host/gen_render.py")
 endif()
 
-idf_component_register(SRCS "main.c" "epd.c" "net.c" "config.c" "console.c" "led.c" "logbuf.c" "ota.c" "guard.c" "fb.c" "dev.c"
+idf_component_register(SRCS "main.c" "epd.c" "net.c" "config.c" "console.c" "led.c" "logbuf.c" "ota.c" "guard.c" "fb.c" "dev.c" "store.c"
                        INCLUDE_DIRS "."
-                       REQUIRES driver nvs_flash esp_wifi esp_netif esp_event esp_http_client esp_driver_usb_serial_jtag esp_timer hal app_update esp_app_format esp_partition mbedtls berry esp_adc)
+                       REQUIRES driver nvs_flash esp_wifi esp_netif esp_event esp_http_client esp_driver_usb_serial_jtag esp_timer hal app_update esp_app_format esp_partition mbedtls berry esp_adc littlefs)

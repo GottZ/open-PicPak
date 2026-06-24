@@ -4,6 +4,7 @@
 #include "net.h"
 #include "ota.h"
 #include "guard.h"
+#include "store.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -88,6 +89,7 @@ static void print_help(void)
            "  NETCLR                  discard connect cache (BSSID/IP) -> next connect cold\r\n"
            "  OTA                     OTA status: running/boot/next partition + image state\r\n"
            "  GUARD [CLEAR|THRESHOLD n|UPTIME ms]  bootloop-guard: status / clear / tune\r\n"
+           "  STORE OK                littlefs persistence store: mounted & writable?\r\n"
            "  ERASE                   delete config\r\n"
            "  HELP                    this help\r\n");
 }
@@ -195,6 +197,18 @@ static int handle(char *line, uint32_t boot_count)
         } else {
             printf("guard: bad_boots=%u threshold=%u stable_ms=%u\r\n",
                    guard_bad_boots(), guard_threshold(), guard_stable_ms());
+        }
+    } else if (strcasecmp(cmd, "STORE") == 0) {
+        /* Only the mount-status query for now. STORE never mounts itself and must report
+         * the real state even in safe mode (where the store is intentionally not mounted). */
+        char *sub = rest;
+        char *n = strchr(rest, ' ');
+        if (n) { *n++ = '\0'; while (*n == ' ') n++; }
+        if (strcasecmp(sub, "OK") == 0) {
+            printf("STORE %s\r\n", store_fs_ok() ? "ok (fs mounted, writable)"
+                                                 : "unavailable (no fs partition / mount failed)");
+        } else {
+            printf("ERR  usage: STORE OK\r\n");
         }
     } else if (strcasecmp(cmd, "HELP") == 0 || strcasecmp(cmd, "?") == 0) {
         print_help();

@@ -2,5 +2,8 @@
 # Berry: third-party, fetched by scripts/setup-berry.sh (not vendored)
 components/berry/
 .berry-src/
+# littlefs: third-party, fetched by scripts/setup-littlefs.sh (not vendored)
+components/littlefs/
+.littlefs-src/
 # generated render script (from main/render.be via host/gen_render.py)
 main/render_script.h
