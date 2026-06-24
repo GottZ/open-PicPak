@@ -20,6 +20,19 @@ Everything is developed in public.
 
 ---
 
+## Contents
+
+- [Motivation](#motivation)
+- [What this is](#what-this-is)
+- [Status](#status) · [what they did](#what-they-did--the-stock-product) · [what I did](#what-i-did) · [what I published](#what-i-published) · [what I planned](#what-i-planned)
+- [Repository layout](#repository-layout)
+- [Documentation](#documentation)
+- [Hardware in one line](#hardware-in-one-line)
+- [Disclaimer](#disclaimer)
+- [Author & license](#author--license)
+
+---
+
 ## Motivation
 
 I backed the Kickstarter because the campaign imagery showed **greens and blues** — I
