@@ -5,6 +5,9 @@ components/berry/
 # littlefs: third-party, fetched by scripts/setup-littlefs.sh (not vendored)
 components/littlefs/
 .littlefs-src/
+# qrcodegen: third-party, fetched by scripts/setup-qrcodegen.sh (not vendored)
+components/qrcodegen/
+.qrcodegen-src/
 # generated render script (from main/render.be via host/gen_render.py)
 main/render_script.h
 # generated 16px glyph table (from a TTF via host/gen_font16.py)

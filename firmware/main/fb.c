@@ -8,6 +8,7 @@
 #include <string.h>
 #include "font8x8.h"
 #include "font16.h"   /* generated 16px glyph table (host/gen_font16.py); bit0 = leftmost */
+#include "qrcodegen.h"   /* Nayuki QR-Code-generator (MIT), via scripts/setup-qrcodegen.sh */
 
 #define W EPD_W
 #define H EPD_H
@@ -131,6 +132,35 @@ static void fb_text16(int x, int y, const char *s, int code, int scale)
     }
 }
 
+/* QR code primitive (Nayuki qrcodegen). Renders black modules on a white quiet-zone block,
+ * scale px per module, via px() (same y-flip/2bpp as everything else). MAXVER caps the stack
+ * buffers (V10 = 408 B each, ~816 B for both) -- enough for a Wi-Fi join string or a LAN URL.
+ * Returns silently (FB untouched beyond the cleared block) if the text does not fit. */
+#define QR_MAXVER 10
+
+static void fb_qr(int x, int y, const char *s, int scale, int ecc)
+{
+    if (scale < 1) scale = 1;
+    if (scale > 8) scale = 8;
+    uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_MAXVER)];
+    uint8_t tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_MAXVER)];
+    enum qrcodegen_Ecc ecl = (ecc >= qrcodegen_Ecc_LOW && ecc <= qrcodegen_Ecc_HIGH)
+                             ? (enum qrcodegen_Ecc)ecc : qrcodegen_Ecc_MEDIUM;
+    if (!qrcodegen_encodeText(s, tmp, qr, ecl, qrcodegen_VERSION_MIN, QR_MAXVER,
+                              qrcodegen_Mask_AUTO, true))
+        return;                       /* too long for QR_MAXVER -> nothing drawn (no partial QR) */
+    int size = qrcodegen_getSize(qr);
+    const int quiet = 4;              /* QR spec: >=4 modules of quiet zone */
+    fb_rect(x, y, (size + 2 * quiet) * scale, (size + 2 * quiet) * scale, 1, 1);  /* white block */
+    for (int my = 0; my < size; my++)
+        for (int mx = 0; mx < size; mx++)
+            if (qrcodegen_getModule(qr, mx, my)) {
+                int bx = x + (quiet + mx) * scale, by = y + (quiet + my) * scale;
+                for (int sy = 0; sy < scale; sy++)
+                    for (int sx = 0; sx < scale; sx++) px(bx + sx, by + sy, 0);   /* K module */
+            }
+}
+
 void fb_dump_serial(void)
 {
     printf("\nFBDUMP_BEGIN\n");
@@ -179,6 +209,17 @@ static int l_text16(bvm *vm)
     be_return_nil(vm);
 }
 
+/* qr(x, y, str, scale[, ecc]) -- modules are always K-on-white (high contrast for scanning);
+ * ecc optional (default MEDIUM). Hardened like text/text16. */
+static int l_qr(bvm *vm)
+{
+    if (be_top(vm) < 4 || !be_isint(vm,1) || !be_isint(vm,2) || !be_isstring(vm,3) || !be_isint(vm,4))
+        be_return_nil(vm);
+    int ecc = (be_top(vm) >= 5 && be_isint(vm,5)) ? be_toint(vm, 5) : qrcodegen_Ecc_MEDIUM;
+    fb_qr(be_toint(vm,1), be_toint(vm,2), be_tostring(vm,3), be_toint(vm,4), ecc);
+    be_return_nil(vm);
+}
+
 static int l_dump(bvm *vm)   { (void)vm; fb_dump_serial(); be_return_nil(vm); }
 
 void fb_register(bvm *vm)
@@ -192,4 +233,5 @@ void fb_register(bvm *vm)
     be_regfunc(vm, "triangle", l_triangle);
     be_regfunc(vm, "text",     l_text);
     be_regfunc(vm, "text16",   l_text16);
+    be_regfunc(vm, "qr",       l_qr);
 }
