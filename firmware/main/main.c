@@ -33,6 +33,10 @@
 #include "ota.h"
 #include "guard.h"
 #include "screens.h"   /* baked-in 400x300 BWRY setup screens (onboarding / console) */
+#include "berry.h"
+#include "fb.h"         /* Berry graphics stdlib -> the 30000-byte framebuffer */
+#include "dev.h"        /* Berry device stdlib: mac/serial/chip/uptime/battery + nvs_str */
+#include "render_script.h"  /* RENDER_BE: embedded Berry render script (generated from render.be) */
 
 #define DEFAULT_WAKE_S 3600   /* 1 h, if the server delivers no header */
 #define RETRY_WAKE_S   300    /* on WiFi/download error or missing config */
@@ -46,7 +50,6 @@
                                   EPD charge-pump peak (brownout decoupling) */
 
 static const char *TAG = "picpak";
-static uint8_t s_fb[EPD_FRAME_BYTES];
 
 /* RTC-RAM survives deep sleep -> proves real timer wakes. */
 RTC_DATA_ATTR static uint32_t s_boot_count;
@@ -172,87 +175,56 @@ static void show_static_frame(const uint8_t *frame)
     epd_sleep();
 }
 
-/* WiFi -> HTTP pull -> display. Returns the next sleep duration. */
+/* Render the current frame ON-DEVICE via the embedded Berry script (render.be ->
+ * render_script.h). The script draws with the fb/dev stdlib; the result is the
+ * 30000-byte EPD framebuffer fb_buffer(). Returns true on a clean run. */
+static bool berry_render(void)
+{
+    bvm *vm = be_vm_new();
+    fb_register(vm);
+    dev_register(vm);
+    int r = be_loadstring(vm, RENDER_BE);
+    if (r == BE_OK) r = be_pcall(vm, 0);
+    if (r != BE_OK) { ESP_LOGE(TAG, "Berry render failed (res=%d)", r); be_dumpexcept(vm); }
+    be_vm_delete(vm);
+    return r == BE_OK;
+}
+
+/* Best-effort WiFi (OTA-validate now; script/image pull in a later wave) -> render the
+ * frame ON-DEVICE via Berry -> display. The device is autonomous: it renders even with
+ * no network. Returns the next sleep duration. */
 static uint32_t run_cycle_inner(const picpak_cfg_t *cfg)
 {
-    led_blink_start();   /* transfer phase (WiFi connect + download) -> blink */
-    if (!net_wifi_connect(cfg->ssid, cfg->pass, 20000)) {
-        ESP_LOGW(TAG, "WiFi connection failed -> retry in %ds", RETRY_WAKE_S);
-        return RETRY_WAKE_S;
-    }
-    /* WiFi is up -> a FW freshly booted via OTA counts as healthy (it can receive an
-     * OTA again next time -> no brick). Cancel rollback here, BEFORE the next
-     * deep-sleep wake (= reboot) would otherwise roll it back. No-op if the app is
-     * not running in the PENDING_VERIFY state. */
-    ota_mark_valid_if_pending();
-    /* Append the timing of the PREVIOUS cycle (RTC-RAM) as a query to the GET -> the
-     * server logs it. The only usable measurement channel: the serial tether dies on
-     * the WiFi start, and a port-open reset would erase the RTC-RAM. */
-    static char url[224];   /* do not place on the tight main-task stack */
-    if (s_tm_cycle) {
-        snprintf(url, sizeof(url), "%s%ctm=%ld,%ld,%ld,%ld", cfg->url,
-                 strchr(cfg->url, '?') ? '&' : '?',
-                 (long)s_tm_scan, (long)s_tm_dhcp, (long)s_tm_fetch, (long)s_tm_epd);
+    led_blink_start();   /* transfer phase -> blink */
+    if (net_wifi_connect(cfg->ssid, cfg->pass, 20000)) {
+        /* A freshly OTA'd app proves itself healthy once it has connectivity -> cancel
+         * rollback before the next deep-sleep wake would otherwise roll it back. No-op
+         * if not running in PENDING_VERIFY. */
+        ota_mark_valid_if_pending();
+        cfg_set_verified(true);
+        /* RF off BEFORE the EPD charge-pump peak (brownout decoupling), then settle so
+         * the supply recovers between the WiFi peak and the EPD peak. */
+        net_wifi_stop();
+        vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));
     } else {
-        snprintf(url, sizeof(url), "%s", cfg->url);
-    }
-    uint32_t nw = 0;
-    static char fw_ver[48];   /* target FW version from X-Firmware-Version (from the server) */
-    int64_t t_fetch0 = esp_timer_get_time();
-    if (!net_http_fetch_frame(url, s_fb, EPD_FRAME_BYTES, &nw, fw_ver, sizeof(fw_ver))) {
-        /* Connect was ok, but the download failed -> possibly a stale static IP from
-         * the connect cache (DHCP lease renewed / AP restart). Discard the cache so the
-         * next cycle connects cold (scan+DHCP) and re-caches. */
-        ESP_LOGW(TAG, "frame download failed -> discard connect cache, retry in %ds", RETRY_WAKE_S);
-        net_cache_clear();
-        return RETRY_WAKE_S;
-    }
-    cfg_set_verified(true);   /* connect + fetch worked -> creds proven good (drives setup screen) */
-    /* OTA BEFORE the expensive EPD refresh: the download (WiFi RX + flash write) is the
-     * most brownout-critical phase. Here it runs right after the connect at still-full
-     * supply -- the 22.5s EPD refresh would otherwise pull the battery voltage down
-     * first and let the download start from a depressed base. If an update is pending,
-     * we reboot anyway: the EPD refresh of THIS cycle would be redundant, because the
-     * freshly booted FW connects again, fetches and re-renders. Only then (new FW, no
-     * OTA needed) is the image shown ONCE. The bistable e-ink holds the previous frame
-     * until then -- uncritical at a 10-60min interval. */
-    if (ota_update_if_changed(cfg->url, fw_ver)) {
-        ESP_LOGI(TAG, "OTA written -> reboot into the new FW (before EPD refresh)");
-        vTaskDelay(pdMS_TO_TICKS(80));   /* let the log flush out */
-        esp_restart();                   /* never returns */
+        ESP_LOGW(TAG, "WiFi unavailable -> rendering offline (autonomous)");
     }
 
-    /* From here no network is needed anymore -> turn off the WiFi RF BEFORE the EPD
-     * refresh runs. Prevents periodic DTIM RX bursts from coinciding with the EPD
-     * charge-pump peaks (instantaneous current spike -> brownout), and lowers the
-     * current during the 22.5s. Only pulling the OTA forward (above) makes the WiFi
-     * dispensable here -- before, the downstream OTA path needed it. */
-    net_wifi_stop();
-
-    /* Settle BEFORE the EPD refresh: the WiFi peaks (connect/fetch) are over and the
-     * modem is off -> the supply recovers before the next peak load (EPD charge pump)
-     * starts. Decouples the two current-spike phases in time. */
-    vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));
+    led_on();   /* transfer done -> solid during render + EPD refresh */
+    if (!berry_render())
+        ESP_LOGW(TAG, "render failed -> displaying current framebuffer contents");
 
     int64_t t_epd0 = esp_timer_get_time();
-    led_on();   /* transfer done -> solid on during EPD refresh */
     epd_init();
-    epd_write_full(s_fb);
+    epd_write_full(fb_buffer());
     epd_refresh();
     epd_sleep();
-    int64_t t_done = esp_timer_get_time();
-    ESP_LOGI(TAG, "TIMING fetch=%lldms epd=%lldms (display done)",
-             (t_epd0 - t_fetch0) / 1000, (t_done - t_epd0) / 1000);
-    /* Save the phase times in RTC-RAM -> output on the next boot (tether quirk). */
-    net_last_connect_ms(&s_tm_scan, &s_tm_dhcp);
-    s_tm_fetch = (int32_t)((t_epd0 - t_fetch0) / 1000);
-    s_tm_epd   = (int32_t)((t_done  - t_epd0)  / 1000);
-    s_tm_cycle = s_boot_count;
+    ESP_LOGI(TAG, "TIMING epd=%lldms (display done)", (esp_timer_get_time() - t_epd0) / 1000);
 
-    /* Settle AFTER the EPD refresh: let the display peaks decay before the deep-sleep
-     * entry (or the next keep-awake cycle) follows. */
-    vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));
-    return (nw > 0) ? nw : DEFAULT_WAKE_S;   /* server dictates the next sleep duration */
+    vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));   /* let the EPD peaks decay before sleep */
+    /* TODO(config-pull): the next wake interval should come from the Berry config script
+     * (fetched per wake) / server, replacing this fixed default. */
+    return DEFAULT_WAKE_S;
 }
 
 /* Keep the USB pad ON during run_cycle (1). The pad-detach was the OLD work-around for
@@ -331,6 +303,9 @@ void app_main(void)
      * command. The ring itself survives resets/wakes (RTC-RAM). */
     logbuf_init();
     s_boot_count++;
+    /* FIRST after wake: sample the battery before WiFi/EPD/Berry load the rail
+     * (ADC1_CH2/GPIO2, before button_init configures GPIO2 with a pull-up). */
+    dev_measure_battery();
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     ESP_LOGI(TAG, "==== PicPak FW boot #%lu (wakeup_cause=%d; 4=TIMER, 7=GPIO/Button) ====",
              (unsigned long)s_boot_count, (int)cause);
@@ -393,9 +368,10 @@ void app_main(void)
 
     picpak_cfg_t cfg;
     if (!cfg_load(&cfg)) {
-        ESP_LOGW(TAG, "no NVS config -> onboarding screen shown; provision via USB "
-                      "(SETWIFI/SETURL) or the web tool; retry in %ds", RETRY_WAKE_S);
-        enter_deep_sleep(RETRY_WAKE_S);
+        /* Autonomous: render even without creds. cfg_load zeroed the struct -> the
+         * best-effort WiFi connect below just fails and we render offline. Provision via
+         * USB (SETWIFI/SETURL) or the web tool to enable OTA / future script+image pull. */
+        ESP_LOGW(TAG, "no NVS config -> rendering autonomously (offline); provision for OTA/pull");
     }
 
     uint32_t next_wake;

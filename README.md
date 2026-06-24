@@ -87,8 +87,12 @@ A full suite, built clean:
 - [x] [`documentation/image-pipeline.md`](documentation/image-pipeline.md) —
       RGB→palette (BT.601 + Atkinson) with a runnable JS reference
 - [x] MPL-2.0 license
-- [x] [`firmware/`](firmware/) — ESP-IDF firmware scaffold with its **first component, the
-      recovery guard** (bootloop → USB-reachable safe-mode); host-tested + on-device validated
+- [x] [`firmware/`](firmware/) — custom ESP-IDF firmware: the **recovery guard** (bootloop →
+      USB-reachable safe-mode; host-tested + on-device validated) plus an integrated **Berry
+      render/config engine** — a Berry script renders the frame on-device (text + live device
+      variables + shapes + a Pacman), "config is a script, not a data file". Validates Berry on the
+      C3 (no PSRAM, coexists with WiFi); host-previewable. Battery uses the stock divider/curve
+      recovered by disassembly.
 
 ### What I planned
 
@@ -104,13 +108,17 @@ clean and gets refined on the way — then going far past what the stock firmwar
 - [x] **recovery guard** — bootloop detection → USB-reachable safe-mode (WiFi/EPD off,
       esptool + console stay up); reset-reason-agnostic, fresh-app reset, NVS-tunable
       threshold/stable-uptime. Host-tested + on-device validated.
-- [ ] **TOML config store** — on-device config (rotation, intervals, OTA URL,
-      endpoints); WiFi/IP **stubbed off** (DHCP + WiFi disabled until configured)
-- [ ] **control actions** — named actions (`reboot`, `test-wifi`, …) triggered from
-      the config tool
-- [ ] **embedded fonts + simple shapes** — Adafruit-GFX-style 1-bit glyph blitter into
-      the framebuffer (text, lines, rects), ~0 extra RAM *(confirmed feasible)*
-- [ ] **self-debug screen** — serial, MACs, WiFi status, IP / subnet / gateway, …
+- [~] **config-/logic-engine (Berry, not TOML)** — config *is* a Berry script fetched per wake
+      (rotation, intervals, OTA URL, triggers/actions); the device exposes a small pinned C stdlib,
+      the script decides. Feasibility validated on-device; seed in
+      [`firmware/`](firmware/). WiFi/IP stubbed off until configured.
+- [ ] **control actions** — named actions (`reboot`, `test-wifi`, …) as Berry stdlib calls,
+      triggered from the config tool
+- [~] **embedded fonts + simple shapes** — Adafruit-GFX-style 1-bit glyph blitter (text, lines,
+      rects, discs, triangles), ~0 extra RAM; seeded as the Berry graphics stdlib in
+      [`firmware/`](firmware/)
+- [~] **self-debug screen** — serial, MACs, chip, uptime, reset, battery; rendered on-device
+      (the `firmware/` scene already shows these)
 - [ ] **playlist & rotation** — rotate stored images, configurable cycle interval,
       remote **sync playlist** (poll for updates on an interval — not yet implemented),
       single-frame remote (Home-Assistant-style backend), OTA URL
@@ -122,8 +130,9 @@ clean and gets refined on the way — then going far past what the stock firmwar
       stored images (on-flash storage format TBD)
 - [ ] **use the upper flash region** — make the unaddressed 16→32 MB usable for bulk
       image storage *(research — data only, not code)*
-- [ ] **optional on-device scripting** — Lua or Berry, if the RAM budget allows
-      *(not a hard requirement)*
+- [x] **on-device scripting decided: Berry** — config *and* procedural graphics in one VM;
+      on-device RAM feasibility validated (VM ~3 KB, coexists with WiFi + framebuffer on the C3,
+      no PSRAM). This is now the basis for the config-/logic-engine above, not an optional extra.
 
 **`server/` — Docker backend**
 - [ ] **serial-number differentiation** — serve separate frames per device
@@ -147,11 +156,12 @@ clean and gets refined on the way — then going far past what the stock firmwar
 ## Repository layout
 
 ```
-documentation/   reference & reverse-engineering docs        (published)
-firmware/        custom ESP-IDF firmware                     (planned)
-server/          self-hostable Docker backend; serves web-usb (planned)
-web-usb/         browser config + flashing tool              (planned)
-scripts/         host-side scripts / CLI tooling             (planned)
+documentation/      reference & reverse-engineering docs         (published)
+firmware/           custom ESP-IDF firmware                      (in progress)
+firmware/ Berry config-/logic-engine + GFX render slice (published)
+server/             self-hostable Docker backend; serves web-usb (planned)
+web-usb/            browser config + flashing tool               (planned)
+scripts/            host-side scripts / CLI tooling              (planned)
 ```
 
 `web-usb/` and `server/` are coupled: the backend ships the browser tool as static
@@ -166,6 +176,7 @@ assets, so flashing, uploading and configuring all work from one self-hosted URL
 | [device.md](documentation/device.md) | The hardware: ESP32-C3, the BWRY panel, full pin map, flash/NVS/eFuse layout, identity, colors, radio/brownout, BLE overview |
 | [ble-protocol.md](documentation/ble-protocol.md) | The stock BLE protocol byte-for-byte: GATT layout, wire frame, dispatchers, image upload, OTA-over-BLE |
 | [image-pipeline.md](documentation/image-pipeline.md) | Exact RGB→panel conversion (BT.601 nearest-color + unclamped Atkinson) with a Web-USB-ready JS reference |
+| [config-engine.md](documentation/config-engine.md) | Why the config *is* a Berry script (mechanism = pinned C stdlib / policy = script), the on-device feasibility result, and the stdlib seeded in `firmware/` |
 
 ---
 

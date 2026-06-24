@@ -1,0 +1,6 @@
+
+# Berry: third-party, fetched by scripts/setup-berry.sh (not vendored)
+components/berry/
+.berry-src/
+# generated render script (from main/render.be via host/gen_render.py)
+main/render_script.h
