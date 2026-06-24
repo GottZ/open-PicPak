@@ -28,6 +28,12 @@ typedef struct { char ssid[33]; int8_t rssi; uint8_t auth; } net_ap_t;
  * current association (suppressed auto-reconnect) -> scan BEFORE the final connect. */
 int net_wifi_scan(net_ap_t *out, int max);
 
+/* Generic HTTP GET for the Berry net surface: GET url -> up to cap bytes into buf, *outlen set.
+ * URL must be http(s):// (validated; rejects other schemes and over-length). cap is the hard
+ * size limit (the binding keeps it well under the RAM spike). Returns false on a bad URL,
+ * non-200, an over-cap response, or a transport error. */
+bool net_http_get(const char *url, uint8_t *buf, size_t cap, size_t *outlen);
+
 /* Discard the connect cache -> the next connect does a full scan + DHCP and
  * re-caches. For tests (cold baseline vs. warm) and after a network change. */
 void net_cache_clear(void);

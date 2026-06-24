@@ -512,3 +512,52 @@ bool net_http_fetch_frame(const char *url, uint8_t *buf, size_t frame_len,
     ESP_LOGI(TAG, "http %d, %u/%u bytes", status, (unsigned)ctx.len, (unsigned)frame_len);
     return status == 200 && ctx.len == frame_len;
 }
+
+/* Generic GET for the Berry net surface (separate from the fixed-frame fetch above). */
+typedef struct { uint8_t *buf; size_t cap; size_t len; bool overflow; } get_ctx_t;
+
+static esp_err_t get_evt(esp_http_client_event_t *e)
+{
+    if (e->event_id == HTTP_EVENT_ON_DATA) {
+        get_ctx_t *c = (get_ctx_t *)e->user_data;
+        if (c->len + (size_t)e->data_len <= c->cap) {
+            memcpy(c->buf + c->len, e->data, e->data_len);
+            c->len += (size_t)e->data_len;
+        } else {
+            c->overflow = true;   /* response exceeds the caller's cap -> fail (no truncated value) */
+        }
+    }
+    return ESP_OK;
+}
+
+bool net_http_get(const char *url, uint8_t *buf, size_t cap, size_t *outlen)
+{
+    if (outlen) *outlen = 0;
+    /* H3: URL validation is mandatory. Scheme prefix http(s):// only (rejects file://, ftp://,
+     * empty, etc. -> SSRF/exfil surface) + a length bound. */
+    if (!url || !buf || cap == 0) return false;
+    size_t ulen = strlen(url);
+    if (ulen < 8 || ulen > 512) return false;
+    if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) return false;
+
+    get_ctx_t ctx = { .buf = buf, .cap = cap, .len = 0, .overflow = false };
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .event_handler = get_evt,
+        .user_data = &ctx,
+        .timeout_ms = 15000,
+        .crt_bundle_attach = esp_crt_bundle_attach,   /* https verified against the root bundle */
+        .buffer_size = 2048,
+    };
+    esp_http_client_handle_t h = esp_http_client_init(&cfg);
+    if (!h) return false;
+    esp_err_t err = esp_http_client_perform(h);
+    int status = esp_http_client_get_status_code(h);
+    esp_http_client_cleanup(h);     /* H3: cleanup on EVERY path (success, error, overflow) */
+
+    if (err != ESP_OK) { ESP_LOGE(TAG, "http_get err: %s", esp_err_to_name(err)); return false; }
+    if (ctx.overflow) { ESP_LOGW(TAG, "http_get: response > cap %u -> reject", (unsigned)cap); return false; }
+    if (status != 200) { ESP_LOGW(TAG, "http_get: status %d", status); return false; }
+    if (outlen) *outlen = ctx.len;
+    return true;
+}
