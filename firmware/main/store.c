@@ -7,6 +7,7 @@
  */
 #include "store.h"
 #include "store_core.h"   /* pure POSIX KV logic (host-unit-tested) */
+#include "rtc_core.h"     /* pure RTC-KV logic (host-unit-tested) */
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "esp_log.h"
+#include "esp_attr.h"     /* RTC_DATA_ATTR */
 #include "esp_littlefs.h"
 
 static const char *TAG = "store";
@@ -220,4 +222,98 @@ void store_register(bvm *vm)
     be_regfunc(vm, "store_has",  l_store_has);
     be_regfunc(vm, "store_keys", l_store_keys);
     be_regfunc(vm, "store_ok",   l_store_ok);
+}
+
+/* ========================================================================= *
+ * RTC key-value store (rtc_*) — small, ephemeral cross-wake state.           *
+ * Lives in RTC-FAST RAM: survives a deep-sleep (timer/button) wake, but is   *
+ * nulled on a cold boot and on the port-open rst:0x15 (measured). .rtc.bss   *
+ * (no initializer) -> cold/reset start is 0/empty, like logbuf + s_boot_count.*
+ * Costs heap (ALLOW_RTC_FAST_MEM_AS_HEAP) -> kept small.                      *
+ * ========================================================================= */
+
+#define RTC_KV_SZ 512   /* bytes of RTC-KV payload; small (every byte is heap denied) */
+
+RTC_DATA_ATTR static uint8_t  s_rtc_buf[RTC_KV_SZ];
+RTC_DATA_ATTR static uint16_t s_rtc_len;
+
+/* Defensive clamp: if the length survived as noise (should not, .rtc.bss is zeroed on a
+ * clean boot), treat the buffer as empty rather than walk garbage. */
+static void rtc_guard(void) { if (s_rtc_len > RTC_KV_SZ) s_rtc_len = 0; }
+
+/* --- console-facing raw helpers (no Berry) --- */
+
+bool rtc_put(const char *key, const char *val)
+{
+    rtc_guard();
+    if (!val) return false;
+    size_t n = strlen(val);
+    if (n > RTC_VAL_MAX) return false;
+    return rtc_kv_set(s_rtc_buf, RTC_KV_SZ, &s_rtc_len, key, val, (uint16_t)n);
+}
+
+long rtc_fetch(const char *key, char *buf, size_t cap)
+{
+    rtc_guard();
+    if (cap == 0) return -1;
+    const uint8_t *v; uint16_t vl;
+    if (!rtc_kv_get(s_rtc_buf, s_rtc_len, key, &v, &vl)) return -1;
+    size_t copy = vl < cap - 1 ? vl : cap - 1;
+    memcpy(buf, v, copy);
+    buf[copy] = '\0';
+    return (long)vl;
+}
+
+bool rtc_remove(const char *key) { rtc_guard(); return rtc_kv_del(s_rtc_buf, &s_rtc_len, key); }
+
+void rtc_stat(void) { rtc_guard(); printf("RTC %u/%u bytes used\r\n", (unsigned)s_rtc_len, (unsigned)RTC_KV_SZ); }
+
+/* --- Berry bindings (rtc_*) — same hardening as store_* --- */
+
+static int l_rtc_set(bvm *vm)
+{
+    rtc_guard();
+    if (be_top(vm) < 2 || !be_isstring(vm, 1)) { be_pushbool(vm, 0); be_return(vm); }
+    const char *key = be_tostring(vm, 1);
+    const void *val = NULL; size_t len = 0;
+    if (be_isbytes(vm, 2))       val = be_tobytes(vm, 2, &len);
+    else if (be_isstring(vm, 2)) { val = be_tostring(vm, 2); len = val ? strlen((const char *)val) : 0; }
+    else { be_pushbool(vm, 0); be_return(vm); }
+    if (len > RTC_VAL_MAX) { be_pushbool(vm, 0); be_return(vm); }
+    be_pushbool(vm, rtc_kv_set(s_rtc_buf, RTC_KV_SZ, &s_rtc_len, key, val, (uint16_t)len));
+    be_return(vm);
+}
+
+static int l_rtc_get(bvm *vm)
+{
+    rtc_guard();
+    if (be_top(vm) < 1 || !be_isstring(vm, 1)) be_return_nil(vm);
+    const uint8_t *v; uint16_t vl;
+    if (!rtc_kv_get(s_rtc_buf, s_rtc_len, be_tostring(vm, 1), &v, &vl)) be_return_nil(vm);
+    be_pushbytes(vm, v, vl);
+    be_return(vm);
+}
+
+static int l_rtc_has(bvm *vm)
+{
+    rtc_guard();
+    int r = (be_top(vm) >= 1 && be_isstring(vm, 1)) ? rtc_kv_has(s_rtc_buf, s_rtc_len, be_tostring(vm, 1)) : 0;
+    be_pushbool(vm, r);
+    be_return(vm);
+}
+
+static int l_rtc_del(bvm *vm)
+{
+    rtc_guard();
+    int r = (be_top(vm) >= 1 && be_isstring(vm, 1)) ? rtc_kv_del(s_rtc_buf, &s_rtc_len, be_tostring(vm, 1)) : 0;
+    be_pushbool(vm, r);
+    be_return(vm);
+}
+
+void rtc_register(bvm *vm)
+{
+    be_regfunc(vm, "rtc_set", l_rtc_set);
+    be_regfunc(vm, "rtc_get", l_rtc_get);
+    be_regfunc(vm, "rtc_del", l_rtc_del);
+    be_regfunc(vm, "rtc_has", l_rtc_has);
 }

@@ -184,7 +184,8 @@ static bool berry_render(void)
     bvm *vm = be_vm_new();
     fb_register(vm);
     dev_register(vm);
-    store_register(vm);   /* store_set/get/del/has/keys/ok — Berry persistence */
+    store_register(vm);   /* store_set/get/del/has/keys/ok — Berry persistence (flash) */
+    rtc_register(vm);     /* rtc_set/get/del/has — ephemeral cross-wake state (RTC RAM) */
     int r = be_loadstring(vm, RENDER_BE);
     if (r == BE_OK) r = be_pcall(vm, 0);
     if (r != BE_OK) { ESP_LOGE(TAG, "Berry render failed (res=%d)", r); be_dumpexcept(vm); }

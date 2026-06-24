@@ -90,6 +90,7 @@ static void print_help(void)
            "  OTA                     OTA status: running/boot/next partition + image state\r\n"
            "  GUARD [CLEAR|THRESHOLD n|UPTIME ms]  bootloop-guard: status / clear / tune\r\n"
            "  STORE OK|LIST|GET k|SET k v|DEL k   littlefs key-value store\r\n"
+           "  RTC STAT|GET k|SET k v|DEL k        RTC-RAM key-value (ephemeral)\r\n"
            "  ERASE                   delete config\r\n"
            "  HELP                    this help\r\n");
 }
@@ -231,6 +232,34 @@ static int handle(char *line, uint32_t boot_count)
             else printf(store_remove(arg) ? "OK   deleted\r\n" : "ERR  not found / FS down\r\n");
         } else {
             printf("ERR  usage: STORE OK|LIST|GET k|SET k v|DEL k\r\n");
+        }
+    } else if (strcasecmp(cmd, "RTC") == 0) {
+        /* RTC-RAM key-value: ephemeral, survives a deep-sleep wake but nulled on reset. */
+        char *sub = rest;
+        char *arg = strchr(rest, ' ');
+        if (arg) { *arg++ = '\0'; while (*arg == ' ') arg++; }
+        else arg = rest + strlen(rest);
+        if (strcasecmp(sub, "STAT") == 0) {
+            rtc_stat();
+        } else if (strcasecmp(sub, "GET") == 0) {
+            if (arg[0] == '\0') { printf("ERR  usage: RTC GET <key>\r\n"); }
+            else {
+                char vbuf[96];
+                long len = rtc_fetch(arg, vbuf, sizeof vbuf);
+                if (len < 0) printf("RTC (nil) \"%s\" not found\r\n", arg);
+                else printf("RTC %s = \"%s\" (%ld B)\r\n", arg, vbuf, len);
+            }
+        } else if (strcasecmp(sub, "SET") == 0) {
+            char *val = strchr(arg, ' ');
+            if (val) { *val++ = '\0'; while (*val == ' ') val++; }
+            else val = arg + strlen(arg);
+            if (arg[0] == '\0') printf("ERR  usage: RTC SET <key> <value>\r\n");
+            else printf(rtc_put(arg, val) ? "OK   rtc stored\r\n" : "ERR  rtc set failed (bad key / full)\r\n");
+        } else if (strcasecmp(sub, "DEL") == 0) {
+            if (arg[0] == '\0') printf("ERR  usage: RTC DEL <key>\r\n");
+            else printf(rtc_remove(arg) ? "OK   rtc deleted\r\n" : "ERR  not found\r\n");
+        } else {
+            printf("ERR  usage: RTC STAT|GET k|SET k v|DEL k\r\n");
         }
     } else if (strcasecmp(cmd, "HELP") == 0 || strcasecmp(cmd, "?") == 0) {
         print_help();
