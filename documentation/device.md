@@ -167,6 +167,15 @@ every switch is a full refresh. `[hw]`
 ### 6.3 Battery sense
 
 - **Battery = ADC1 channel 2 = GPIO2** — the same pin as the button. `[bin]`
+- **Stock conversion** (recovered by disassembling the stock-class firmware): `[bin]`
+  - Sample raw on ADC1_CH2 at attenuation `DB_12`; the stock sampler takes a median + valley
+    over 5×20 reads and temporarily flips GPIO2 out of button mode for the read (then restores it).
+  - `pinMv = adc_cali_raw_to_voltage(raw)` (factory curve-fit calibration).
+  - **`batteryMv = (pinMv × 145 + 50) / 100`** — i.e. ×1.45; the on-board resistor divider
+    attenuates the battery by ~0.69 onto the pin.
+  - **percent**: piecewise-linear LUT — ≤ 3200 mV → 0 %, then +10 % per 100 mV up to 4000 mV → 80 %,
+    and > 4089 mV → 100 %.
+  - plausibility window 2800–4300 mV.
 
 ### 6.4 Full GPIO map
 
