@@ -44,18 +44,16 @@ static int64_t s_t_start, s_t_conn, s_t_ip;
 #define WARM_BSSID_PIN  0   /* pin BSSID+channel -> no scan */
 #define WARM_STATIC_IP  1   /* stop DHCP + static IP -> no DHCP roundtrip (the real lever) */
 
-/* Adaptive WiFi TX power (0.25-dBm units). Steps 11->13->14 dBm: on the tether
- * (rssi -78) verified all <=14 dBm connect cleanly in ~640ms, 15 dBm flaps
- * (TX-PA peak collapses the supply -> reassoc loop). Start at 11 dBm = smallest
- * brownout peak; if the connect does not succeed, step up gradually to max 14 dBm. The
- * working index is persisted in NVS -> the next boot starts straight with it (no
- * stepping up per cycle). A COLD connect (cache miss/location change/NETCLR) re-probes
- * from the base -> the value drops back to the minimum after a move to a location with
- * a better signal. Only takes effect when set BEFORE the first assoc burst (STA_START
- * handler / before re-assoc), otherwise the assoc still sends at full power. */
-static const int8_t s_tx_steps[] = { 44, 52, 56 };   /* 11, 13, 14 dBm */
+/* WiFi TX power (0.25-dBm units). FIXED at 14 dBm (user decision 2026-06-24): better SNR
+ * margin / fewer connect problems on weak links. 14 dBm is empirically brownout-clean
+ * (verified connecting at rssi -76..-78); only 15 dBm flaps (TX-PA peak collapses the
+ * supply -> reassoc loop). Brownout is otherwise handled by RF-off-before-EPD + the OTA
+ * block transfer. The former adaptive 11->13->14 ladder is collapsed to this single step;
+ * the escalation/persistence code below stays but harmlessly resolves to the one step.
+ * Takes effect when set BEFORE the first assoc burst (STA_START handler / before re-assoc). */
+static const int8_t s_tx_steps[] = { 56 };   /* 14 dBm (single fixed step) */
 #define TX_NSTEPS ((int)(sizeof(s_tx_steps) / sizeof(s_tx_steps[0])))
-static int s_tx_idx;   /* current step in s_tx_steps; 0 = base (11 dBm) */
+static int s_tx_idx;   /* index into s_tx_steps; always 0 = 14 dBm now */
 #define NETCACHE_NS "netcache"
 typedef struct {
     uint8_t  valid;
@@ -364,7 +362,7 @@ bool net_wifi_try(const char *ssid, const char *pass, int timeout_ms)
     s_tx_idx = 0;
     bool ok = try_connect(ssid, pass, timeout_ms, false);
     if (ok && !s_static_mode) cache_cold(ssid);
-    ESP_LOGI(TAG, "wifi_try \"%s\": %s", ssid, ok ? "connected" : "failed");
+    ESP_LOGI(TAG, "wifi_try \"%s\": %s @%ddBm", ssid, ok ? "connected" : "failed", s_tx_steps[s_tx_idx] / 4);
     return ok;
 }
 
