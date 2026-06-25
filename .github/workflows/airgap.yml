@@ -1,0 +1,24 @@
+name: airgap
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check pull request diff
+        if: github.event_name == 'pull_request'
+        run: tools/check-airgap.sh --range "origin/${{ github.base_ref }}...HEAD"
+      - name: Check push diff
+        if: github.event_name == 'push'
+        run: |
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            tools/check-airgap.sh --range HEAD^..HEAD
+          else
+            tools/check-airgap.sh --range HEAD
+          fi
