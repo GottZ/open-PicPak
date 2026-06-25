@@ -2,4 +2,5 @@
 .env
 # local bind-mount data (named volumes are managed by docker, not committed)
 /data/
+/ingest
 *.log

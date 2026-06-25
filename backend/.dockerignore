@@ -1,0 +1,9 @@
+# keep the build context small and secret-free (air-gap)
+.env
+.env.*
+/ingest
+*.md
+migrations/
+grafana/
+docker-compose.yml
+.git

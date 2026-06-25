@@ -4,19 +4,20 @@ Self-hostable telemetry / OTA / log backend for the open-picpak fleet. Go servic
 (TimescaleDB) + Grafana, run via Docker Compose. Replaces the legacy Python telemetry sink and the
 ad-hoc plotting scripts.
 
-> **Status:** wave **S5a** - TimescaleDB + Grafana scaffold + schema migration. The Go ingest/admin
-> service (HOTP validation, OTA-signal piggyback, firmware.bin serving, log reassembly) lands in
-> waves S5b1+. This stage stands up data + viz + schema only.
+> **Status:** waves **S5a + S5b1** - TimescaleDB + Grafana scaffold, schema migration, and legacy
+> telemetry ingest. HOTP validation, OTA-signal piggyback, firmware.bin serving, and log reassembly
+> land in later waves.
 
 ## Quick start (local / dev)
 
 ```sh
 cp .env.example .env            # then edit: set POSTGRES_PASSWORD + GRAFANA_ADMIN_PASSWORD
-docker compose up -d            # timescaledb (healthy) -> migrate (applies schema, exits 0) -> grafana
+docker compose up -d            # timescaledb -> migrate -> ingest + grafana
 docker compose ps              # migrate should be "exited (0)"; others "running/healthy"
 ```
 
 Grafana: http://127.0.0.1:3000 (admin / $GRAFANA_ADMIN_PASSWORD), TimescaleDB datasource pre-provisioned.
+Ingest: `GET http://127.0.0.1:8080/$INGEST_TOKEN/pp?...` for the legacy migration path.
 
 ## Schema migration
 

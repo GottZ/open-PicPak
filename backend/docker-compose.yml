@@ -1,8 +1,7 @@
 name: picpak-backend
 
-# Wave S5a: TimescaleDB + Grafana scaffold + schema migration (LOCAL gate: `up` + migrate + \dt).
-# The Go ingest/admin service lands in S5b1+; this stage stands up data + viz + schema only.
-# (reverse-proxy + picpak-ingest + picpak-admin); here we stand up data + viz + schema only.
+# Waves S5a + S5b1: TimescaleDB + Grafana scaffold, schema migration, and legacy ingest.
+# Later waves add HOTP auth, OTA-signal headers, firmware.bin serving, and log reassembly.
 # Air-gap: NO real secrets here; values come from .env (gitignored). Ports bound to localhost.
 
 services:
@@ -23,7 +22,7 @@ services:
       retries: 20
     networks: [internal]
 
-  # one-shot: applies migrations/0001_init.sql against the healthy DB, then exits 0.
+  # one-shot: applies migrations/0001_init.up.sql against the healthy DB, then exits 0.
   # idempotent migration -> safe to re-run. ON_ERROR_STOP makes any failure a non-zero exit.
   migrate:
     image: postgres:18-alpine                  # lightweight psql client (local)
@@ -67,6 +66,26 @@ services:
     ports:
       - "127.0.0.1:3000:3000"                  # localhost only (dev); prod: internal/VPN
     networks: [internal]
+
+  # Wave S5b1: public telemetry/OTA ingest (legacy token route; HOTP auth + OTA-signal headers land in S5c/S5d).
+  ingest:
+    build: .
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-picpak}
+      POSTGRES_USER: ${POSTGRES_USER:-picpak}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGHOST: timescaledb:5432
+      INGEST_TOKEN: ${INGEST_TOKEN:?set INGEST_TOKEN in .env}
+      LISTEN_ADDR: ":8080"
+    ports:
+      - "127.0.0.1:8080:8080"                  # localhost only (dev); prod: behind the TLS reverse-proxy
+    networks: [internal]
+    restart: unless-stopped
 
 volumes:
   tsdata:
