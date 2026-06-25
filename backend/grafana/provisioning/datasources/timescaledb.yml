@@ -1,0 +1,19 @@
+apiVersion: 1
+
+# S5a scaffold: provision the TimescaleDB datasource so Grafana comes up wired to the DB.
+# Dashboards (replacing mkplot.py/analyze.py) are wave S5g. Credentials come from env (no secrets here).
+datasources:
+  - name: TimescaleDB
+    type: postgres
+    access: proxy
+    url: timescaledb:5432
+    user: $POSTGRES_USER
+    isDefault: true
+    editable: false
+    secureJsonData:
+      password: $POSTGRES_PASSWORD
+    jsonData:
+      database: $POSTGRES_DB
+      sslmode: disable          # internal docker network; TLS terminates at the reverse-proxy
+      postgresVersion: 1800
+      timescaledb: true

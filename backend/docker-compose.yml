@@ -1,0 +1,76 @@
+name: picpak-backend
+
+# Wave S5a: TimescaleDB + Grafana scaffold + schema migration (LOCAL gate: `up` + migrate + \dt).
+# The Go ingest/admin service lands in S5b1+; this stage stands up data + viz + schema only.
+# (reverse-proxy + picpak-ingest + picpak-admin); here we stand up data + viz + schema only.
+# Air-gap: NO real secrets here; values come from .env (gitignored). Ports bound to localhost.
+
+services:
+  timescaledb:
+    image: timescale/timescaledb-ha:pg18      # PG18 + TimescaleDB with Hypercore/columnstore support
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-picpak}
+      POSTGRES_USER: ${POSTGRES_USER:-picpak}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - tsdata:/home/postgres/pgdata/data
+    ports:
+      - "127.0.0.1:5432:5432"                  # localhost only (dev); prod: internal network, no host port
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-picpak} -d ${POSTGRES_DB:-picpak}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [internal]
+
+  # one-shot: applies migrations/0001_init.sql against the healthy DB, then exits 0.
+  # idempotent migration -> safe to re-run. ON_ERROR_STOP makes any failure a non-zero exit.
+  migrate:
+    image: postgres:18-alpine                  # lightweight psql client (local)
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    entrypoint:
+      - psql
+      - "-v"
+      - "ON_ERROR_STOP=1"
+      - "-h"
+      - timescaledb
+      - "-U"
+      - ${POSTGRES_USER:-picpak}
+      - "-d"
+      - ${POSTGRES_DB:-picpak}
+      - "-f"
+      - /migrations/0001_init.up.sql
+    volumes:
+      - ./migrations:/migrations:ro
+    networks: [internal]
+    restart: "no"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # consumed by the provisioned datasource (grafana/provisioning/datasources):
+      POSTGRES_DB: ${POSTGRES_DB:-picpak}
+      POSTGRES_USER: ${POSTGRES_USER:-picpak}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"                  # localhost only (dev); prod: internal/VPN
+    networks: [internal]
+
+volumes:
+  tsdata:
+  grafanadata:
+
+networks:
+  internal:

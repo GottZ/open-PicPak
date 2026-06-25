@@ -1,0 +1,5 @@
+# Air-gap: never commit real secrets / local state.
+.env
+# local bind-mount data (named volumes are managed by docker, not committed)
+/data/
+*.log
