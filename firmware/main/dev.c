@@ -17,6 +17,9 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include "driver/usb_serial_jtag.h"   /* dev_usb_connected() -> USB host (SOF) present */
+#include "guard.h"                    /* dev_bad_boots()/dev_guard_threshold() */
+#include "logbuf.h"                   /* dev_logbuf() -> RTC-RAM log ring (survives panic/reset) */
 
 /* Stock battery formula recovered from the step6 CFW by disassembly:
  *   pinMv   = adc_cali_raw_to_voltage(raw)    (ADC_ATTEN_DB_12)
@@ -163,6 +166,32 @@ static int l_uptime(bvm *vm) { be_pushint(vm, (bint)(esp_timer_get_time() / 1000
 static int l_reset(bvm *vm)  { be_pushstring(vm, reset_name()); be_return(vm); }
 static int l_batt_mv(bvm *vm)  { be_pushint(vm, s_batt_mv);  be_return(vm); }
 static int l_batt_pct(bvm *vm) { be_pushint(vm, s_batt_pct); be_return(vm); }
+/* USB host present? true while a host sends SOF packets (cable to a data host); false on
+ * a pure power supply / battery. The forced re-assoc USB re-enum reset only happens with a host. */
+static int l_usb_connected(bvm *vm) { be_pushbool(vm, usb_serial_jtag_is_connected()); be_return(vm); }
+/* Reset-proof NVS boot counter (otadiag/boots) -> every boot incl. resets (unlike the RTC-RAM
+ * boot count, which a USB_UART_CHIP_RESET nulls). Rising bc = re-enum/reset rate. */
+static int l_boots(bvm *vm)
+{
+    uint32_t b = 0; nvs_handle_t h;
+    if (nvs_open("otadiag", NVS_READONLY, &h) == ESP_OK) { nvs_get_u32(h, "boots", &b); nvs_close(h); }
+    be_pushint(vm, (bint)b); be_return(vm);
+}
+static int l_bad_boots(bvm *vm)       { be_pushint(vm, (bint)guard_bad_boots()); be_return(vm); }
+static int l_guard_threshold(bvm *vm) { be_pushint(vm, (bint)guard_threshold()); be_return(vm); }
+/* RTC-RAM log ring (survives panic/SW-reset), URL/header-safe tail (last ~220 chars). Used to
+ * exfiltrate the lines leading up to a crash over the telemetry GET when serial is unavailable. */
+static int l_logbuf(bvm *vm)
+{
+    static char buf[1024];
+    size_t n = logbuf_export(buf, sizeof buf);   /* \n->| , control dropped */
+    for (size_t i = 0; i < n; i++) {             /* make the rest URL-query-safe */
+        char c = buf[i];
+        if (c == ' ' || c == '&' || c == '=' || c == '+' || c == '%' || c == '#' || c == '?') buf[i] = '_';
+    }
+    const char *tail = (n > 220) ? buf + (n - 220) : buf;
+    be_pushstring(vm, tail); be_return(vm);
+}
 
 void dev_register(bvm *vm)
 {
@@ -174,4 +203,9 @@ void dev_register(bvm *vm)
     be_regfunc(vm, "dev_reset",     l_reset);
     be_regfunc(vm, "dev_batt_mv",   l_batt_mv);
     be_regfunc(vm, "dev_batt_pct",  l_batt_pct);
+    be_regfunc(vm, "dev_usb_connected", l_usb_connected);
+    be_regfunc(vm, "dev_boots",         l_boots);
+    be_regfunc(vm, "dev_bad_boots",     l_bad_boots);
+    be_regfunc(vm, "dev_guard_threshold", l_guard_threshold);
+    be_regfunc(vm, "dev_logbuf",        l_logbuf);
 }
