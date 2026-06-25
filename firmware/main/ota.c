@@ -1,4 +1,5 @@
 #include "ota.h"
+#include "ota_core.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -53,7 +54,7 @@ void ota_record_boot(void)
     if (nvs_open(DIAG_NS, NVS_READWRITE, &h) != ESP_OK) return;
     uint32_t boots = 0;
     nvs_get_u32(h, "boots", &boots);
-    nvs_set_u32(h, "boots", boots + 1);
+    nvs_set_u32(h, "boots", ota_boots_next(boots));
     uint8_t rr = (uint8_t)esp_reset_reason();
     nvs_set_u8(h, "rr", rr);   /* reset reason of THIS boot (also USB on the console reset) */
 
@@ -74,6 +75,17 @@ void ota_record_boot(void)
     }
     nvs_commit(h);
     nvs_close(h);
+}
+
+uint32_t ota_boots(void)
+{
+    uint32_t boots = 0;
+    nvs_handle_t h;
+    if (nvs_open(DIAG_NS, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u32(h, "boots", &boots);
+        nvs_close(h);
+    }
+    return boots;
 }
 
 bool ota_is_pending(void)
@@ -385,11 +397,10 @@ size_t ota_diag_export(char *buf, size_t cap)
     esp_ota_get_state_partition(run, &sr);
     if (p0) esp_ota_get_state_partition(p0, &s0);
     if (p1) esp_ota_get_state_partition(p1, &s1);
-    uint32_t boots = 0, mv = 0; uint8_t rr = 0, ota_rr = 0, mv_err = 0;
+    uint32_t boots = ota_boots(), mv = 0; uint8_t rr = 0, ota_rr = 0, mv_err = 0;
     char stage[40] = "-"; size_t sl = sizeof(stage);
     nvs_handle_t h;
     if (nvs_open(DIAG_NS, NVS_READONLY, &h) == ESP_OK) {
-        nvs_get_u32(h, "boots", &boots);
         nvs_get_u8(h, "rr", &rr);
         nvs_get_u8(h, "ota_rr", &ota_rr);
         nvs_get_u32(h, "mv", &mv);
@@ -428,9 +439,8 @@ void ota_print_status(void)
     /* Reset-proof OTA diagnostics from NVS */
     nvs_handle_t h;
     if (nvs_open(DIAG_NS, NVS_READONLY, &h) == ESP_OK) {
-        uint32_t boots = 0, mv = 0; uint8_t rr = 0, ota_rr = 0, mv_err = 0;
+        uint32_t boots = ota_boots(), mv = 0; uint8_t rr = 0, ota_rr = 0, mv_err = 0;
         char stage[56] = "-"; size_t sl = sizeof(stage);
-        nvs_get_u32(h, "boots", &boots);
         nvs_get_u8(h, "rr", &rr);
         nvs_get_u8(h, "ota_rr", &ota_rr);
         nvs_get_u32(h, "mv", &mv);

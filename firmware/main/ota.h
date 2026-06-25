@@ -10,6 +10,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* True if the running app was freshly booted via OTA and is still in state
  * PENDING_VERIFY waiting for its confirmation. Then do NOT open the setup console,
@@ -35,6 +36,10 @@ bool ota_update_if_changed(const char *frame_url, const char *server_version);
  * Reveals crash/brownout/WDT during an OTA, even when the logbuf ring has long
  * overwritten the boot line by the next fetch. */
 void ota_record_boot(void);
+
+/* Reset-proof boot counter from NVS namespace "otadiag", key "boots". This is the
+ * canonical boot-count source for telemetry, auth counters, and log epochs. */
+uint32_t ota_boots(void);
 
 /* Diagnostics: prints running/boot/next/last_invalid, version, ota_0/ota_1 states and
  * the NVS diagnostics (boots/reset_reason/ota_stage) (console command OTA). */
