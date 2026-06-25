@@ -6,15 +6,14 @@
 #include "esp_log.h"
 #include "esp_attr.h"
 
-#define LOGBUF_SZ  2048   /* RTC-RAM ring; ~25-40 log lines (1-2 cycles) */
+#define LOGBUF_SZ  LOGBUF_CAPACITY   /* RTC-RAM ring; ~25-40 log lines (1-2 cycles) */
 #define LOG_LINE_MAX 192  /* stack buffer per log line in the hook */
 
 /* RTC-RAM (.rtc.bss, no initializer): cold start -> 0/empty, warm reset
  * (rst:0x15) + deep-sleep wake -> preserved. Same behavior as s_tm_* and
  * s_boot_count in main.c -> the ring survives the port-open reset on fetch. */
 RTC_DATA_ATTR static char     s_ring[LOGBUF_SZ];
-RTC_DATA_ATTR static uint32_t s_head;   /* next write position */
-RTC_DATA_ATTR static uint32_t s_len;    /* filled bytes (<= LOGBUF_SZ) */
+RTC_DATA_ATTR static logbuf_state_t s_state;
 
 static vprintf_like_t s_orig;           /* original log sink (serial) */
 static portMUX_TYPE   s_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -23,9 +22,8 @@ static void ring_put(const char *s, int n)
 {
     portENTER_CRITICAL(&s_mux);
     for (int i = 0; i < n; i++) {
-        s_ring[s_head] = s[i];
-        if (++s_head >= LOGBUF_SZ) s_head = 0;
-        if (s_len < LOGBUF_SZ) s_len++;
+        s_ring[s_state.head] = s[i];
+        logbuf_state_advance(&s_state, 1);
     }
     portEXIT_CRITICAL(&s_mux);
 }
@@ -54,7 +52,7 @@ void logbuf_dump(void)
      * interactive console moment (no parallel logging expected), and putchar over
      * USB-serial must not block inside the critical section. */
     portENTER_CRITICAL(&s_mux);
-    uint32_t len = s_len, head = s_head;
+    uint32_t len = s_state.len, head = s_state.head;
     portEXIT_CRITICAL(&s_mux);
 
     if (len == 0) { printf("(log ring empty)\r\n"); return; }
@@ -68,8 +66,22 @@ void logbuf_dump(void)
 void logbuf_clear(void)
 {
     portENTER_CRITICAL(&s_mux);
-    s_head = 0;
-    s_len = 0;
+    logbuf_state_clear(&s_state);
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void logbuf_set_epoch(uint32_t epoch)
+{
+    portENTER_CRITICAL(&s_mux);
+    logbuf_state_set_epoch(&s_state, epoch);
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void logbuf_get_state(logbuf_state_t *out)
+{
+    if (!out) return;
+    portENTER_CRITICAL(&s_mux);
+    *out = s_state;
     portEXIT_CRITICAL(&s_mux);
 }
 
@@ -77,7 +89,7 @@ size_t logbuf_export(char *dst, size_t cap)
 {
     if (cap == 0) return 0;
     portENTER_CRITICAL(&s_mux);
-    uint32_t len = s_len, head = s_head;
+    uint32_t len = s_state.len, head = s_state.head;
     portEXIT_CRITICAL(&s_mux);
     uint32_t start = (head + LOGBUF_SZ - len) % LOGBUF_SZ;
     size_t o = 0;

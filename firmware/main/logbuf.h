@@ -10,6 +10,7 @@
  * -> fetch flow: close port, run PRESS n, open port (rst), LOG -> the logs of the
  * blind window appear. In the field (no host) a harmless no-op. */
 #pragma once
+#include "logbuf_core.h"
 
 /* Install the esp_log_set_vprintf hook (idempotent). The RTC-RAM ring itself
  * persists across resets/wakes and is NOT cleared here. */
@@ -20,6 +21,13 @@ void logbuf_dump(void);
 
 /* Clear the ring (LOG CLEAR) -> before a measurement run, so only the cycle is in it. */
 void logbuf_clear(void);
+
+/* Set the current log epoch (usually the NVS boot counter). Changing epoch clears the
+ * RTC ring state; setting the same epoch is a no-op. */
+void logbuf_set_epoch(uint32_t epoch);
+
+/* Snapshot ring state for telemetry/log-streaming cursors. */
+void logbuf_get_state(logbuf_state_t *out);
 
 /* Export the ring header-safe into dst (always 0-terminated): \n -> '|',
  * \r + other control characters dropped. For the X-Picpak-Log HTTP header with
