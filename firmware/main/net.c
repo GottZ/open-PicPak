@@ -205,7 +205,14 @@ static bool try_connect(const char *ssid, const char *pass, int timeout_ms, bool
         wc.sta.bssid_set = true;          /* this AP directly -> no scan */
         wc.sta.channel = s_cache.channel;
     }
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    /* NOT ESP_ERROR_CHECK: under rapid re-assoc esp_wifi_set_config can transiently return
+     * ESP_ERR_WIFI_STATE (driver still mid-transition from the previous attempt). Fail this
+     * attempt cleanly so the caller retries / falls back, instead of aborting the whole device. */
+    esp_err_t cfg_err = esp_wifi_set_config(WIFI_IF_STA, &wc);
+    if (cfg_err != ESP_OK) {
+        ESP_LOGW(TAG, "set_config: %s -> abort this attempt", esp_err_to_name(cfg_err));
+        return false;
+    }
 
     if (static_ip) {
         /* Stop the DHCP client + set a static IP -> no DHCP roundtrip. With the DHCP
@@ -228,7 +235,11 @@ static bool try_connect(const char *ssid, const char *pass, int timeout_ms, bool
     s_t_start = s_t_conn = s_t_ip = 0;
     s_t_start = esp_timer_get_time();
     if (!s_started) {
-        ESP_ERROR_CHECK(esp_wifi_start());   /* -> STA_START -> sets TX step -> esp_wifi_connect */
+        esp_err_t start_err = esp_wifi_start();   /* -> STA_START -> sets TX step -> esp_wifi_connect */
+        if (start_err != ESP_OK) {                /* same rationale as set_config: no abort on transient state */
+            ESP_LOGW(TAG, "wifi_start: %s -> abort this attempt", esp_err_to_name(start_err));
+            return false;
+        }
         s_started = true;
     } else {
         /* Stack already running (re-connect/escalation): STA_START no longer fires ->
