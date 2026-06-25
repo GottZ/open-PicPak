@@ -45,17 +45,23 @@ static int64_t s_t_start, s_t_conn, s_t_ip;
 #define WARM_BSSID_PIN  0   /* pin BSSID+channel -> no scan */
 #define WARM_STATIC_IP  1   /* stop DHCP + static IP -> no DHCP roundtrip (the real lever) */
 
-/* WiFi TX power (0.25-dBm units). FIXED at 14 dBm (user decision 2026-06-24): better SNR
- * margin / fewer connect problems on weak links. 14 dBm is empirically brownout-clean
- * (verified connecting at rssi -76..-78); only 15 dBm flaps (TX-PA peak collapses the
- * supply -> reassoc loop). Brownout is otherwise handled by RF-off-before-EPD + the OTA
- * block transfer. The former adaptive 11->13->14 ladder is collapsed to this single step;
- * the escalation/persistence code below stays but harmlessly resolves to the one step.
- * Takes effect when set BEFORE the first assoc burst (STA_START handler / before re-assoc). */
-static const int8_t s_tx_steps[] = { 56 };   /* 14 dBm (single fixed step) */
+/* WiFi TX power (0.25-dBm units). Default 11 dBm (user decision 2026-06-25): trades weak-link
+ * range for brownout headroom under the dense re-assoc + EPD load. 14 dBm still browned out
+ * under load; 15 dBm outright flaps (TX-PA peak collapses the supply -> reassoc loop). Brownout
+ * is further mitigated by RF-off-before-EPD + the OTA block transfer. The default is per-device
+ * overridable in NVS (console: NET TXPOWER <dBm>) so a weak-signal site can raise it without a
+ * reflash; hard-capped at 14 dBm. s_tx_steps[0] is loaded from NVS in net_init_once and set
+ * BEFORE the first assoc burst (STA_START handler / before re-assoc). The former adaptive
+ * 11->13->14 ladder is collapsed to this single configurable step; the escalation/persistence
+ * code below stays but harmlessly resolves to the one step. */
+#define NET_TX_DEFAULT_QDBM 44   /* 11 dBm */
+#define NET_TX_MAX_QDBM     56   /* 14 dBm hard cap (15 dBm => supply collapse / flap) */
+#define NET_TX_MIN_QDBM     8    /* 2 dBm floor */
+static int8_t s_tx_steps[] = { NET_TX_DEFAULT_QDBM };   /* base step; NVS-overridable, default 11 dBm */
 #define TX_NSTEPS ((int)(sizeof(s_tx_steps) / sizeof(s_tx_steps[0])))
-static int s_tx_idx;   /* index into s_tx_steps; always 0 = 14 dBm now */
+static int s_tx_idx;   /* index into s_tx_steps; always 0 = the single configured step */
 #define NETCACHE_NS "netcache"
+#define NETCFG_NS   "netcfg"     /* persistent net config (TX power) — NOT wiped by NETCLR */
 typedef struct {
     uint8_t  valid;
     uint8_t  channel;
@@ -116,6 +122,39 @@ static void tx_idx_save(int idx)
     }
 }
 
+/* TX-power config (NVS, in NETCFG_NS so it survives NETCLR / cache wipes). Stored in
+ * 0.25-dBm units; default + [min,max] clamp applied on read so a bad/absent value can never
+ * push past the 14 dBm flap ceiling. */
+static uint8_t net_tx_qdbm_load(void)
+{
+    uint32_t q = NET_TX_DEFAULT_QDBM;
+    nvs_handle_t h;
+    if (nvs_open(NETCFG_NS, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t v;
+        if (nvs_get_u8(h, "txqdbm", &v) == ESP_OK) q = v;
+        nvs_close(h);
+    }
+    if (q < NET_TX_MIN_QDBM) q = NET_TX_MIN_QDBM;
+    if (q > NET_TX_MAX_QDBM) q = NET_TX_MAX_QDBM;
+    return (uint8_t)q;
+}
+
+void net_set_tx_dbm(int dbm)
+{
+    int q = dbm * 4;
+    if (q < NET_TX_MIN_QDBM) q = NET_TX_MIN_QDBM;
+    if (q > NET_TX_MAX_QDBM) q = NET_TX_MAX_QDBM;
+    nvs_handle_t h;
+    if (nvs_open(NETCFG_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, "txqdbm", (uint8_t)q);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    s_tx_steps[0] = (int8_t)q;   /* live base for the next connect (no reboot needed) */
+}
+
+int net_tx_dbm(void) { return s_tx_steps[0] / 4; }
+
 void net_cache_clear(void)
 {
     s_cache.valid = 0;
@@ -166,6 +205,7 @@ static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
 static void net_init_once(void)
 {
     if (s_netif_done) return;
+    s_tx_steps[0] = (int8_t)net_tx_qdbm_load();   /* apply NVS TX-power override (default 11 dBm) */
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     s_netif = esp_netif_create_default_wifi_sta();
@@ -299,7 +339,7 @@ bool net_wifi_connect(const char *ssid, const char *pass, int timeout_ms)
     bool ok = try_connect(ssid, pass, timeout_ms, warm);
 
     /* 2) warm failed -> cold fallback (full scan/DHCP). net_cache_clear sets the TX
-     *    persistence to the base -> the cold attempt re-probes from 11 dBm. */
+     *    persistence to the base -> the cold attempt re-probes from the configured base TX. */
     if (!ok && warm) {
         ESP_LOGW(TAG, "warm connect failed -> fallback to full scan/DHCP");
         net_cache_clear();
@@ -309,8 +349,8 @@ bool net_wifi_connect(const char *ssid, const char *pass, int timeout_ms)
         ok = try_connect(ssid, pass, timeout_ms, false);
     }
 
-    /* 3) Still not connected -> step the TX power up (cold) to max (14 dBm). A weak
-     *    signal needs more TX; the steps stay below the flapping limit (15 dBm). */
+    /* 3) Still not connected -> step the TX power up (cold). Inert with the single
+     *    configured step (TX_NSTEPS==1); retained for a future multi-step ladder. */
     while (!ok && s_tx_idx + 1 < TX_NSTEPS) {
         s_tx_idx++;
         ESP_LOGW(TAG, "connect failed -> TX up to %ddBm", s_tx_steps[s_tx_idx] / 4);

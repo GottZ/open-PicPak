@@ -91,7 +91,7 @@ static void print_help(void)
            "  GUARD [CLEAR|THRESHOLD n|UPTIME ms]  bootloop-guard: status / clear / tune\r\n"
            "  STORE OK|LIST|GET k|SET k v|DEL k   littlefs key-value store\r\n"
            "  RTC STAT|GET k|SET k v|DEL k        RTC-RAM key-value (ephemeral)\r\n"
-           "  NET SCAN|TRY ssid pass|IP|SSID|RSSI|STOP   Berry net surface\r\n"
+           "  NET SCAN|TRY ssid pass|IP|SSID|RSSI|STOP|TXPOWER [dBm]  net surface / TX power\r\n"
            "  ERASE                   delete config\r\n"
            "  HELP                    this help\r\n");
 }
@@ -299,8 +299,12 @@ static int handle(char *line, uint32_t boot_count)
             if (net_rssi(&r)) printf("NET rssi=%d\r\n", r); else printf("NET (not connected)\r\n");
         } else if (strcasecmp(sub, "STOP") == 0) {
             net_wifi_stop(); printf("OK   wifi stopped\r\n");
+        } else if (strcasecmp(sub, "TXPOWER") == 0) {
+            if (arg[0]) { net_set_tx_dbm((int)strtol(arg, NULL, 10));
+                          printf("OK   tx=%ddBm (applies on next connect)\r\n", net_tx_dbm()); }
+            else printf("NET tx=%ddBm (default 11, max 14)\r\n", net_tx_dbm());
         } else {
-            printf("ERR  usage: NET SCAN|TRY ssid pass|IP|SSID|RSSI|STOP\r\n");
+            printf("ERR  usage: NET SCAN|TRY ssid pass|IP|SSID|RSSI|STOP|TXPOWER [dBm]\r\n");
         }
     } else if (strcasecmp(cmd, "HELP") == 0 || strcasecmp(cmd, "?") == 0) {
         print_help();

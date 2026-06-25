@@ -9,6 +9,12 @@
  * on a stale cache it automatically falls back to a full scan + DHCP. */
 bool net_wifi_connect(const char *ssid, const char *pass, int timeout_ms);
 
+/* Max WiFi TX power. Default 11 dBm (brownout headroom under load); per-device override
+ * persisted in NVS so a weak-signal site can raise it without a reflash. Hard-capped at
+ * 14 dBm (15 dBm collapses the TX-PA supply). net_set_tx_dbm applies on the next connect. */
+void net_set_tx_dbm(int dbm);
+int  net_tx_dbm(void);
+
 /* Forcing connect for the Berry net policy (scan-match / password-rotation): unlike
  * net_wifi_connect it does NOT short-circuit on an existing association -- it (re)associates
  * against the passed SSID/pass and returns the real result. Cold, base TX, fail-fast. */
