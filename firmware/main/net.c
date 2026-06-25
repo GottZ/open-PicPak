@@ -17,8 +17,9 @@
 
 static const char *TAG = "net";
 
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
+#define WIFI_CONNECTED_BIT    BIT0
+#define WIFI_FAIL_BIT         BIT1
+#define WIFI_DISCONNECTED_BIT BIT2   /* an intentional (s_stopping) disconnect has been processed */
 static EventGroupHandle_t s_wifi_eg;
 static int s_retry, s_max_retry = 8;
 static bool s_netif_done;
@@ -138,7 +139,11 @@ static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
          * only then is lwIP really usable. */
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
-        if (s_stopping) return;   /* intentional stop (net_wifi_stop) -> do not reconnect */
+        if (s_stopping) {         /* intentional stop/disconnect -> no reconnect; flag it as settled
+                                     so a forcing re-assoc can wait for it deterministically */
+            xEventGroupSetBits(s_wifi_eg, WIFI_DISCONNECTED_BIT);
+            return;
+        }
         if (s_retry < s_max_retry) {
             s_retry++;
             esp_wifi_connect();   /* return value irrelevant: ESP_ERR_WIFI_CONN during an active attempt is harmless */
@@ -350,10 +355,18 @@ bool net_wifi_try(const char *ssid, const char *pass, int timeout_ms)
     net_init_once();
 
     if (s_connected) {
+        /* esp_wifi_disconnect() is async: the STA_DISCONNECTED lands later in the event task.
+         * Wait deterministically for it to be processed (s_stopping suppresses the reconnect)
+         * instead of betting on a fixed settle delay. Otherwise the old disconnect event can
+         * arrive AFTER try_connect re-arms s_stopping=false (net.c:184), where the handler takes
+         * it for a spurious disconnect of the NEW attempt and raises WIFI_FAIL_BIT -> the fresh
+         * connect reports failure before it even had a chance. The 200ms is only a fallback for
+         * the edge case where the driver fires no event (already mid-transition). */
+        xEventGroupClearBits(s_wifi_eg, WIFI_DISCONNECTED_BIT);
         s_stopping = true;
         esp_wifi_disconnect();
         s_connected = false;
-        vTaskDelay(pdMS_TO_TICKS(50));
+        xEventGroupWaitBits(s_wifi_eg, WIFI_DISCONNECTED_BIT, pdTRUE, pdFALSE, pdMS_TO_TICKS(200));
     }
     if (s_cache.valid && strncmp(s_cache.ssid, ssid, sizeof(s_cache.ssid)) != 0) {
         ESP_LOGI(TAG, "wifi_try: SSID change -> connect cache discarded");
