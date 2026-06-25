@@ -104,6 +104,12 @@ static void epd_init_panel(void)
 
 void epd_init(void)
 {
+    /* Idempotent: the GPIO + SPI bus are set up ONCE (spi_bus_initialize aborts via
+     * ESP_ERROR_CHECK on a second call -> panic). A repeated epd_init (keep-awake loop,
+     * or any multi-refresh-without-reboot) only re-inits the PANEL, which is needed anyway
+     * to wake it from the deep sleep that epd_sleep() left it in. */
+    if (s_init_done) { epd_init_panel(); return; }
+
     gpio_config_t out = {
         .pin_bit_mask = (1ULL << PIN_DC) | (1ULL << PIN_RST),
         .mode = GPIO_MODE_OUTPUT,
