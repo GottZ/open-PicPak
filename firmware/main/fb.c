@@ -16,6 +16,7 @@
 static uint8_t s_fb[EPD_FRAME_BYTES];
 
 const uint8_t *fb_buffer(void) { return s_fb; }
+uint8_t *fb_writable(void) { return s_fb; }
 
 /* set one pixel, with bounds clip + vertical flip + 2bpp MSB-first packing */
 static inline void px(int x, int y, int code)
