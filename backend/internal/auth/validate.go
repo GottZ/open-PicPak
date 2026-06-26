@@ -5,7 +5,7 @@ const KSplit = 24
 
 // Config carries the agreed protocol constants. These are policy values, set from server config.
 type Config struct {
-	Digits    int    // committed DB default is 6; kept configurable per device
+	Digits    int    // committed DB default is 8; kept configurable per device
 	Window    uint64 // normal rtc resync window (e.g. 8)
 	WindowFar uint64 // recovery / bootstrap look-ahead bound (e.g. 4096)
 }

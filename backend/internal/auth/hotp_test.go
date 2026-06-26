@@ -25,7 +25,7 @@ func TestHOTP_RFC4226(t *testing.T) {
 // unprovisioned, and beyond-window MUST be rejected; bootstrap / normal / bounded recovery accepted.
 func TestValidate(t *testing.T) {
 	key := []byte("12345678901234567890")
-	cfg := Config{Digits: 6, Window: 8, WindowFar: 4096}
+	cfg := Config{Digits: 8, Window: 8, WindowFar: 4096}
 	bc := uint64(5)
 	base := bc << KSplit // boot_count=5, rtc=0
 	otp := func(c uint64) uint32 { return HOTP(key, c, cfg.Digits) }
