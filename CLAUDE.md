@@ -10,7 +10,7 @@ This is a **public, pushed** repository. **Never commit real identifiers** in co
 messages or docs: serial numbers, MAC addresses, IP addresses, Wi-Fi SSIDs, secret tokens or paths,
 private host/domain names, or reverse-engineering provenance. Use **format-preserving placeholders**
 (stub table in `documentation/device.md`). A grep gate (`tools/check-airgap.sh`) blocks known private
-patterns on staged/changed files — run it before committing. Commits are **SSH-signed**.
+patterns on staged/changed files — run it before committing.
 
 ## Language
 **English throughout** — code, comments, commit messages, docs, this file.
