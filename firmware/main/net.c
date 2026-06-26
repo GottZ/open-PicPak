@@ -170,7 +170,7 @@ static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
          * (brownout-critical) TX burst. esp_wifi_set_max_tx_power only takes effect
          * after esp_wifi_start -> the STA_START handler is the earliest safe point. */
         esp_wifi_set_max_tx_power(s_tx_steps[s_tx_idx]);
-        esp_wifi_connect();
+        if (!s_stopping) esp_wifi_connect();   /* scan-only start: do not race scan_start with assoc */
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
         s_t_conn = esp_timer_get_time();   /* associated (before DHCP/IP) */
         /* Even with static IP an IP_EVENT_STA_GOT_IP follows (esp_netif posts it once
