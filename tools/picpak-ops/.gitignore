@@ -1,0 +1,7 @@
+# picpak-ops local operator config (real hosts/DSN/token live here, never committed).
+# The committed source of truth is config.example.toml (placeholders only). These
+# lines mirror the repo-root .gitignore so the local config is unstageable whether
+# CWD is the repo root (the build-defaults norm) or this tool sub-directory.
+picpak-ops.toml
+config.toml
+*.local.toml

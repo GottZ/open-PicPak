@@ -1,0 +1,381 @@
+# picpak-ops example configuration (PLACEHOLDERS ONLY).
+#
+# This committed example carries ONLY pinned public placeholders. Copy it to a
+# gitignored local config (picpak-ops.toml / config.toml / *.local.toml) and put
+# your real hosts, DSN, and Admin-API token THERE — never in this file.
+#
+# No magic values: everything below is configurable. Defaults shown here match
+# the compiled defaults table; omit a key to keep its default.
+#
+# Secret-bearing fields (database.dsn, ota.admin_api_token) accept indirection:
+#   "$ENV:NAME"   read from environment variable NAME
+#   "$FILE:/path" read (trimmed) from a file, e.g. a secret-manager export
+# They can also be supplied at runtime via the enumerated env overrides:
+#   PICPAK_OPS_DB_DSN, PICPAK_OPS_ADMIN_URL, PICPAK_OPS_ADMIN_TOKEN
+
+schema = 1
+
+[meta]
+name = "example"
+
+[reload]
+watch    = true
+debounce = "500ms"
+
+# --- wm-shell: ui / keys / theme -------------------------------------------
+
+[ui]
+mouse             = "cell"   # none | cell | all
+report_focus      = true
+altscreen         = true
+teardown_deadline = "5s"
+scrollback_lines  = 5000
+tab_bar           = "top"    # top | bottom | off
+status_bar        = true
+theme             = "default"
+# startup_panes spawn panes at launch; args carry host/port/DSN-bearing values
+# at runtime, so any committed example uses placeholders only.
+# [[ui.startup_panes]]
+# kind  = "hosts"
+# focus = true
+# [ui.startup_panes.args]
+# host = "host-a"
+
+[keys]
+quit       = ["ctrl+c", "q"]
+help       = ["?"]
+next_tab   = ["tab", "ctrl+n"]
+prev_tab   = ["shift+tab", "ctrl+p"]
+focus_n    = "alt+"
+close_pane = ["ctrl+w"]
+split      = ["ctrl+s"]
+
+[keys.spawn]
+# pane-kind -> binding(s) to spawn that pane
+build = ["b"]
+
+[theme]
+border         = "240"
+focus_border   = "205"
+tab_active     = "205"
+tab_inactive   = "240"
+status_active  = "42"
+status_working = "214"
+status_quiet   = "244"
+status_error   = "196"
+dirty          = "214"
+
+# --- database (read side; secret + host-bearing) ----------------------------
+
+[database]
+# PLACEHOLDER DSN — replace with your real DSN in a gitignored local config,
+# or supply it via PICPAK_OPS_DB_DSN / "$ENV:..." / "$FILE:...".
+dsn               = "postgres://user:pass@db.example:5432/picpak?sslmode=require"
+max_conns         = 4
+connect_timeout   = "5s"
+statement_timeout = "15s"
+read_only         = true
+
+# --- ssh-host: ssh / poll / run / reconnect / hosts -------------------------
+
+[ssh]
+binary          = "ssh"
+base_args       = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "ControlMaster=auto", "-o", "ControlPersist=120"]
+control_path    = "~/.ssh/cm-picpak-%r@%h:%p"
+connect_timeout = "8s"
+command_timeout = "0s"   # 0 = no ceiling (flash/console run long)
+
+[poll]
+interval          = "30s"
+parallel          = 4
+command           = ["ls", "-l", "/dev/serial/by-id/"]
+match_regex       = "usb-Espressif_USB_JTAG.*-if00"
+mac_regex         = "([0-9A-Fa-f]{2}([:_-]?[0-9A-Fa-f]{2}){5})"
+tty_glob          = "/dev/ttyACM*"
+vendor_id         = "303a"   # public Espressif ESP32-C3 USB-Serial-JTAG VID (working default)
+product_id        = "1001"   # public Espressif ESP32-C3 USB-Serial-JTAG PID (working default)
+confirm_command   = ["udevadm", "info", "-q", "property", "-n", "%TTY%"]
+confirm_required  = true
+confirm_cache_ttl = "5m"
+
+[run]
+scrollback_lines = 5000
+line_max_bytes   = 8192
+
+[reconnect]
+backoff_initial = "1s"
+backoff_max     = "60s"
+backoff_factor  = 2.0
+fail_threshold  = 3
+
+# Real hosts live ONLY in your gitignored local config. These are placeholders.
+[[hosts]]
+name       = "host-a"
+ssh_target = "user@host.example"
+local      = false
+enabled    = true
+
+# --- build ------------------------------------------------------------------
+
+[build]
+host               = "local"                 # "local" or a [[hosts]].name (the build runs through that host's Runner)
+repo_path          = "."                     # open-picpak checkout root (the firmware/ parent)
+firmware_dir       = "firmware"              # relative to repo_path (or absolute for a remote host)
+docker_image       = "espressif/idf:v5.5.3"
+docker_cmd         = "docker"                # container runtime (override for podman / sudo docker)
+target             = "esp32c3"
+build_cmd          = ["bash", "-lc", "idf.py set-target {target} build"]
+docker_run_args    = ["run", "--rm", "--name", "{name}", "-v", "{repo}/firmware:/project", "-w", "/project"]
+container_name_tmpl = "picpak-ops-build-{runid}"  # the docker-kill cancel fallback matches this name
+python_bin         = "python3"
+python_import_probe = "import PIL"            # preflight Pillow check: {python_bin} -c {probe}
+stat_bin           = "stat"                  # remote artifact stat binary
+sha256_bin         = "sha256sum"             # remote app-hash binary (e.g. "shasum -a 256" on some hosts)
+fonts_dir          = "screens-src/fonts"     # relative to firmware_dir; preflight dir_exists
+required_components = ["berry", "littlefs", "qrcodegen"]  # components/<c> dirs preflight checks
+artifact_dir       = "firmware/build"
+flasher_args_path  = "build/flasher_args.json"  # relative to firmware_dir; IDF offset→file truth
+app_artifact       = "build/picpak_fw.bin"   # relative to firmware_dir; the artifact that gets the lowercase sha256
+ota_slot_size      = 4194304                 # 0x400000 ota_0 upper bound for the app
+error_tail_lines   = 40
+pane_scrollback    = 5000
+gate_disclaimer    = "BUILD GREEN — regression gate only. Not a correctness/display proof; verify on a device."
+cancel_kill_grace_ms = 2000
+
+# pane-local build keys: cancel/rerun are forwarded to the focused build pane;
+# start mirrors keys.spawn.build (the wm spawn binding). cancel must NOT be a
+# global chrome key (ctrl+c/q quit the TUI before a key reaches the pane).
+[build.keys]
+start  = "b"
+cancel = "x"
+rerun  = "r"
+
+# one-time component setup (precondition; populates firmware/components/)
+[[build.setup]]
+name = "berry"
+cmd  = ["bash", "scripts/setup-berry.sh"]
+cwd  = "firmware"
+[[build.setup]]
+name = "littlefs"
+cmd  = ["bash", "scripts/setup-littlefs.sh"]
+cwd  = "firmware"
+[[build.setup]]
+name = "qrcodegen"
+cmd  = ["bash", "scripts/setup-qrcodegen.sh"]
+cwd  = "firmware"
+
+# host-side codegen run before the container build — the FOUR generators CMake
+# guards on (main/CMakeLists.txt :6/:10/:14/:18). cmd = [interpreter, script],
+# script path relative to firmware_dir; output is the generated header.
+[[build.codegen]]
+name   = "screens"
+cmd    = ["python3", "screens-src/gen_screens.py"]
+cwd    = "firmware"
+output = "main/screens.h"
+[[build.codegen]]
+name   = "render"
+cmd    = ["python3", "host/gen_render.py"]
+cwd    = "firmware"
+output = "main/render_script.h"
+src    = "main/render.be"
+[[build.codegen]]
+name   = "font16"
+cmd    = ["python3", "host/gen_font16.py"]
+cwd    = "firmware"
+output = "main/font16.h"
+[[build.codegen]]
+name   = "policy"
+cmd    = ["python3", "host/gen_policy.py"]
+cwd    = "firmware"
+output = "main/policy_script.h"
+src    = "main/policy.be"
+
+# binary -> flash-offset map (also consumed by flash). min_size is a lower byte
+# bound; exact_size pins a fixed-size data partition.
+[[build.artifacts]]
+name      = "bootloader"
+file      = "bootloader/bootloader.bin"
+offset    = "0x0"
+min_size  = 16384
+[[build.artifacts]]
+name       = "partitions"
+file       = "partition_table/partition-table.bin"
+offset     = "0x8000"
+exact_size = 3072
+[[build.artifacts]]
+name       = "otadata"
+file       = "ota_data_initial.bin"
+offset     = "0x10000"
+exact_size = 8192
+[[build.artifacts]]
+name     = "app"
+file     = "picpak_fw.bin"
+offset   = "0x20000"
+min_size = 1048576
+
+# --- flash ------------------------------------------------------------------
+
+[flash]
+esptool_cmd         = ["esptool"]
+chip                = "esp32c3"
+before              = "default-reset"
+after               = "hard-reset"
+flash_mode          = "dio"
+flash_size          = "16MB"
+flash_freq          = "80m"
+extra_args          = []
+run_over_ssh        = true
+nvs_preserve_offset = "0x9000"
+forbid_erase        = true   # inviolable; setting false is a load error
+stage_mode          = "scp"  # scp | build_on_host | local
+stage_remote_dir    = ""
+stage_skip_unchanged = true
+concurrency         = 1
+run_timeout         = "5m"
+retry_auto          = false
+retry_max           = 1
+tail_lines          = 40
+
+# Pane-local bindings (distinct K7 scope; reuse with other panes' chords is legal).
+[flash.keys]
+run     = "f"  # start flash on selected targets
+retry   = "r"  # retry the selected failed device
+abort   = "x"  # abort selected/all in-flight
+console = "c"  # open a console (axis 06) on the selected device
+
+# --- console (behavioral defaults only; no host/port/path literal) ----------
+
+[console]
+ssh_command            = "ssh"
+ssh_args               = ["-T", "{host}"]
+remote_command         = "stty -F {port} {baud} raw -echo -ixon; trap 'kill $catpid 2>/dev/null' EXIT HUP INT TERM; cat {port} & catpid=$!; cat > {port}; kill $catpid 2>/dev/null"
+baud                   = 115200
+auto_connect           = false  # connect resets the device
+reconnect              = true
+reconnect_backoff_ms   = 1500
+reconnect_max_attempts = 5
+scrollback_lines       = 5000
+line_endings           = "crlf" # lf | cr | crlf
+local_echo             = false
+quiet_timeout_ms       = 2000   # tune on-device
+banner_match           = "=== PicPak Setup Console ==="
+confirm_connect        = true
+session_log_dir        = ""     # "" = disabled; never an absolute path literal
+
+[console.keys]
+submit       = "enter"
+history_prev = "up"
+history_next = "down"
+scroll_up    = "pgup"
+scroll_down  = "pgdown"
+search       = "/"
+clear        = "ctrl+l"
+reconnect    = "ctrl+r"
+disconnect   = "ctrl+d"
+help         = "f1"
+
+# --- ota (host-bearing url; secret token) -----------------------------------
+
+[ota]
+# PLACEHOLDER admin URL/token — replace in a gitignored local config or supply
+# via PICPAK_OPS_ADMIN_URL / PICPAK_OPS_ADMIN_TOKEN / "$ENV:..." / "$FILE:...".
+admin_api_url      = "https://admin.example/admin"
+admin_api_token    = "REPLACE_ME"
+admin_api_timeout  = "10s"
+allow_direct_write = false   # interim direct-pgx-write; requires read_only=false + DSN
+blob_dir           = ""
+blob_filename      = "firmware.bin"
+serve_url_template = ""
+build_dir          = "firmware/build"
+version_file       = "firmware/version.txt"
+fw_artifact_name   = "app"
+default_channel    = "stable"
+max_ota_tries      = 0
+resolve_precedence = ["pinned-serial", "serial", "channel", "default"]
+behind_is_warning  = true
+refresh_interval   = "30s"
+
+[ota.keys]
+register     = ["r"]
+pin          = ["p"]
+unpin        = ["u"]
+set_channel  = ["C"]
+toggle_state = ["space"]
+mark_done    = ["D"]
+refresh      = ["R"]
+switch_table = ["tab"]
+
+# --- telemetry (read-model query shaping) -----------------------------------
+
+[telemetry]
+# window = history_window (per-device history span); refresh_interval =
+# poll_interval_focused (focused fleet/device poll cadence). One key per concept.
+window                  = "72h"
+refresh_interval        = "30s"
+log_tail_lines          = 500
+log_follow_interval     = "30s"
+poll_interval_background = "5m"      # throttled cadence while the pane is hidden
+stale_after             = "3h"       # now-time beyond this → OFFLINE_STALE verdict
+history_max_rows        = 500
+fleet_max_devices       = 1000
+low_batt_pct            = 15
+bad_boots_warn          = 2
+brownout_reset_reasons  = ["brownout"]  # reset_name() emits lowercase "brownout" on the wire
+brownout_ota_rr_codes   = [9]           # diag_ota_rr raw esp_reset_reason(); 9 = BROWNOUT
+low_batt_includes_usb   = false
+channel_mismatch_warn   = true
+age_format              = "relative" # relative | absolute
+batt_unit               = "V"        # V | mV
+sparkline_metrics       = ["batt_pct", "uptime_ms", "bad_boots"]
+
+[telemetry.keys]
+# pane-scoped action -> chord(s). refresh is "R" (NOT "r" — hosts.poll owns "r").
+refresh     = ["R"]
+select_next = ["j"]
+select_prev = ["k"]
+copy_serial = ["y"]
+
+# --- logs -------------------------------------------------------------------
+
+[logs]
+line_separator         = "|"
+poll_interval          = "3s"
+poll_batch             = 500
+backfill_page          = 200
+live_ring_lines        = 5000
+history_max_rows        = 50000
+default_filter_serials = []
+default_sources        = ["telemetry", "ota-snapshot"]
+show_gap_markers       = true
+gap_marker_format      = "── boot {from} → {to} (gap) ──"
+show_suspect_markers   = true
+suspect_marker         = "⚠ suspect"
+follow_default         = true
+error_backoff          = "10s"
+error_backoff_max      = "2m"
+timestamp_format       = "15:04:05"
+timezone               = "Local"
+colorize_by            = "serial" # serial | source | none
+palette                = ["39", "208", "120", "213", "227", "117", "210", "156"]
+query_timeout          = "5s"
+
+[logs.keys]
+# pane-scoped action -> chord(s). Per-pane (K7) scope: reusing f/d/s/y/x that other
+# panes also bind is legal; only intra-scope duplicates are rejected.
+follow        = ["f"]   # toggle auto-scroll-to-newest
+device_filter = ["d"]   # open the device multiselect
+source_cycle  = ["s"]   # cycle the source filter
+clear_view    = ["x"]   # clear the view ring (view-only; never deletes DB rows)
+copy          = ["y"]   # copy the loaded lines to the clipboard
+jump_serial   = ["g"]   # isolate the next device serial (cycles back to all)
+reload        = ["R"]   # reset cursor/ring + refresh
+
+# --- devices (labels / cross-ref; identity truth is NVS dev_sn / MAC) --------
+
+# Real serials/MACs live ONLY in your gitignored local config. Placeholders here.
+[[devices]]
+serial  = "PLACEHLD"            # D8 8-char public identifier
+mac     = "00:00:00:00:00:00"
+channel = "stable"
+label   = "example device"
+host    = "host-a"

@@ -7,6 +7,13 @@
 *.tmp
 *.log
 
+# picpak-ops local operator config (real hosts/DSN/token live here, never committed).
+# The committed source of truth is tools/picpak-ops/config.example.toml (placeholders only).
+# Covered at the repo root too because the build defaults steer the operator to run from here.
+picpak-ops.toml
+config.toml
+*.local.toml
+
 # ESP-IDF build artifacts (sdkconfig.defaults is the tracked source of truth)
 firmware/build/
 firmware/sdkconfig
