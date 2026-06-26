@@ -177,16 +177,17 @@ static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
          * the static IP is active after the assoc) -> the CONNECTED_BIT is set there,
          * only then is lwIP really usable. */
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *e = (wifi_event_sta_disconnected_t *)data;
         s_connected = false;
         if (s_stopping) {         /* intentional stop/disconnect -> no reconnect; flag it as settled
-                                     so a forcing re-assoc can wait for it deterministically */
+                                      so a forcing re-assoc can wait for it deterministically */
             xEventGroupSetBits(s_wifi_eg, WIFI_DISCONNECTED_BIT);
             return;
         }
         if (s_retry < s_max_retry) {
             s_retry++;
             esp_wifi_connect();   /* return value irrelevant: ESP_ERR_WIFI_CONN during an active attempt is harmless */
-            ESP_LOGW(TAG, "reconnect %d/%d", s_retry, s_max_retry);
+            ESP_LOGW(TAG, "reconnect %d/%d reason=%u", s_retry, s_max_retry, (unsigned)(e ? e->reason : 0));
         } else {
             xEventGroupSetBits(s_wifi_eg, WIFI_FAIL_BIT);
         }
@@ -199,6 +200,15 @@ static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_connected = true;
         xEventGroupSetBits(s_wifi_eg, WIFI_CONNECTED_BIT);
     }
+}
+
+static void cancel_pending_connect(void)
+{
+    if (!s_started || !s_wifi_eg) return;
+    xEventGroupClearBits(s_wifi_eg, WIFI_DISCONNECTED_BIT);
+    s_stopping = true;
+    esp_wifi_disconnect();
+    xEventGroupWaitBits(s_wifi_eg, WIFI_DISCONNECTED_BIT, pdTRUE, pdFALSE, pdMS_TO_TICKS(1000));
 }
 
 /* One-time WiFi/netif initialization (handler, mode). Idempotent. */
@@ -290,7 +300,11 @@ static bool try_connect(const char *ssid, const char *pass, int timeout_ms, bool
 
     EventBits_t bits = xEventGroupWaitBits(s_wifi_eg, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                            pdTRUE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
-    return (bits & WIFI_CONNECTED_BIT) != 0;
+    if (bits & WIFI_CONNECTED_BIT) return true;
+    if (!(bits & WIFI_FAIL_BIT))
+        ESP_LOGW(TAG, "connect timed out after %dms -> cancelling pending association", timeout_ms);
+    cancel_pending_connect();
+    return false;
 }
 
 /* After a cold (DHCP) connect, cache BSSID/channel/IP/DNS for the next warm connect. */
