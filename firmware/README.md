@@ -77,7 +77,11 @@ cc -I main -O2 -Wall -o /tmp/test_guard test/test_guard.c && /tmp/test_guard
 ## Flash
 
 The ESP32-C3 has a native USB-Serial-JTAG interface (`303a:1001`), so esptool resets it into
-download mode without a button. Flash with **no full erase** so the NVS config survives:
+download mode without a button. **Flash write-only — never `erase-flash` / `erase-region` over `0x9000`.**
+The NVS partition at `0x9000` holds the **factory per-device data** (RF calibration, base MAC, serial,
+BT config). This firmware coexists with that NVS additively, but a full erase destroys it **irrecoverably**
+(only a prior full-flash backup can restore it) — and it also breaks a later clean stock re-flash, since
+stock and this firmware share the same NVS region. Write-only:
 
 ```sh
 esptool --chip esp32c3 -p <PORT> --before default-reset --after hard-reset \
