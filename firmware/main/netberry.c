@@ -16,15 +16,17 @@ static int l_wifi_scan(bvm *vm)
 {
     net_ap_t aps[24];
     int n = net_wifi_scan(aps, (int)(sizeof aps / sizeof aps[0]));
-    be_newlist(vm);                                  /* result list at the top */
+    be_newobject(vm, "list");                       /* leaves object + raw backing list on stack */
     for (int i = 0; i < n; i++) {
-        be_newmap(vm);                               /* map (list now at -2) */
+        be_newobject(vm, "map");                    /* map object + backing map (list at -3) */
         be_pushstring(vm, "ssid"); be_pushstring(vm, aps[i].ssid); be_data_insert(vm, -3); be_pop(vm, 2);
         be_pushstring(vm, "rssi"); be_pushint(vm, aps[i].rssi);    be_data_insert(vm, -3); be_pop(vm, 2);
         be_pushstring(vm, "auth"); be_pushint(vm, aps[i].auth);    be_data_insert(vm, -3); be_pop(vm, 2);
-        be_data_push(vm, -2);                        /* append map to list */
+        be_pop(vm, 1);                               /* drop backing map, leave map object */
+        be_data_push(vm, -2);                        /* append map object to list */
         be_pop(vm, 1);
     }
+    be_pop(vm, 1);                                   /* drop backing list, leave object */
     be_return(vm);
 }
 

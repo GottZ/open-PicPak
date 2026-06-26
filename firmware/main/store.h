@@ -33,6 +33,8 @@ bool store_put(const char *key, const char *val);
 long store_fetch(const char *key, char *buf, size_t cap);
 bool store_remove(const char *key);
 void store_list(void);
+void store_list_prefix(const char *prefix);
+bool store_has_prefix(const char *prefix);
 
 /* RTC key-value store (rtc_*): small ephemeral cross-wake state in RTC-FAST RAM. Survives a
  * deep-sleep wake; nulled on cold boot / the port-open rst:0x15. Register: rtc_set/get/del/has. */

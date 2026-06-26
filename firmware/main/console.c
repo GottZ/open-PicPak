@@ -5,6 +5,7 @@
 #include "ota.h"
 #include "guard.h"
 #include "store.h"
+#include "wifi_store.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -80,6 +81,7 @@ static void print_help(void)
 {
     printf("Commands:\r\n"
            "  SETWIFI <ssid> <pass>   save WiFi (pass = rest of line)\r\n"
+           "  SETWIFI ADD <ssid> <pass>|LIST|DEL <slug>   multi-WiFi store\r\n"
            "  SETURL  <url>           save frame URL\r\n"
            "  INFO                    show status\r\n"
            "  REFRESH                 fetch image now + sleep\r\n"
@@ -106,8 +108,10 @@ static void cmd_info(uint32_t boot_count)
     printf("free heap  : %lu B\r\n", (unsigned long)heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
     printf("ssid       : %s\r\n", cfg.ssid[0] ? cfg.ssid : "(empty)");
     printf("pass       : %s\r\n", cfg.pass[0] ? "(set)" : "(empty)");
+    printf("multi-wifi : %s\r\n", wifi_store_has_entries() ? "configured" : "(empty)");
     printf("url        : %s\r\n", cfg.url[0] ? cfg.url : "(empty)");
-    printf("config     : %s\r\n", have ? "complete" : "INCOMPLETE (ssid+url required)");
+    if (!have && cfg.url[0] && wifi_store_has_entries()) have = true;
+    printf("config     : %s\r\n", have ? "complete" : "INCOMPLETE (wifi+url required)");
 }
 
 /* Processes a line. Returns CONSOLE_STAY or an exit action. */
@@ -123,13 +127,45 @@ static int handle(char *line, uint32_t boot_count)
     else rest = p + strlen(p);     /* points to "" */
 
     if (strcasecmp(cmd, "SETWIFI") == 0) {
-        char *ssid = rest;
-        char *pass = strchr(rest, ' ');
-        if (pass) { *pass++ = '\0'; while (*pass == ' ') pass++; }
-        else pass = rest + strlen(rest);   /* empty password (open network) */
-        if (ssid[0] == '\0') {
-            printf("ERR  usage: SETWIFI <ssid> <pass>\r\n");
+        char *sub = rest;
+        char *sep = strchr(rest, ' ');
+        char *arg = sep;
+        if (arg) { *arg++ = '\0'; while (*arg == ' ') arg++; }
+        else arg = rest + strlen(rest);
+
+        if (strcasecmp(sub, "ADD") == 0) {
+            char *ssid = arg;
+            char *pass = strchr(arg, ' ');
+            if (pass) { *pass++ = '\0'; while (*pass == ' ') pass++; }
+            else pass = arg + strlen(arg);
+            if (ssid[0] == '\0') {
+                printf("ERR  usage: SETWIFI ADD <ssid> <pass>\r\n");
+            } else {
+                char key[64];
+                if (wifi_store_add(ssid, pass, 0, key, sizeof key)) {
+                    cfg_set_verified(false);
+                    printf("OK   WiFi stored as %s (ssid=\"%s\", pass=%s)\r\n",
+                           key, ssid, pass[0] ? "set" : "empty");
+                } else {
+                    printf("ERR  store failed (bad key / FS down / full)\r\n");
+                }
+            }
+        } else if (strcasecmp(sub, "LIST") == 0) {
+            wifi_store_list();
+        } else if (strcasecmp(sub, "DEL") == 0) {
+            if (arg[0] == '\0') printf("ERR  usage: SETWIFI DEL <slug>\r\n");
+            else if (wifi_store_del(arg)) { cfg_set_verified(false); printf("OK   WiFi entry deleted\r\n"); }
+            else printf("ERR  not found / FS down\r\n");
         } else {
+            if (sep) *sep = ' ';
+            char *ssid = rest;
+            char *pass = strchr(rest, ' ');
+            if (pass) { *pass++ = '\0'; while (*pass == ' ') pass++; }
+            else pass = rest + strlen(rest);   /* empty password (open network) */
+            if (ssid[0] == '\0') {
+                printf("ERR  usage: SETWIFI <ssid> <pass>\r\n");
+                return CONSOLE_STAY;
+            }
             esp_err_t e = cfg_set_wifi(ssid, pass);
             if (e == ESP_OK) printf("OK   WiFi saved (ssid=\"%s\", pass=%s)\r\n",
                                     ssid, pass[0] ? "set" : "empty");
@@ -320,6 +356,7 @@ console_action_t console_run(uint32_t boot_count, uint32_t *sleep_secs_out, bool
     s_sleep_secs = 0;
     picpak_cfg_t cfg;
     bool have = cfg_load(&cfg);
+    if (!have && cfg.url[0] && wifi_store_has_entries()) have = true;
 
     printf("\r\n=== PicPak Setup Console ===\r\n");
     if (force_open) {

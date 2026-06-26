@@ -33,6 +33,7 @@
 #include "ota.h"
 #include "guard.h"
 #include "store.h"      /* littlefs "fs" persistence mount (Berry key-value backing store) */
+#include "wifi_store.h" /* multi-WiFi store migration + presence check */
 #include "netberry.h"   /* Berry net surface (wifi_ functions + http_get) for the policy phase */
 #include "screens.h"   /* baked-in 400x300 BWRY setup screens (onboarding / console) */
 #include "berry.h"
@@ -195,12 +196,11 @@ static bool berry_render(void)
     return r == BE_OK;
 }
 
-/* Net-phase Berry: runs with WiFi UP (after the connect + OTA self-verify, before net_wifi_stop).
+/* Net-phase Berry: owns the multi-WiFi scan-match-connect policy before RF is stopped.
  * Registers the net + store + rtc + dev surface, NOT fb (no drawing here -- the render phase,
  * which runs after net_wifi_stop with RF off, owns the framebuffer). Best-effort: a script
- * failure only logs, never blocks the cycle. POLICY_BE starts as a benign observe/record script;
- * the multi-WLAN / rotation policy replaces it later. */
-static void berry_policy(void)
+ * failure only logs and leaves the cycle to render offline. */
+static bool berry_policy(void)
 {
     bvm *vm = be_vm_new();
     net_register(vm);
@@ -211,6 +211,8 @@ static void berry_policy(void)
     if (r == BE_OK) r = be_pcall(vm, 0);
     if (r != BE_OK) { ESP_LOGE(TAG, "Berry policy failed (res=%d)", r); be_dumpexcept(vm); }
     be_vm_delete(vm);
+    char ip[20];
+    return r == BE_OK && net_ip(ip, sizeof ip);
 }
 
 /* Best-effort WiFi (OTA-validate now; script/image pull in a later wave) -> render the
@@ -219,20 +221,24 @@ static void berry_policy(void)
 static uint32_t run_cycle_inner(const picpak_cfg_t *cfg)
 {
     led_blink_start();   /* transfer phase -> blink */
-    if (net_wifi_connect(cfg->ssid, cfg->pass, 20000)) {
+    if (wifi_store_migrate_legacy(cfg))
+        ESP_LOGI(TAG, "migrated legacy NVS WiFi into multi-WiFi store");
+
+    bool used_policy = wifi_store_has_entries();
+    bool connected = used_policy ? berry_policy()
+                                 : net_wifi_connect(cfg->ssid, cfg->pass, 20000);
+    if (connected) {
         /* A freshly OTA'd app proves itself healthy once it has connectivity -> cancel
          * rollback before the next deep-sleep wake would otherwise roll it back. No-op
          * if not running in PENDING_VERIFY. */
         ota_mark_valid_if_pending();
         cfg_set_verified(true);
-        /* Net-phase Berry while WiFi is still up (after OTA self-verify, before the RF goes
-         * off). This is the only window with an active link AND the OTA health path done. */
-        berry_policy();
         /* RF off BEFORE the EPD charge-pump peak (brownout decoupling), then settle so
          * the supply recovers between the WiFi peak and the EPD peak. */
         net_wifi_stop();
         vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));
     } else {
+        if (used_policy) net_wifi_stop();   /* scan may have started WiFi even without a match */
         ESP_LOGW(TAG, "WiFi unavailable -> rendering offline (autonomous)");
     }
 
@@ -383,6 +389,7 @@ void app_main(void)
     if (fresh_boot) {
         picpak_cfg_t probe;
         bool have = cfg_load(&probe);
+        if (!have && probe.url[0] && wifi_store_has_entries()) have = true;
         /* Render the setup screen UP FRONT so it's visible immediately while the console
          * waits to be provisioned. forced -> console screen; creds not yet proven (incl.
          * no config) -> onboarding screen. ~22s EPD; the console's USB driver is installed
@@ -398,10 +405,10 @@ void app_main(void)
     if (forced) cfg_set_force_setup(false);   /* triple-press request consumed */
 
     picpak_cfg_t cfg;
-    if (!cfg_load(&cfg)) {
-        /* Autonomous: render even without creds. cfg_load zeroed the struct -> the
-         * best-effort WiFi connect below just fails and we render offline. Provision via
-         * USB (SETWIFI/SETURL) or the web tool to enable OTA / future script+image pull. */
+    bool have_cfg = cfg_load(&cfg);
+    if (!have_cfg && !(cfg.url[0] && wifi_store_has_entries())) {
+        /* Autonomous: render even without usable WiFi+URL config. Provision via USB
+         * (SETWIFI/SETURL) or the web tool to enable OTA / future script+image pull. */
         ESP_LOGW(TAG, "no NVS config -> rendering autonomously (offline); provision for OTA/pull");
     }
 

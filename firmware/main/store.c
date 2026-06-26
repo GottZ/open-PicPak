@@ -138,6 +138,19 @@ void store_list(void)
     printf("STORE %d key(s)\r\n", n);
 }
 
+void store_list_prefix(const char *prefix)
+{
+    if (!s_fs_ok) { printf("STORE unavailable (no fs)\r\n"); return; }
+    int n = 0;
+    store_kv_each(FS_BASE, prefix, print_key_cb, &n);
+    printf("STORE %d key(s)\r\n", n);
+}
+
+bool store_has_prefix(const char *prefix)
+{
+    return s_fs_ok && store_kv_each(FS_BASE, prefix, NULL, NULL) > 0;
+}
+
 /* ------------------------------------------------------------------------- *
  * Berry bindings (store_*) — hardened: arity + type gate at the entry, never *
  * be_toint/be_tostring on an unchecked slot (the dev.c:143 idiom). Values    *
@@ -200,18 +213,19 @@ static int l_store_ok(bvm *vm)
 static void keys_push_cb(const char *key, void *ctx)
 {
     bvm *vm = (bvm *)ctx;
-    be_pushstring(vm, key);   /* item on top, the list is just below at index -2 */
-    be_data_push(vm, -2);     /* append the item to the list */
-    be_pop(vm, 1);            /* drop the item, leaving the list on top */
+    be_pushstring(vm, key);   /* item on top, the backing list is just below at index -2 */
+    be_data_push(vm, -2);     /* append the item to the backing list */
+    be_pop(vm, 1);            /* drop the item, leaving the backing list on top */
 }
 
 static int l_store_keys(bvm *vm)
 {
     const char *prefix = (be_top(vm) >= 1 && be_isstring(vm, 1)) ? be_tostring(vm, 1) : NULL;
-    be_newlist(vm);           /* the result list, now on top of the stack */
+    be_newobject(vm, "list"); /* leaves object + raw backing list on stack */
     if (s_fs_ok)
         store_kv_each(FS_BASE, prefix, keys_push_cb, vm);
-    be_return(vm);            /* return the (possibly empty) list */
+    be_pop(vm, 1);            /* drop backing list, leave object */
+    be_return(vm);            /* return the (possibly empty) list object */
 }
 
 void store_register(bvm *vm)

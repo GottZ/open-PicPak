@@ -1,17 +1,66 @@
-# Net-phase Berry policy. Runs with WiFi UP, after the autonomous connect + OTA self-verify,
-# before net_wifi_stop. The multi-WLAN / rotation policy lives here later; for now it observes
-# the live connection and records it via the store (read back over the console: STORE GET net.*),
-# which proves the net_* + store_* bindings work in the policy VM and the phase is wired in.
-var ip = wifi_ip()
-var ssid = wifi_ssid()
-var r = wifi_rssi()
-print("POLICY ip=" + (ip == nil ? "nil" : ip) + " ssid=" + (ssid == nil ? "nil" : ssid)
-      + " rssi=" + str(r))                          # visible in the boot log -> live-net proof
-if ip != nil   store_set("net.ip", ip)     end
-if ssid != nil store_set("net.ssid", ssid) end
-if r != nil    store_set("net.rssi", str(r)) end
-# hardening probes: malformed calls must be clean no-ops, never crash the phase
-wifi_connect()      # missing args -> false
-http_get(42)        # non-string   -> nil
-store_set("net.probe", "survived")
-print("POLICY probe survived")                      # proves execution continued past the bad calls
+# Net-phase Berry policy: scan visible APs, match them against store keys wifi.*,
+# then connect by priority and RSSI. main.c stops WiFi after the policy window.
+import json
+
+if !store_ok()
+  print("POLICY no store -> legacy fallback")
+else
+  var aps = wifi_scan()
+  var seen = {}
+  for ap: aps
+    var s = ap.find("ssid", nil)
+    var r = ap.find("rssi", -128)
+    if r == nil  r = -128  end
+    if s != nil
+      var old = seen.find(s, nil)
+      if old == nil || r > old  seen[s] = r  end
+    end
+  end
+
+  var tried = {}
+  while true
+    var best_key = nil
+    var best_ssid = nil
+    var best_pass = nil
+    var best_prio = -2147483648
+    var best_rssi = -129
+    var keys = store_keys("wifi.")
+    for key: keys
+      if !tried.find(key, false)
+        var raw = store_get(key)
+        if raw != nil
+          var cfg = json.load(raw.asstring())
+          if cfg != nil
+            var ssid = cfg.find("ssid", nil)
+            var pass = cfg.find("pass", "")
+            var prio = cfg.find("prio", 0)
+            var rssi = seen.find(ssid, nil)
+            if rssi != nil && (prio > best_prio || (prio == best_prio && rssi > best_rssi))
+              var rotated = store_get("wpw." + key)
+              best_key = key
+              best_ssid = ssid
+              best_pass = rotated == nil ? pass : rotated.asstring()
+              best_prio = prio
+              best_rssi = rssi
+            end
+          end
+        end
+      end
+    end
+
+    if best_key == nil
+      print("POLICY no known visible WiFi")
+      break
+    end
+    tried[best_key] = true
+    print("POLICY try " + best_key + " ssid=" + best_ssid + " rssi=" + str(best_rssi))
+    if wifi_connect(best_ssid, best_pass)
+      store_set("net.ok", best_ssid)
+      store_set("net.ssid", best_ssid)
+      store_set("net.rssi", str(best_rssi))
+      rtc_set("slot", best_key)
+      print("POLICY connected " + best_ssid)
+      break
+    end
+  end
+end
