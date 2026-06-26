@@ -2,6 +2,25 @@
 # then connect by priority and RSSI. main.c stops WiFi after the policy window.
 import json
 
+def trim_pw(s)
+  if s == nil
+    return ""
+  end
+  var v = str(s)
+  var b = 0
+  var e = size(v) - 1
+  while b <= e && (v[b] == " " || v[b] == "\t" || v[b] == "\r" || v[b] == "\n")
+    b = b + 1
+  end
+  while e >= b && (v[e] == " " || v[e] == "\t" || v[e] == "\r" || v[e] == "\n")
+    e = e - 1
+  end
+  if b > e
+    return ""
+  end
+  return v[b..e]
+end
+
 if !store_ok()
   print("POLICY no store -> legacy fallback")
 else
@@ -39,7 +58,7 @@ else
               var rotated = store_get("wpw." + key)
               best_key = key
               best_ssid = ssid
-              best_pass = rotated == nil ? pass : rotated.asstring()
+              best_pass = trim_pw(rotated == nil ? pass : rotated.asstring())
               best_prio = prio
               best_rssi = rssi
             end
