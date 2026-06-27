@@ -22,8 +22,9 @@ services:
       retries: 20
     networks: [internal]
 
-  # one-shot: applies migrations/0001_init.up.sql against the healthy DB, then exits 0.
-  # idempotent migration -> safe to re-run. ON_ERROR_STOP makes any failure a non-zero exit.
+  # one-shot: applies all forward migrations (0001..0003) in order against the healthy DB, then
+  # exits 0. Each migration is idempotent (IF NOT EXISTS) -> safe to re-run; psql applies the -f
+  # files in order. ON_ERROR_STOP makes any failure a non-zero exit.
   migrate:
     image: postgres:18-alpine                  # lightweight psql client (local)
     depends_on:
@@ -43,6 +44,10 @@ services:
       - ${POSTGRES_DB:-picpak}
       - "-f"
       - /migrations/0001_init.up.sql
+      - "-f"
+      - /migrations/0002_device_auth_digits_default.up.sql
+      - "-f"
+      - /migrations/0003_command_queue.up.sql
     volumes:
       - ./migrations:/migrations:ro
     networks: [internal]
@@ -83,7 +88,9 @@ services:
       INGEST_TOKEN: ${INGEST_TOKEN:?set INGEST_TOKEN in .env}
       LISTEN_ADDR: ":8080"
     ports:
-      - "127.0.0.1:8080:8080"                  # localhost only (dev); prod: behind the TLS reverse-proxy
+      # Host bind address via INGEST_BIND (.env, gitignored) so a real IP never lands in the repo.
+      # Default localhost (dev); set INGEST_BIND to a specific public IP to expose, or front with TLS.
+      - "${INGEST_BIND:-127.0.0.1}:8080:8080"
     networks: [internal]
     restart: unless-stopped
 
