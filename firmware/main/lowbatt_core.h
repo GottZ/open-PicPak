@@ -40,10 +40,15 @@ typedef struct {
 /* Pure decision for one wake.
  *   batt_mv     : current battery mV; < 0 means implausible (no battery / button held) -> never gate.
  *   button_wake : this wake was caused by the GPIO/button (deliberate "resume" press).
+ *   usb_present : a USB DATA host (SOF) is attached -> the device is tethered/powered, NOT on
+ *                 battery, so it must NOT low-power-gate (it stays reachable via keep-awake). This
+ *                 also makes the gate impossible to soft-lock on a tether: with a host present it
+ *                 never arms, so the console stays reachable. A dumb 5V charger sends no SOF ->
+ *                 usb_present=false -> the gate still operates and detects charge via voltage rise.
  *   enabled     : the gate enable flag (compile + NVS). Off -> always NORMAL, state untouched.
  * Pure: no side effects; the caller persists `next` and acts on `action`. */
-static inline lowbatt_result_t lowbatt_decide(int batt_mv, bool button_wake, bool enabled,
-                                              lowbatt_state_t st, lowbatt_cfg_t cfg)
+static inline lowbatt_result_t lowbatt_decide(int batt_mv, bool button_wake, bool usb_present,
+                                              bool enabled, lowbatt_state_t st, lowbatt_cfg_t cfg)
 {
     lowbatt_result_t r;
     r.next = st;
@@ -51,9 +56,9 @@ static inline lowbatt_result_t lowbatt_decide(int batt_mv, bool button_wake, boo
 
     if (!enabled) return r;                      /* gate off -> behave exactly as today */
 
-    if (button_wake) {                           /* user asked to resume/refresh -> honor it now */
-        r.next.lock = false;                     /* and let the gate re-arm on a later timer pass */
-        r.next.low_streak = 0;
+    if (usb_present || button_wake) {            /* tethered to a data host, or a deliberate resume */
+        r.next.lock = false;                     /* -> never low-power-gate; re-arm only later, on */
+        r.next.low_streak = 0;                   /*    battery, after the host/charger is gone */
         if (batt_mv >= 0) r.next.last_mv = (int16_t)batt_mv;
         return r;                                /* NORMAL */
     }

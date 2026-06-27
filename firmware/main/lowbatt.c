@@ -1,6 +1,9 @@
 #include "lowbatt.h"
 #include "esp_attr.h"   /* RTC_DATA_ATTR */
 #include "nvs.h"
+#include "driver/usb_serial_jtag.h"   /* usb_serial_jtag_is_connected() -> data-host (SOF) present */
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <stdio.h>
 
 #define NS "picpak"   /* same namespace as config.c -> one device-config store */
@@ -69,11 +72,25 @@ uint32_t lowbatt_wake_s(void)
     return load_u16("lb_wake_s", LOWBATT_WAKE_S_DEF, LOWBATT_WAKE_S_MIN, LOWBATT_WAKE_S_MAX);
 }
 
+/* A USB DATA host (SOF) present? Light windowed check (8 x 5 ms): at the early-boot gate there is
+ * no WiFi/EPD burst yet, so the SOF flag is stable -> a short majority is plenty (no need for the
+ * 300 ms run_keep_awake window). A dumb 5V charger / power-only bus sends no SOF -> reads false. */
+static bool usb_host_present(void)
+{
+    int hits = 0;
+    for (int i = 0; i < 8; i++) {
+        if (usb_serial_jtag_is_connected()) hits++;
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    return hits >= 5;
+}
+
 lowbatt_action_t lowbatt_gate(int batt_mv, esp_sleep_wakeup_cause_t cause)
 {
     bool button_wake = (cause == ESP_SLEEP_WAKEUP_GPIO);
+    bool usb = usb_host_present();
     lowbatt_cfg_t cfg = cfg_load();
-    lowbatt_result_t r = lowbatt_decide(batt_mv, button_wake, lowbatt_is_enabled(), s_lb, cfg);
+    lowbatt_result_t r = lowbatt_decide(batt_mv, button_wake, usb, lowbatt_is_enabled(), s_lb, cfg);
     s_lb = r.next;   /* persist for the next wake (RTC-RAM) */
     return r.action;
 }
