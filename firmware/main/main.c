@@ -39,6 +39,7 @@
 #include "berry.h"
 #include "fb.h"         /* Berry graphics stdlib -> the 30000-byte framebuffer */
 #include "dev.h"        /* Berry device stdlib: mac/serial/chip/uptime/battery + nvs_str */
+#include "lowbatt.h"    /* smart low-battery gate (timer-poll + voltage-rise charge detect) */
 #include "render_script.h"  /* RENDER_BE: embedded Berry render script (generated from render.be) */
 #include "policy_script.h"  /* POLICY_BE: embedded Berry net-phase script (generated from policy.be) */
 
@@ -230,6 +231,40 @@ static uint32_t fb_hash(const uint8_t *p, size_t n)
     return h;
 }
 
+/* Wave-2 EPD content-change gate: refresh the panel only when the rendered framebuffer changed
+ * vs. the last DISPLAYED one (hash in RTC-RAM). Unchanged content skips the ~22 s refresh AND its
+ * charge-pump brownout window. First cycle after a cold boot always refreshes (_valid == false).
+ * Shared by the normal cycle and the low-battery screen so they use ONE fingerprint -> the charge
+ * screen refreshes once on arming, then every identical low-power wake skips the panel. */
+static void display_framebuffer_if_changed(void)
+{
+    uint32_t h = fb_hash(fb_buffer(), EPD_FRAME_BYTES);
+    if (s_fb_hash_valid && h == s_fb_hash) {
+        ESP_LOGI(TAG, "EPD content unchanged (hash=%08lx) -> skip refresh", (unsigned long)h);
+        return;
+    }
+    int64_t t_epd0 = esp_timer_get_time();
+    epd_init();
+    epd_write_full(fb_buffer());
+    epd_refresh();
+    epd_sleep();
+    ESP_LOGI(TAG, "TIMING epd=%lldms (display done, hash=%08lx)",
+             (esp_timer_get_time() - t_epd0) / 1000, (unsigned long)h);
+    s_fb_hash = h;
+    s_fb_hash_valid = true;
+    vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));   /* let the EPD peaks decay before sleep */
+}
+
+/* Low-battery gate render: draw the charge screen via Berry (render.be branches on the RTC "lb"
+ * flag set by the caller) and display it through the shared content-change gate. No WiFi runs. */
+static void lowbatt_show_screen(void)
+{
+    led_on();
+    if (!berry_render())
+        ESP_LOGW(TAG, "low-batt render failed -> displaying current framebuffer contents");
+    display_framebuffer_if_changed();
+}
+
 /* Best-effort WiFi (OTA-validate now; script/image pull in a later wave) -> render the
  * frame ON-DEVICE via Berry -> display. The device is autonomous: it renders even with
  * no network. Returns the next sleep duration. */
@@ -261,26 +296,7 @@ static uint32_t run_cycle_inner(const picpak_cfg_t *cfg)
     if (!berry_render())
         ESP_LOGW(TAG, "render failed -> displaying current framebuffer contents");
 
-    /* Wave 2 -- EPD content-change gate: refresh the panel only when the rendered frame
-     * actually changed vs. the last displayed one (hash in RTC-RAM). Unchanged content
-     * skips the ~22 s refresh AND its charge-pump brownout window -> frequent wakes/polls
-     * become cheap (no EPD wear, no flicker). First cycle after a cold boot always refreshes
-     * (_valid == false). */
-    uint32_t h = fb_hash(fb_buffer(), EPD_FRAME_BYTES);
-    if (s_fb_hash_valid && h == s_fb_hash) {
-        ESP_LOGI(TAG, "EPD content unchanged (hash=%08lx) -> skip refresh", (unsigned long)h);
-    } else {
-        int64_t t_epd0 = esp_timer_get_time();
-        epd_init();
-        epd_write_full(fb_buffer());
-        epd_refresh();
-        epd_sleep();
-        ESP_LOGI(TAG, "TIMING epd=%lldms (display done, hash=%08lx)",
-                 (esp_timer_get_time() - t_epd0) / 1000, (unsigned long)h);
-        s_fb_hash = h;
-        s_fb_hash_valid = true;
-        vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));   /* let the EPD peaks decay before sleep */
-    }
+    display_framebuffer_if_changed();   /* Wave-2 content-change gate (shared fingerprint) */
     /* TODO(config-pull): the next wake interval should come from the Berry config script
      * (fetched per wake) / server, replacing this fixed default. */
     return DEFAULT_WAKE_S;
@@ -415,6 +431,22 @@ void app_main(void)
     led_init();
     led_on();   /* awake: LED on as soon as the device runs */
     button_init();   /* triple-press -> toggle setup console, polled in any phase */
+
+    /* Smart low-battery gate (default-off NVS flag picpak/lb_on): below ARM the device polls in
+     * short deep sleeps and resumes on a detected voltage rise (no VBUS HW), instead of running a
+     * normal cycle on a near-dead cell. Runs every wake on the early pre-load reading; off /
+     * healthy / implausible falls through unchanged. Sleeps via enter_deep_sleep so the recovery
+     * guard's bad-boot counter is cleared every low-power cycle (no false bootloop). */
+    lowbatt_action_t lb = lowbatt_gate(dev_batt_mv(), cause);
+    if (lb != LOWBATT_NORMAL) {
+        if (lb == LOWBATT_ARM) {
+            rtc_put("lb", "1");        /* render.be branches on this -> draw the charge screen */
+            lowbatt_show_screen();     /* once; identical low-power wakes skip the panel (Wave-2) */
+        }
+        ESP_LOGI(TAG, "low-battery gate -> deep sleep %lus", (unsigned long)lowbatt_wake_s());
+        enter_deep_sleep(lowbatt_wake_s());   /* never returns */
+    }
+    rtc_remove("lb");                  /* not low -> the normal screen renders this cycle */
 
     /* Console only on a "real" boot (power-on/reset/USB connect), NEVER on a timer or
      * button wake: in the field (battery) it would only cost power and time; a button

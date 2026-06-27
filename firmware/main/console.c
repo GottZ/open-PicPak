@@ -6,6 +6,7 @@
 #include "guard.h"
 #include "store.h"
 #include "wifi_store.h"
+#include "lowbatt.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -96,6 +97,7 @@ static void print_help(void)
            "  STORE OK|LIST|GET k|SET k v|DEL k   littlefs key-value store\r\n"
            "  RTC STAT|GET k|SET k v|DEL k        RTC-RAM key-value (ephemeral)\r\n"
            "  NET SCAN|TRY ssid pass|IP|SSID|RSSI|STOP|TXPOWER [dBm]  net surface / TX power\r\n"
+           "  BATT [ON|OFF|ARM mv|CLEAR mv|RISE mv|WAKE s|STREAK n]  low-battery gate / status\r\n"
            "  ERASE                   delete config\r\n"
            "  HELP                    this help\r\n");
 }
@@ -367,6 +369,32 @@ static int handle(char *line, uint32_t boot_count)
             else printf("NET tx=%ddBm (default 11, max 14)\r\n", net_tx_dbm());
         } else {
             printf("ERR  usage: NET SCAN|TRY ssid pass|IP|SSID|RSSI|STOP|TXPOWER [dBm]\r\n");
+        }
+    } else if (strcasecmp(cmd, "BATT") == 0) {
+        /* Low-battery gate: status + per-device tuning + the on-device probe (BATT ARM <above-cell>
+         * force-arms; BATT WAKE 60 shortens the 15-min poll for testing). All values clamp on write. */
+        char *sub = rest;
+        char *arg = strchr(rest, ' ');
+        if (arg) { *arg++ = '\0'; while (*arg == ' ') arg++; }
+        else arg = rest + strlen(rest);
+        if (sub[0] == '\0' || strcasecmp(sub, "STATUS") == 0) {
+            lowbatt_status();
+        } else if (strcasecmp(sub, "ON") == 0) {
+            lowbatt_set_enabled(true);  printf("OK   low-battery gate enabled\r\n"); lowbatt_status();
+        } else if (strcasecmp(sub, "OFF") == 0) {
+            lowbatt_set_enabled(false); printf("OK   low-battery gate disabled\r\n");
+        } else if (arg[0] == '\0') {
+            printf("ERR  usage: BATT [STATUS|ON|OFF|ARM mv|CLEAR mv|RISE mv|WAKE s|STREAK n]\r\n");
+        } else {
+            int v = (int)strtol(arg, NULL, 10);
+            if      (strcasecmp(sub, "ARM") == 0)    lowbatt_set_arm(v);
+            else if (strcasecmp(sub, "CLEAR") == 0)  lowbatt_set_clear(v);
+            else if (strcasecmp(sub, "RISE") == 0)   lowbatt_set_rise(v);
+            else if (strcasecmp(sub, "WAKE") == 0)   lowbatt_set_wake(v);
+            else if (strcasecmp(sub, "STREAK") == 0) lowbatt_set_streak(v);
+            else { printf("ERR  usage: BATT [STATUS|ON|OFF|ARM mv|CLEAR mv|RISE mv|WAKE s|STREAK n]\r\n");
+                   return CONSOLE_STAY; }
+            lowbatt_status();   /* echo the clamped result */
         }
     } else if (strcasecmp(cmd, "HELP") == 0 || strcasecmp(cmd, "?") == 0) {
         print_help();

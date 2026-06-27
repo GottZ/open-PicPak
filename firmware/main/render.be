@@ -4,6 +4,19 @@
 import json
 var K=0 var W=1 var Y=2 var R=3
 
+# Low-battery charge screen: the C gate sets rtc "lb"=1 while locked. Draw a STATIC "charge me"
+# frame (no changing values -> stable hash) and return -> the content-change gate refreshes it
+# once on arming, then every identical 15-min low-power wake skips the panel.
+if rtc_get("lb") != nil
+  fill(W)
+  text(14,12,"Low battery",K,2)
+  rect(14,32,200,4,R,true)
+  text(14,48,"Connect power to resume,",K)
+  text(14,62,"or press the button.",K)
+  disc(300,150,60,Y)
+  return
+end
+
 fill(W)
 
 # --- shapes BEHIND the text (drawn first; black text painted over them stays legible) ---

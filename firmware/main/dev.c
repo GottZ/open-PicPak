@@ -8,6 +8,7 @@
  * are the stock values recovered by disassembly (see below). */
 #include "dev.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "esp_mac.h"
 #include "esp_chip_info.h"
@@ -45,7 +46,19 @@ static int batt_pct(int mv)
     return 80 + (mv - 4000) * 20 / (4089 - 4000);
 }
 
-/* Measure the battery ONCE, as early as possible, before WiFi/EPD/Berry load it down. */
+/* Trimmed mean of N one-shot reads: a single read jitters more than the ~40 mV "charging"
+ * delta the low-battery gate needs, so take BATT_SAMPLES reads, sort, drop the BATT_TRIM
+ * lowest + highest, and mean the middle. (Stock does the same; ctx 019f08ee.) */
+#define BATT_SAMPLES 8
+#define BATT_TRIM    2   /* drop this many from each end before averaging */
+
+static int cmp_int(const void *a, const void *b)
+{
+    int x = *(const int *)a, y = *(const int *)b;
+    return (x > y) - (x < y);
+}
+
+/* Measure the battery as early as possible, before WiFi/EPD/Berry load the rail down. */
 void dev_measure_battery(void)
 {
     adc_oneshot_unit_handle_t adc = NULL;
@@ -54,30 +67,48 @@ void dev_measure_battery(void)
     adc_oneshot_chan_cfg_t ccfg = { .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT };
     adc_oneshot_config_channel(adc, ADC_CHANNEL_2, &ccfg);   /* GPIO2 = ADC1_CH2 */
 
-    int raw = 0;
-    if (adc_oneshot_read(adc, ADC_CHANNEL_2, &raw) == ESP_OK) {
+    adc_cali_handle_t cali = NULL;
+    adc_cali_curve_fitting_config_t cc = {
+        .unit_id = ADC_UNIT_1, .chan = ADC_CHANNEL_2,
+        .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    bool have_cali = (adc_cali_create_scheme_curve_fitting(&cc, &cali) == ESP_OK);
+
+    int samp[BATT_SAMPLES];
+    int n = 0;
+    for (int i = 0; i < BATT_SAMPLES; i++) {
+        int raw = 0;
+        if (adc_oneshot_read(adc, ADC_CHANNEL_2, &raw) != ESP_OK) continue;
         int mv = -1;
-        adc_cali_handle_t cali = NULL;
-        adc_cali_curve_fitting_config_t cc = {
-            .unit_id = ADC_UNIT_1, .chan = ADC_CHANNEL_2,
-            .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        if (adc_cali_create_scheme_curve_fitting(&cc, &cali) == ESP_OK) {
-            adc_cali_raw_to_voltage(cali, raw, &mv);
-            adc_cali_delete_scheme_curve_fitting(cali);
-        } else {
-            mv = raw * 3100 / 4095;   /* rough fallback */
-        }
-        s_batt_adc_mv = mv;                                       /* pin mV (calibrated) */
-        s_batt_mv = (mv * BATT_NUM + BATT_DEN / 2) / BATT_DEN;     /* stock divider -> battery mV */
-        if (s_batt_mv < BATT_PLAUSIBLE_MIN_MV || s_batt_mv > BATT_PLAUSIBLE_MAX_MV)
-            s_batt_mv = -1;                                       /* implausible (button held / no battery) */
-        s_batt_pct = (s_batt_mv > 0) ? batt_pct(s_batt_mv) : -1;
+        if (have_cali) adc_cali_raw_to_voltage(cali, raw, &mv);
+        else mv = raw * 3100 / 4095;   /* rough fallback */
+        samp[n++] = mv;
     }
+    if (have_cali) adc_cali_delete_scheme_curve_fitting(cali);
     adc_oneshot_del_unit(adc);
-    printf("[batt] raw=%d pin_mv=%d vbat=%dmV pct=%d%% (stock x1.45 divider)\n",
-           raw, s_batt_adc_mv, s_batt_mv, s_batt_pct);
+
+    if (n == 0) return;   /* keep the previous reading rather than poison it with garbage */
+
+    qsort(samp, n, sizeof samp[0], cmp_int);
+    int lo = 0, hi = n;
+    if (n > 2 * BATT_TRIM) { lo = BATT_TRIM; hi = n - BATT_TRIM; }   /* else: plain mean */
+    long sum = 0;
+    for (int i = lo; i < hi; i++) sum += samp[i];
+    int pin_mv = (int)(sum / (hi - lo));
+
+    s_batt_adc_mv = pin_mv;                                        /* pin mV (calibrated, trimmed) */
+    s_batt_mv = (pin_mv * BATT_NUM + BATT_DEN / 2) / BATT_DEN;     /* stock divider -> battery mV */
+    if (s_batt_mv < BATT_PLAUSIBLE_MIN_MV || s_batt_mv > BATT_PLAUSIBLE_MAX_MV)
+        s_batt_mv = -1;                                           /* implausible (button held / no battery) */
+    s_batt_pct = (s_batt_mv > 0) ? batt_pct(s_batt_mv) : -1;
+    printf("[batt] n=%d trimmed pin_mv=%d vbat=%dmV pct=%d%% (stock x1.45 divider)\n",
+           n, s_batt_adc_mv, s_batt_mv, s_batt_pct);
 }
+
+/* C-callable getters for the early measurement -> the low-battery gate reads the battery
+ * without spinning up a Berry VM (Berry has its own l_batt_* bindings). <0 = unset/implausible. */
+int dev_batt_mv(void)  { return s_batt_mv; }
+int dev_batt_pct(void) { return s_batt_pct; }
 
 static void mac_str(char *out, size_t cap, esp_mac_type_t t)
 {
