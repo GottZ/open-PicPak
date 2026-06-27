@@ -282,38 +282,66 @@ static void lowbatt_show_screen(void)
     display_framebuffer_if_changed();
 }
 
-/* Best-effort WiFi (OTA-validate now; script/image pull in a later wave) -> render the
- * frame ON-DEVICE via Berry -> display. The device is autonomous: it renders even with
- * no network. Returns the next sleep duration. */
-static uint32_t run_cycle_inner(const picpak_cfg_t *cfg)
+/* Connect for one cycle: multi-WiFi policy or the single-cred path. On success cancels a pending OTA
+ * rollback (no-op unless PENDING_VERIFY) + marks creds verified; on a failed policy scan, stops the
+ * half-started RF. Does NOT stop the RF on success -- the caller decides (field: stop before EPD;
+ * hold: keep associated). Returns whether we ended up connected. */
+static bool cycle_connect(const picpak_cfg_t *cfg)
+{
+    bool used_policy = wifi_store_has_entries();
+    bool connected = used_policy ? berry_policy()
+                                 : net_wifi_connect(cfg->ssid, cfg->pass, 20000);
+    if (connected) {
+        ota_mark_valid_if_pending();
+        cfg_set_verified(true);
+    } else {
+        if (used_policy) net_wifi_stop();   /* scan may have started WiFi even without a match */
+        ESP_LOGW(TAG, "WiFi unavailable -> rendering offline (autonomous)");
+    }
+    return connected;
+}
+
+/* One refresh cycle. Renders the frame ON-DEVICE via Berry -> display; autonomous even with no net.
+ *
+ * keep_online=false (field/battery, the default): connect -> RF off -> settle -> render -> display,
+ * then the caller deep-sleeps. Byte-for-byte the prior behaviour.
+ *
+ * keep_online=true (USB data host, Wave 1b.3): hold the WLAN association across cycles. The connect
+ * phase is SKIPPED while a link is already held -> no per-cycle re-assoc (PANIC guard, ctx 019efd80).
+ * Render with WLAN up (fb is static, VM+WiFi coexist as in the policy phase); drop RF only around an
+ * ACTUAL EPD refresh (Wave-2 gate as a predicate), then reconnect IMMEDIATELY -- the keep-awake wait
+ * is up to an hour, so a lazy reconnect would strand the link. Returns the next sleep duration. */
+static uint32_t run_cycle_inner(const picpak_cfg_t *cfg, bool keep_online)
 {
     led_blink_start();   /* transfer phase -> blink */
     if (wifi_store_migrate_legacy(cfg))
         ESP_LOGI(TAG, "migrated legacy NVS WiFi into multi-WiFi store");
 
-    bool used_policy = wifi_store_has_entries();
-    bool connected = used_policy ? berry_policy()
-                                 : net_wifi_connect(cfg->ssid, cfg->pass, 20000);
-    if (connected) {
-        /* A freshly OTA'd app proves itself healthy once it has connectivity -> cancel
-         * rollback before the next deep-sleep wake would otherwise roll it back. No-op
-         * if not running in PENDING_VERIFY. */
-        ota_mark_valid_if_pending();
-        cfg_set_verified(true);
-        /* RF off BEFORE the EPD charge-pump peak (brownout decoupling), then settle so
-         * the supply recovers between the WiFi peak and the EPD peak. */
-        net_wifi_stop();
-        vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));
-    } else {
-        if (used_policy) net_wifi_stop();   /* scan may have started WiFi even without a match */
-        ESP_LOGW(TAG, "WiFi unavailable -> rendering offline (autonomous)");
-    }
+    bool connected = net_is_connected() ? true : cycle_connect(cfg);
 
     led_on();   /* transfer done -> solid during render + EPD refresh */
-    if (!berry_render())
-        ESP_LOGW(TAG, "render failed -> displaying current framebuffer contents");
 
-    display_framebuffer_if_changed();   /* Wave-2 content-change gate (shared fingerprint) */
+    if (!keep_online) {
+        if (connected) {
+            /* RF off BEFORE the EPD charge-pump peak (brownout decoupling), then settle so the
+             * supply recovers between the WiFi peak and the EPD peak. */
+            net_wifi_stop();
+            vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));
+        }
+        if (!berry_render())
+            ESP_LOGW(TAG, "render failed -> displaying current framebuffer contents");
+        display_framebuffer_if_changed();   /* Wave-2 content-change gate (shared fingerprint) */
+    } else {
+        if (!berry_render())
+            ESP_LOGW(TAG, "render failed -> displaying current framebuffer contents");
+        if (frame_changed()) {              /* a real refresh: decouple WLAN, refresh, re-associate */
+            net_wifi_stop();
+            vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));
+            epd_present();
+            cycle_connect(cfg);             /* immediate reconnect (keep-awake wait is ~1h) */
+        }
+        /* unchanged content: WLAN stays associated, panel untouched */
+    }
     /* TODO(config-pull): the next wake interval should come from the Berry config script
      * (fetched per wake) / server, replacing this fixed default. */
     return DEFAULT_WAKE_S;
@@ -329,12 +357,12 @@ static uint32_t run_cycle_inner(const picpak_cfg_t *cfg)
 
 /* Wrapper: with the pad kept on (above) this is a passthrough. In the field (battery,
  * no host) the pad enable/disable would be a no-op anyway. */
-static uint32_t run_cycle(const picpak_cfg_t *cfg)
+static uint32_t run_cycle(const picpak_cfg_t *cfg, bool keep_online)
 {
 #if !TETHER_DEBUG_KEEP_USB
     usb_serial_jtag_ll_phy_enable_pad(false);   /* detach USB from the bus */
 #endif
-    uint32_t nw = run_cycle_inner(cfg);
+    uint32_t nw = run_cycle_inner(cfg, keep_online);
 #if !TETHER_DEBUG_KEEP_USB
     usb_serial_jtag_ll_phy_enable_pad(true);    /* reconnect */
     /* Give the host time to re-enumerate: otherwise the keep-awake check
@@ -401,7 +429,7 @@ static uint32_t run_keep_awake(const picpak_cfg_t *cfg, uint32_t wake_s)
         } else {
             ESP_LOGI(TAG, "keep-awake: periodic refresh");
         }
-        wake_s = run_cycle(cfg);
+        wake_s = run_cycle(cfg, true);   /* USB data host present -> HOLD WLAN across cycles (Wave 1b.3) */
         led_on();   /* awake: stop blinking after run_cycle (also on failure) */
     }
     return wake_s;
@@ -513,14 +541,14 @@ void app_main(void)
         ESP_LOGI(TAG, "PRESS test: %lu simulated button-press cycles", (unsigned long)n);
         next_wake = DEFAULT_WAKE_S;
         for (uint32_t i = 0; i < n; i++) {
-            next_wake = run_cycle(&cfg);
+            next_wake = run_cycle(&cfg, false);   /* PRESS = deep-sleep-cycle simulation -> field path */
             if (i + 1 < n) vTaskDelay(pdMS_TO_TICKS(3000));   /* pause between cycles */
         }
     } else if (skip_fetch) {
         next_wake = console_arg ? console_arg : DEFAULT_WAKE_S;
         ESP_LOGI(TAG, "SLEEP requested -> sleeping %lus without fetch", (unsigned long)next_wake);
     } else {
-        next_wake = run_cycle(&cfg);
+        next_wake = run_cycle(&cfg, false);   /* normal field cycle -> deep sleep after */
     }
 
     /* USB keep-awake: as long as a host is attached, do not sleep. A SLEEP explicitly
