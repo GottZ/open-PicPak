@@ -7,6 +7,7 @@
 #include "store.h"
 #include "wifi_store.h"
 #include "lowbatt.h"
+#include "cmd.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -98,6 +99,7 @@ static void print_help(void)
            "  RTC STAT|GET k|SET k v|DEL k        RTC-RAM key-value (ephemeral)\r\n"
            "  NET SCAN|TRY ssid pass|IP|SSID|RSSI|STOP|TXPOWER [dBm]  net surface / TX power\r\n"
            "  BATT [ON|OFF|ARM mv|CLEAR mv|RISE mv|WAKE s|STREAK n]  low-battery gate / status\r\n"
+           "  C2 RUN <berry>          run a Berry command script (C2 surface); reports intent\r\n"
            "  ERASE                   delete config\r\n"
            "  HELP                    this help\r\n");
 }
@@ -395,6 +397,26 @@ static int handle(char *line, uint32_t boot_count)
             else { printf("ERR  usage: BATT [STATUS|ON|OFF|ARM mv|CLEAR mv|RISE mv|WAKE s|STREAK n]\r\n");
                    return CONSOLE_STAY; }
             lowbatt_status();   /* echo the clamped result */
+        }
+    } else if (strcasecmp(cmd, "C2") == 0) {
+        /* C2 RUN <berry> -> execute a Berry script via the C2 command surface (Wave 3a test verb).
+         * Reports the run result + the control-flow intent; the intent is NOT actioned here, so the
+         * verb stays inert for inspection (the C2 poll wave actions it). */
+        char *sub = rest;
+        char *arg = strchr(rest, ' ');
+        if (arg) { *arg++ = '\0'; while (*arg == ' ') arg++; }
+        else arg = rest + strlen(rest);
+        if (strcasecmp(sub, "RUN") == 0) {
+            if (arg[0] == '\0') {
+                printf("ERR  usage: C2 RUN <berry script>\r\n");
+            } else {
+                uint32_t sl = 0; bool ok = false;
+                cmd_intent_t in = berry_c2(arg, &sl, &ok);
+                printf("C2   ok=%d intent=%d sleep=%lus (0=none 1=refresh 2=reboot 3=sleep)\r\n",
+                       (int)ok, (int)in, (unsigned long)sl);
+            }
+        } else {
+            printf("ERR  usage: C2 RUN <berry script>\r\n");
         }
     } else if (strcasecmp(cmd, "HELP") == 0 || strcasecmp(cmd, "?") == 0) {
         print_help();
