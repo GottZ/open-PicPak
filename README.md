@@ -14,6 +14,7 @@ Everything is developed in public.
 |---|---|
 | `documentation/` | **published** |
 | `firmware/` | **started** — recovery guard (first component) |
+| `tools/picpak-ops/` | **started** — operator deployment TUI (on-device validation pending) |
 | `server/` | not public yet |
 | `web-usb/` | not public yet |
 | `scripts/` | not public yet |
@@ -173,6 +174,7 @@ firmware/ Berry config-/logic-engine + GFX render slice (published)
 server/             self-hostable Docker backend; serves web-usb (planned)
 web-usb/            browser config + flashing tool               (planned)
 scripts/            host-side scripts / CLI tooling              (planned)
+tools/picpak-ops/   operator deployment TUI (build/flash/console/OTA) (in progress)
 ```
 
 `web-usb/` and `server/` are coupled: the backend ships the browser tool as static
