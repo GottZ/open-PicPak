@@ -13,8 +13,8 @@ Everything is developed in public.
 | Component | State |
 |---|---|
 | `documentation/` | **published** |
-| `firmware/` | **started** — recovery guard (first component) |
-| `backend/` | **started** — TimescaleDB + Grafana + telemetry/OTA/log schema + ingest |
+| `firmware/` | **in progress** — networked run-cycle + recovery guard + Berry render/config engine + HOTP-authed C2 command channel |
+| `backend/` | **in progress** — TimescaleDB + Grafana + telemetry/OTA/log schema + ingest + HOTP-authed C2 command channel |
 | `tools/` | **started** — picpak-ops operator TUI + air-gap gate (on-device validation pending) |
 | `web-usb/` | not public yet |
 
@@ -90,11 +90,21 @@ A full suite, built clean:
 - **Built a fully working Home Assistant WiFi pull-frame in a day** on custom ESP-IDF
   firmware: wake (timer/button) → WiFi → fetch a server-rendered image → display →
   deep sleep, with **SHA-256-verified OTA over WiFi** and brownout-hardened transfers.
+  It has since matured into a real run-cycle: refresh **only on a changed frame** (the
+  panel's ~19 s refresh is skipped otherwise), WLAN held across cycles on USB power, a
+  multi-SSID store, and a smart low-battery gate.
 - **Built a recovery guard** — bootloop detection → USB-reachable safe-mode (WiFi/EPD off,
   esptool + console stay up); reset-reason-agnostic, fresh-app reset, NVS-tunable
   threshold/stable-uptime. Host-tested + on-device validated.
-- **Decided on-device scripting: Berry** — config *and* procedural graphics in one VM;
-  RAM feasibility validated on the C3 (VM ~3 KB, coexists with WiFi + framebuffer, no PSRAM).
+- **Built an on-device Berry engine** — *config is a script, not a data file*: one VM does
+  config *and* procedural graphics (text, shapes, QR, live device variables) and renders the
+  frame on-device. RAM feasibility validated on the C3 (VM ~3 KB, coexists with WiFi +
+  framebuffer, no PSRAM); a littlefs key-value store gives scripts persistence.
+- **Built a HOTP-authenticated C2 command channel** — the device polls a self-hosted backend
+  over HTTPS, fetches a **Berry command script and runs it** on a deliberately safe surface
+  (config/NVS writes, read-only queries, store, and reboot/refresh/sleep intents — no drawing,
+  no OTA trigger). Per-device RFC-4226 HOTP auth (byte-compatible with the backend), HTTPS-only
+  because the payload is code, and the ack is persisted before the action so a reboot can't loop.
 
 ### What I published
 
@@ -104,13 +114,22 @@ A full suite, built clean:
       BLE GATT / wire-frame / OTA spec
 - [x] [`documentation/image-pipeline.md`](documentation/image-pipeline.md) —
       RGB→palette (BT.601 + Atkinson) with a runnable JS reference
+- [x] [`documentation/config-engine.md`](documentation/config-engine.md) — why the config
+      *is* a Berry script (mechanism = pinned C stdlib / policy = script) + the on-device result
 - [x] MPL-2.0 license
 - [x] [`firmware/`](firmware/) — custom ESP-IDF firmware: the **recovery guard** (bootloop →
-      USB-reachable safe-mode; host-tested + on-device validated) plus an integrated **Berry
-      render/config engine** — a Berry script renders the frame on-device (text + live device
-      variables + shapes + a Pacman), "config is a script, not a data file". Validates Berry on the
-      C3 (no PSRAM, coexists with WiFi); host-previewable. Battery uses the stock divider/curve
-      recovered by disassembly.
+      USB-reachable safe-mode; host-tested + on-device validated), a matured **WiFi run-cycle**
+      (content-change gate, WLAN-hold, multi-SSID, smart low-battery gate, SHA-256 OTA), an
+      integrated **Berry render/config engine** (a script renders the frame on-device — text +
+      live device variables + shapes + QR + a Pacman; "config is a script, not a data file"), and
+      a **HOTP-authenticated C2 command channel** (poll a backend, run a returned Berry command
+      script over HTTPS). Validates Berry on the C3 (no PSRAM, coexists with WiFi); host-previewable.
+      Battery uses the stock divider/curve recovered by disassembly.
+- [x] [`backend/`](backend/) — self-hostable Docker backend: TimescaleDB + Grafana + the
+      telemetry/OTA/log schema + legacy ingest, and the **C2 command channel** (per-device Berry
+      command queue + per-device HOTP auth)
+- [x] [`tools/`](tools/) — host-side tooling: the **picpak-ops** operator TUI
+      (build / flash / console / OTA / telemetry / logs) and the air-gap gate
 
 ### What I planned
 
@@ -127,10 +146,11 @@ clean and gets refined on the way — then going far past what the stock firmwar
       (rotation, intervals, OTA URL, triggers/actions); the device exposes a small pinned C stdlib,
       the script decides. Feasibility validated on-device; seed in
       [`firmware/`](firmware/). WiFi/IP stubbed off until configured.
-- [ ] **control actions** — named actions (`reboot`, `test-wifi`, …) as Berry stdlib calls,
-      triggered from the config tool
+- [~] **control actions** — landed as the **C2 command surface**: `reboot` / `refresh` / `sleep`
+      intents plus config/NVS writes as Berry calls, served from the backend. A button-trigger in
+      the config tool is still pending.
 - [~] **embedded fonts + simple shapes** — Adafruit-GFX-style 1-bit glyph blitter (text, lines,
-      rects, discs, triangles), ~0 extra RAM; seeded as the Berry graphics stdlib in
+      rects, discs, triangles, QR codes), ~0 extra RAM; the Berry graphics stdlib in
       [`firmware/`](firmware/)
 - [~] **self-debug screen** — serial, MACs, chip, uptime, reset, battery; rendered on-device
       (the `firmware/` scene already shows these)
@@ -146,7 +166,8 @@ clean and gets refined on the way — then going far past what the stock firmwar
 - [ ] **use the upper flash region** — make the unaddressed 16→32 MB usable for bulk
       image storage *(research — data only, not code)*
 **`backend/` — Docker backend**
-- [~] **scaffold** — TimescaleDB + Grafana + telemetry/OTA/log schema + legacy ingest
+- [~] **scaffold** — TimescaleDB + Grafana + telemetry/OTA/log schema + legacy ingest + the
+      HOTP-authed **C2 command channel** (append-only queue + per-device cursor)
 - [ ] **serial-number differentiation** — serve separate frames per device
 - [ ] single-frame remote backend, generalized from the Home Assistant PoC
 - [ ] serves the `web-usb/` tool as static assets
