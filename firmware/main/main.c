@@ -313,6 +313,23 @@ static uint32_t run_cycle(const picpak_cfg_t *cfg)
     return nw;
 }
 
+/* Windowed USB-host presence. usb_serial_jtag_is_connected() reflects the SOF tick-hook,
+ * but a single read is a 3 ms knife-edge: a transient SOF gap (a WiFi/EPD burst, or the
+ * re-enum after rst:0x15) reads false and would wrongly drop the device into deep sleep.
+ * Sample the flag over a ~300 ms window and require a majority -> rides out the gaps, so
+ * "host gone" is only declared on a real, sustained SOF absence. This detects an ACTIVE
+ * SOF-framing host; a dumb 5 V charger / suspended bus sends no SOF and reads false by
+ * design (the C3 has no VBUS sense -> power-present is a separate, voltage-based concern). */
+static bool usb_host_active(void)
+{
+    int hits = 0;
+    for (int i = 0; i < 30; i++) {          /* 30 x 10 ms = 300 ms window */
+        if (usb_serial_jtag_is_connected()) hits++;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return hits >= 20;                       /* >= 2/3 of the window saw a host */
+}
+
 /* As long as a USB host is connected (SOF packets): do NOT sleep. Instead stay awake
  * and either refresh after wake_s seconds OR on a button press (GPIO2) immediately.
  * USB presence + button are polled every KEEPALIVE_POLL_MS. Returns with the last
@@ -328,12 +345,14 @@ static uint32_t run_keep_awake(const picpak_cfg_t *cfg, uint32_t wake_s)
     led_on();   /* keep-awake = awake -> LED solid on */
     /* button is already configured with its ISR in button_isr_init() (early in app_main);
      * do NOT re-run configure_button() here — it would disable the interrupt. */
-    while (usb_serial_jtag_is_connected()) {
+    while (usb_host_active()) {
         bool by_button = false;
         for (uint32_t waited = 0; waited < wake_s * 1000UL; waited += KEEPALIVE_POLL_MS) {
             vTaskDelay(pdMS_TO_TICKS(KEEPALIVE_POLL_MS));
-            if (!usb_serial_jtag_is_connected()) {
-                ESP_LOGI(TAG, "USB disconnected -> switching to deep sleep (%lus)",
+            /* Fast per-poll check, but confirm a disconnect over a window before sleeping
+             * -> a transient SOF gap (WiFi/EPD burst) no longer drops us into deep sleep. */
+            if (!usb_serial_jtag_is_connected() && !usb_host_active()) {
+                ESP_LOGI(TAG, "USB host gone (windowed confirm) -> switching to deep sleep (%lus)",
                          (unsigned long)wake_s);
                 return wake_s;
             }
@@ -458,7 +477,7 @@ void app_main(void)
     /* USB keep-awake: as long as a host is attached, do not sleep. A SLEEP explicitly
      * requested via the console (skip_fetch) deliberately keeps priority -> this way
      * the deep-sleep path can be tested on the tether too. */
-    if (!skip_fetch && usb_serial_jtag_is_connected()) {
+    if (!skip_fetch && usb_host_active()) {
         next_wake = run_keep_awake(&cfg, next_wake);
     }
 
