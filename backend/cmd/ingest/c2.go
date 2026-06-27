@@ -8,9 +8,9 @@ package main
 // only per-device state, so a fleet command is served to every device independently and acked per
 // device. The cursor only moves forward (GREATEST) -> a replayed low ack can never roll it back.
 //
-// Wave 3c is the route only. Auth is wave 3d: today the shared path token gates the endpoint (same as
-// ingest); per-device HOTP + HTTPS-only enforcement land in 3d. C2 ships remote code execution, so the
-// auth wave is mandatory before this is exposed beyond a trusted network.
+// Auth (Wave 3d, c2auth.go): per-device HOTP gates the route BEFORE the cursor is touched, so a forged
+// request cannot advance the cursor. The shared path token remains the endpoint locator (scanners get
+// 404). HTTPS-only enforcement is the firmware side of 3d (the device refuses a non-https c2_url).
 
 import (
 	"errors"
@@ -40,6 +40,13 @@ func (s *server) handleC2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
+
+	// Authenticate BEFORE touching the cursor: a forged request must not be able to advance the
+	// cursor (which would make the device skip real commands). Constant 401 on any failure.
+	if !s.authDevice(ctx, tx, serial, q) {
+		http.Error(w, "", http.StatusUnauthorized)
+		return
+	}
 
 	// Advance the cursor (GREATEST = forward-only) and stamp the poll. The FK on
 	// device_c2_cursor.serial -> devices(serial) rejects an unknown device (must be registered via
