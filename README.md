@@ -14,10 +14,9 @@ Everything is developed in public.
 |---|---|
 | `documentation/` | **published** |
 | `firmware/` | **started** — recovery guard (first component) |
-| `tools/picpak-ops/` | **started** — operator deployment TUI (on-device validation pending) |
-| `server/` | not public yet |
+| `backend/` | **started** — TimescaleDB + Grafana + telemetry/OTA/log schema + ingest |
+| `tools/` | **started** — picpak-ops operator TUI + air-gap gate (on-device validation pending) |
 | `web-usb/` | not public yet |
-| `scripts/` | not public yet |
 
 ---
 
@@ -146,12 +145,13 @@ clean and gets refined on the way — then going far past what the stock firmwar
       stored images (on-flash storage format TBD)
 - [ ] **use the upper flash region** — make the unaddressed 16→32 MB usable for bulk
       image storage *(research — data only, not code)*
-**`server/` — Docker backend**
+**`backend/` — Docker backend**
+- [~] **scaffold** — TimescaleDB + Grafana + telemetry/OTA/log schema + legacy ingest
 - [ ] **serial-number differentiation** — serve separate frames per device
 - [ ] single-frame remote backend, generalized from the Home Assistant PoC
 - [ ] serves the `web-usb/` tool as static assets
 
-**`web-usb/` — browser config & flashing tool (served by the server)**
+**`web-usb/` — browser config & flashing tool (served by the backend)**
 > Replaces a USB mass-storage interface — impossible on the ESP32-C3 (no USB-OTG) —
 > with the same file-like UX over two transports: **Web-USB** (WebSerial, on the
 > cable) and **Web-WiFi** (HTTP, on the network).
@@ -159,7 +159,8 @@ clean and gets refined on the way — then going far past what the stock firmwar
 - [ ] config form (writes the device TOML), control-action buttons, image gallery
 - [ ] image editor / uploader (built on the `image-pipeline.md` JS reference)
 
-**`scripts/` — host-side tooling**
+**`tools/` — host-side tooling**
+- [~] **picpak-ops** — operator deployment TUI (build, flash, console, OTA, telemetry, logs); on-device validation pending
 - [ ] BLE client (push / manage images without the phone app)
 - [ ] dev & automation helpers
 
@@ -171,13 +172,12 @@ clean and gets refined on the way — then going far past what the stock firmwar
 documentation/      reference & reverse-engineering docs         (published)
 firmware/           custom ESP-IDF firmware                      (in progress)
 firmware/ Berry config-/logic-engine + GFX render slice (published)
-server/             self-hostable Docker backend; serves web-usb (planned)
+backend/            self-hostable Docker backend (TimescaleDB+Grafana+ingest) (in progress)
+tools/              host-side tooling: picpak-ops TUI + air-gap gate (in progress)
 web-usb/            browser config + flashing tool               (planned)
-scripts/            host-side scripts / CLI tooling              (planned)
-tools/picpak-ops/   operator deployment TUI (build/flash/console/OTA) (in progress)
 ```
 
-`web-usb/` and `server/` are coupled: the backend ships the browser tool as static
+`web-usb/` and `backend/` are coupled: the backend ships the browser tool as static
 assets, so flashing, uploading and configuring all work from one self-hosted URL.
 
 ---
