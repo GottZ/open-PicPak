@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
+#include "nvs.h"
 #include "esp_heap_caps.h"
 #include "esp_idf_version.h"
 
@@ -83,6 +84,7 @@ static void print_help(void)
            "  SETWIFI <ssid> <pass>   save WiFi (pass = rest of line)\r\n"
            "  SETWIFI ADD <ssid> <pass>|LIST|DEL <slug>   multi-WiFi store\r\n"
            "  SETURL  <url>           save frame URL\r\n"
+           "  NVSSET <ns> <key> <val> generic NVS string write (e.g. storage dev_sn ...)\r\n"
            "  INFO                    show status\r\n"
            "  REFRESH                 fetch image now + sleep\r\n"
            "  SLEEP [s]               sleep without fetch (optional s seconds)\r\n"
@@ -177,6 +179,30 @@ static int handle(char *line, uint32_t boot_count)
         } else {
             esp_err_t e = cfg_set_url(rest);
             if (e == ESP_OK) printf("OK   URL saved (%s)\r\n", rest);
+            else printf("ERR  NVS write error %d\r\n", (int)e);
+        }
+    } else if (strcasecmp(cmd, "NVSSET") == 0) {
+        /* Generic NVS string write: NVSSET <ns> <key> <value> (value = rest of line).
+         * Additive across namespaces -> e.g. seed a "storage"/dev_sn key without touching the
+         * CFW "picpak" creds. (A full external NVS image can't simply be flashed in: the CFW
+         * nvs partition is only 0x6000, so an oversized blob would overwrite phy/otadata/app.) */
+        char *ns = rest;
+        char *key = strchr(rest, ' ');
+        if (key) { *key++ = '\0'; while (*key == ' ') key++; }
+        char *val = key ? strchr(key, ' ') : NULL;
+        if (val) { *val++ = '\0'; while (*val == ' ') val++; }
+        if (key == NULL || ns[0] == '\0' || key[0] == '\0') {
+            printf("ERR  usage: NVSSET <ns> <key> <value>\r\n");
+        } else {
+            nvs_handle_t h;
+            esp_err_t e = nvs_open(ns, NVS_READWRITE, &h);
+            if (e == ESP_OK) {
+                e = nvs_set_str(h, key, val ? val : "");
+                if (e == ESP_OK) e = nvs_commit(h);
+                nvs_close(h);
+            }
+            if (e == ESP_OK) printf("OK   NVS %s/%s set (%u B)\r\n", ns, key,
+                                    (unsigned)strlen(val ? val : ""));
             else printf("ERR  NVS write error %d\r\n", (int)e);
         }
     } else if (strcasecmp(cmd, "INFO") == 0) {
