@@ -26,3 +26,11 @@ void cmd_register(bvm *vm);
  * SLEEP duration. *ok_out (optional) = the script ran without a Berry fault. Best-effort: a fault
  * only logs (does not crash -- be_pcall is protected). */
 cmd_intent_t berry_c2(const char *script, uint32_t *sleep_s, bool *ok_out);
+
+/* C2 poll (Wave 3b). c2_poll(): fetch the c2_url (NVS) over HTTPS and run the returned Berry script;
+ * returns the post-run intent (caller actions it). Refuses a non-https c2_url. poll_period (NVS, 0=off)
+ * is the keep-awake poll cadence. Config setters persist to NVS. */
+cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran);
+uint32_t     c2_poll_period(void);
+bool         c2_set_url(const char *url);
+bool         c2_set_period(uint32_t secs);

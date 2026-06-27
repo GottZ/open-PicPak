@@ -40,6 +40,7 @@
 #include "fb.h"         /* Berry graphics stdlib -> the 30000-byte framebuffer */
 #include "dev.h"        /* Berry device stdlib: mac/serial/chip/uptime/battery + nvs_str */
 #include "lowbatt.h"    /* smart low-battery gate (timer-poll + voltage-rise charge detect) */
+#include "cmd.h"        /* C2 Berry command executor + poll (Wave 3a/3b) */
 #include "render_script.h"  /* RENDER_BE: embedded Berry render script (generated from render.be) */
 #include "policy_script.h"  /* POLICY_BE: embedded Berry net-phase script (generated from policy.be) */
 
@@ -408,6 +409,8 @@ static uint32_t run_keep_awake(const picpak_cfg_t *cfg, uint32_t wake_s)
      * do NOT re-run configure_button() here — it would disable the interrupt. */
     while (usb_host_active()) {
         bool by_button = false;
+        uint32_t c2_period = c2_poll_period();   /* NVS; 0 = C2 poll disabled (default) */
+        uint32_t c2_acc = 0;
         for (uint32_t waited = 0; waited < wake_s * 1000UL; waited += KEEPALIVE_POLL_MS) {
             vTaskDelay(pdMS_TO_TICKS(KEEPALIVE_POLL_MS));
             /* Fast per-poll check, but confirm a disconnect over a window before sleeping
@@ -418,6 +421,20 @@ static uint32_t run_keep_awake(const picpak_cfg_t *cfg, uint32_t wake_s)
                 return wake_s;
             }
             if (button_pressed()) { by_button = true; break; }
+            /* C2 poll (Wave 3b): on cadence, while the WLAN is held up (1b.3), fetch + run the C2
+             * Berry script. c2_poll persists any ack BEFORE returning the intent, so actioning a
+             * reboot here can't loop. */
+            if (c2_period && net_is_connected()) {
+                c2_acc += KEEPALIVE_POLL_MS;
+                if (c2_acc >= c2_period * 1000UL) {
+                    c2_acc = 0;
+                    uint32_t c2_sl = 0;
+                    cmd_intent_t in = c2_poll(&c2_sl, NULL);
+                    if (in == CMD_INTENT_REBOOT) esp_restart();           /* never returns */
+                    if (in == CMD_INTENT_SLEEP)  return c2_sl ? c2_sl : wake_s;
+                    if (in == CMD_INTENT_REFRESH) break;                  /* -> run_cycle below */
+                }
+            }
         }
         if (by_button) {
             /* Single press = immediate refresh. A TRIPLE press is handled

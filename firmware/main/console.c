@@ -415,8 +415,17 @@ static int handle(char *line, uint32_t boot_count)
                 printf("C2   ok=%d intent=%d sleep=%lus (0=none 1=refresh 2=reboot 3=sleep)\r\n",
                        (int)ok, (int)in, (unsigned long)sl);
             }
+        } else if (strcasecmp(sub, "URL") == 0) {
+            /* C2 endpoint URL (NVS). MUST be https:// -- the response is executed as code. */
+            if (arg[0] == '\0') printf("ERR  usage: C2 URL <https://...>\r\n");
+            else if (strncmp(arg, "https://", 8) != 0) printf("ERR  c2_url must be https:// (executed code)\r\n");
+            else printf(c2_set_url(arg) ? "OK   c2_url saved\r\n" : "ERR  NVS write error\r\n");
+        } else if (strcasecmp(sub, "PERIOD") == 0) {
+            if (arg[0] == '\0') printf("C2 poll period = %lus (0 = off)\r\n", (unsigned long)c2_poll_period());
+            else printf(c2_set_period((uint32_t)strtoul(arg, NULL, 10)) ? "OK   c2 poll period set\r\n"
+                                                                        : "ERR  NVS write error\r\n");
         } else {
-            printf("ERR  usage: C2 RUN <berry script>\r\n");
+            printf("ERR  usage: C2 RUN <berry> | URL <https://..> | PERIOD <s>\r\n");
         }
     } else if (strcasecmp(cmd, "HELP") == 0 || strcasecmp(cmd, "?") == 0) {
         print_help();

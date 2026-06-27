@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "nvs.h"
 #include <string.h>
+#include <stdlib.h>   /* malloc for the C2 response buffer */
 
 static const char *TAG = "c2";
 
@@ -126,4 +127,79 @@ cmd_intent_t berry_c2(const char *script, uint32_t *sleep_s, bool *ok_out)
     if (ok_out) *ok_out = (r == BE_OK);
     if (sleep_s) *sleep_s = s_intent_sleep_s;
     return s_intent;
+}
+
+/* --- C2 poll (Doc 13 Wave 3b): fetch a Berry command script from the C2 endpoint + run it --- */
+#define C2_RESP_MAX 8192   /* hard cap on a fetched C2 script (well under the WiFi+VM RAM spike) */
+#define C2_NS       "picpak"
+
+bool c2_set_url(const char *url)
+{
+    nvs_handle_t h;
+    if (nvs_open(C2_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t e = nvs_set_str(h, "c2_url", url);
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    return e == ESP_OK;
+}
+
+bool c2_set_period(uint32_t secs)
+{
+    nvs_handle_t h;
+    if (nvs_open(C2_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t e = nvs_set_u32(h, "c2_period", secs);
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    return e == ESP_OK;
+}
+
+uint32_t c2_poll_period(void)
+{
+    nvs_handle_t h; uint32_t v = 0;
+    if (nvs_open(C2_NS, NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_u32(h, "c2_period", &v) != ESP_OK) v = 0;
+        nvs_close(h);
+    }
+    return v;   /* 0 = C2 poll disabled (default) */
+}
+
+cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran)
+{
+    if (ran) *ran = false;
+    if (sleep_s) *sleep_s = 0;
+
+    char url[160]; url[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(C2_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t l = sizeof url;
+        if (nvs_get_str(h, "c2_url", url, &l) != ESP_OK) url[0] = '\0';
+        nvs_close(h);
+    }
+    if (url[0] == '\0') return CMD_INTENT_NONE;   /* not configured */
+    /* HTTPS-ONLY (RCE safety, design 13b §0): the C2 response is executed as code, so the server
+     * MUST be CA-verified. Refuse a plaintext c2_url outright. */
+    if (strncmp(url, "https://", 8) != 0) {
+        ESP_LOGW(TAG, "C2 poll: refusing non-https c2_url");
+        return CMD_INTENT_NONE;
+    }
+
+    uint8_t *buf = malloc(C2_RESP_MAX);
+    if (!buf) return CMD_INTENT_NONE;
+    size_t len = 0;
+    bool ok = net_http_get(url, buf, C2_RESP_MAX - 1, &len);   /* https verified via crt_bundle (net.c) */
+    cmd_intent_t in = CMD_INTENT_NONE;
+    if (ok && len > 0) {
+        buf[len] = '\0';                       /* NUL-terminate for be_loadstring */
+        bool sok = false;
+        in = berry_c2((char *)buf, sleep_s, &sok);   /* persists no ack yet (see TODO) */
+        if (ran) *ran = true;
+        ESP_LOGI(TAG, "C2 poll: %u bytes, script ok=%d intent=%d", (unsigned)len, (int)sok, (int)in);
+        /* TODO(c2-ack): read X-C2-Seq from the response and persist last_seq BEFORE the caller
+         * actions the intent (the digest/ack-cursor reconcile). Needs the header from the fetch;
+         * lands with the real-backend auth wave (3d FW-half) where net_http_get gains a header-out. */
+    } else {
+        ESP_LOGW(TAG, "C2 poll: fetch failed/empty");
+    }
+    free(buf);
+    return in;
 }
