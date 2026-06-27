@@ -191,8 +191,7 @@ clean and gets refined on the way — then going far past what the stock firmwar
 
 ```
 documentation/      reference & reverse-engineering docs         (published)
-firmware/           custom ESP-IDF firmware                      (in progress)
-firmware/ Berry config-/logic-engine + GFX render slice (published)
+firmware/           custom ESP-IDF firmware: recovery guard + Berry engine + C2  (in progress)
 backend/            self-hostable Docker backend (TimescaleDB+Grafana+ingest) (in progress)
 tools/              host-side tooling: picpak-ops TUI + air-gap gate (in progress)
 web-usb/            browser config + flashing tool               (planned)

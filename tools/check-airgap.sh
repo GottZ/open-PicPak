@@ -28,6 +28,13 @@ ctx_id='019[de][0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 pattern="(${mac1}|${mac2}|${ip1}|${ip2}|${ip3}|${ssid}|${domain1}|${domain2}|${host1}|${host2}|${ctx_id})"
 
+# Allowlist: the maintainer's own public contact (the author/license attribution) is intentional
+# public data, not leaked infra -- this is the "intentional public maintainer data" the gate is meant
+# to tolerate. We strip only this exact token before scanning, so editing a file that carries the
+# attribution (e.g. README) does not trip the gate, while ANY OTHER use of the domain still fails
+# (only the contact email is removed, not the domain broadly).
+allow='(mailto:)?git@gottz[.]de'
+
 mode="${1:-}"
 shift || true
 
@@ -62,7 +69,10 @@ fi
 status=0
 for file in "${files[@]}"; do
     [ -f "$file" ] || continue
-    if grep -I -nE "$pattern" -- "$file"; then
+    # Strip the allowlisted maintainer contact first; scan the remainder. sed keeps the line count,
+    # so grep -n line numbers stay accurate. A line that mixes the contact with leaked infra still
+    # fails, because only the exact contact token is removed.
+    if sed -E "s#${allow}##g" "$file" | grep -I -nE "$pattern"; then
         status=1
     fi
 done
