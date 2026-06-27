@@ -424,8 +424,20 @@ static int handle(char *line, uint32_t boot_count)
             if (arg[0] == '\0') printf("C2 poll period = %lus (0 = off)\r\n", (unsigned long)c2_poll_period());
             else printf(c2_set_period((uint32_t)strtoul(arg, NULL, 10)) ? "OK   c2 poll period set\r\n"
                                                                         : "ERR  NVS write error\r\n");
+        } else if (strcasecmp(sub, "SECRET") == 0) {
+            if (arg[0] == '\0') printf("ERR  usage: C2 SECRET <hex>\r\n");
+            else printf(c2_set_secret(arg) ? "OK   c2_secret saved\r\n" : "ERR  bad hex / NVS write error\r\n");
+        } else if (strcasecmp(sub, "AUTH") == 0) {
+            /* Print the next HOTP triple (diagnostic): verify against the backend's HOTP for the
+             * same secret + counter. digits=8. */
+            uint64_t c = 0; uint32_t otp = 0, bc = 0;
+            if (c2_compute_auth(&c, &otp, &bc))
+                printf("C2   auth bc=%lu c=%llu otp=%08lu\r\n",
+                       (unsigned long)bc, (unsigned long long)c, (unsigned long)otp);
+            else
+                printf("ERR  no c2_secret (set via C2 SECRET <hex>)\r\n");
         } else {
-            printf("ERR  usage: C2 RUN <berry> | URL <https://..> | PERIOD <s>\r\n");
+            printf("ERR  usage: C2 RUN <berry> | URL <https> | PERIOD <s> | SECRET <hex> | AUTH\r\n");
         }
     } else if (strcasecmp(cmd, "HELP") == 0 || strcasecmp(cmd, "?") == 0) {
         print_help();
