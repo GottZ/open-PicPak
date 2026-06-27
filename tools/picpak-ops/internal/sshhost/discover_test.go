@@ -2,21 +2,23 @@ package sshhost
 
 import "testing"
 
-// goldenByID is a synthetic `ls -l /dev/serial/by-id/` capture. It is plausible,
-// not on-device-real: it includes
-//   - a PicPak (ESP32-C3 native USB-Serial-JTAG, public/generic descriptor) → ACCEPT
+// goldenByID mirrors a real `ls -l /dev/serial/by-id/` capture (descriptor format
+// confirmed on-device 2026-06-27; MACs replaced with placeholders for air-gap). It includes
+//   - a PicPak (ESP32-C3 native USB-Serial-JTAG: usb-Espressif_USB_JTAG_serial_debug_unit_<MAC>-if00,
+//     MAC colon-separated and uppercase) → ACCEPT
 //   - a second PicPak on another tty (two devices, one host) → ACCEPT, distinct by tty
-//   - a Sonoff-style Zigbee dongle on a ttyUSB with a CP210x descriptor → DROP
+//   - an ITead Sonoff Zigbee dongle on a ttyUSB (*-if00-port0) → DROP
 //   - the leading `total` line ls -l prints → ignored
 //
-// TODO(on-device): confirm the by-id descriptor format the ESP32-C3 ROM
-// USB-Serial-JTAG actually presents (does the symlink name carry the WIFI_STA MAC,
-// and in what case/separator?) and REPLACE this golden with a real PicPak capture
-// before match_regex / mac_regex are treated as settled (Masterplan K11 / OQ 6).
+// On-device confirmation (Masterplan K11 / OQ 6): the symlink name DOES carry the
+// WIFI_STA MAC, colon-separated and uppercase; match_regex / mac_regex match the
+// PicPak and drop the Zigbee dongle (verified live via the hosts pane). Real MACs
+// stay out of this fixture (air-gap); the placeholders below match the confirmed
+// format byte-for-byte.
 const goldenByID = `total 0
-lrwxrwxrwx 1 root root 13 Jun 26 12:00 usb-Espressif_USB_JTAG_serial_debug_unit_AA-BB-CC-DD-EE-FF-if00 -> ../../ttyACM0
-lrwxrwxrwx 1 root root 13 Jun 26 12:00 usb-Espressif_USB_JTAG_serial_debug_unit_11-22-33-44-55-66-if00 -> ../../ttyACM1
-lrwxrwxrwx 1 root root 13 Jun 26 12:01 usb-Silicon_Labs_Sonoff_Zigbee_3.0_USB_Dongle_Plus_0001-if00-port0 -> ../../ttyUSB0
+lrwxrwxrwx 1 root root 13 Jun 26 12:00 usb-Espressif_USB_JTAG_serial_debug_unit_AA:BB:CC:DD:EE:FF-if00 -> ../../ttyACM0
+lrwxrwxrwx 1 root root 13 Jun 26 12:00 usb-Espressif_USB_JTAG_serial_debug_unit_11:22:33:44:55:66-if00 -> ../../ttyACM1
+lrwxrwxrwx 1 root root 13 Jun 26 12:01 usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_0000000000000000-if00-port0 -> ../../ttyUSB0
 `
 
 func newTestDiscoverer(t *testing.T) *discoverer {
