@@ -236,13 +236,25 @@ static uint32_t fb_hash(const uint8_t *p, size_t n)
  * charge-pump brownout window. First cycle after a cold boot always refreshes (_valid == false).
  * Shared by the normal cycle and the low-battery screen so they use ONE fingerprint -> the charge
  * screen refreshes once on arming, then every identical low-power wake skips the panel. */
-static void display_framebuffer_if_changed(void)
+/* Wave-1b.2 split: the predicate. True iff the rendered framebuffer differs from the last DISPLAYED
+ * one (or none displayed yet). Logs the skip case to preserve the prior behaviour. No side effects on
+ * the stored hash -> the caller decides whether to present. Splitting the gate lets the USB-online
+ * hold path (Wave 1b.3) drop WLAN around the actual refresh only, between this check and epd_present. */
+static bool frame_changed(void)
 {
     uint32_t h = fb_hash(fb_buffer(), EPD_FRAME_BYTES);
     if (s_fb_hash_valid && h == s_fb_hash) {
         ESP_LOGI(TAG, "EPD content unchanged (hash=%08lx) -> skip refresh", (unsigned long)h);
-        return;
+        return false;
     }
+    return true;
+}
+
+/* Wave-1b.2 split: the action. Refresh the panel with the current framebuffer, record its hash, and
+ * settle so the EPD peaks decay before sleep. Call only when frame_changed() (the wrapper does). */
+static void epd_present(void)
+{
+    uint32_t h = fb_hash(fb_buffer(), EPD_FRAME_BYTES);
     int64_t t_epd0 = esp_timer_get_time();
     epd_init();
     epd_write_full(fb_buffer());
@@ -253,6 +265,11 @@ static void display_framebuffer_if_changed(void)
     s_fb_hash = h;
     s_fb_hash_valid = true;
     vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));   /* let the EPD peaks decay before sleep */
+}
+
+static void display_framebuffer_if_changed(void)
+{
+    if (frame_changed()) epd_present();
 }
 
 /* Low-battery gate render: draw the charge screen via Berry (render.be branches on the RTC "lb"
