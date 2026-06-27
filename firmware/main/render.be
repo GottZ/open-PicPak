@@ -35,10 +35,9 @@ if cfg != nil
   var c = json.load(cfg)
   if c != nil  rt = str(int(c.find("refresh_time",0) / 3600)) + "h"  end
 end
-var lib = nvs_str("slots","library_id")
-if lib == nil  lib = "?"  end
+var lib = nvs_str("slots","library_id")   # nil if unset (no stock/CFW writer) -> Lib line hidden below
 var batt = "n/a"
-if dev_batt_mv() > 0  batt = "~" + str(dev_batt_mv()) + "mV " + str(dev_batt_pct()) + "%"  end
+if dev_batt_mv() > 0  batt = str(dev_batt_pct()) + "%"  end   # % only (LUT step), not raw mV -> stable for the EPD content-change gate
 
 # --- foreground: headline + underline + variable column ---
 text(14,12,"Hello World",K,2)
@@ -46,9 +45,9 @@ rect(14,30,176,4,Y,true)
 text(14,42,"SN:   " + sn,K)
 text(14,55,"MAC:  " + dev_mac(),K)
 text(14,68,"BT:   " + dev_bt_mac(),K)
-text(14,81,"Lib:  " + lib,K)
+if lib != nil  text(14,81,"Lib:  " + lib,K)  end   # hidden when unset, instead of a bare "?"
 text(14,94,"Chip: " + dev_chip(),K)
 text(14,107,"Color: " + color,K)
 text(14,120,"Refresh: " + rt,K)
 text(14,133,"Batt: " + batt,K)
-text(14,146,"Up: " + str(int(dev_uptime_ms()/1000)) + "s  Reset: " + dev_reset(),K)
+text(14,146,"Reset: " + dev_reset(),K)   # uptime removed: it changes every cycle -> would defeat the EPD content-change gate

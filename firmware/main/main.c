@@ -66,6 +66,11 @@ RTC_DATA_ATTR static uint32_t s_boot_count;
  * PRESS 2+ does. Full log push see X-Picpak-Log in net.c. */
 RTC_DATA_ATTR static int32_t s_tm_scan, s_tm_dhcp, s_tm_fetch, s_tm_epd;
 RTC_DATA_ATTR static uint32_t s_tm_cycle;   /* boot# of the captured timing, 0 = none yet */
+/* Wave 2 -- EPD content-change gate: hash of the last DISPLAYED framebuffer. Survives a
+ * deep-sleep wake (RTC-RAM); nulled on a cold boot / the port-open rst:0x15 -> _valid is
+ * then false and the first cycle refreshes unconditionally (we cannot assume panel state). */
+RTC_DATA_ATTR static uint32_t s_fb_hash;
+RTC_DATA_ATTR static bool     s_fb_hash_valid;
 
 /* Button GPIO2 as input with pull-up (idle HIGH, press = LOW). Configured once at
  * boot -> serves both the live poll in keep-awake mode and the deep-sleep GPIO
@@ -215,6 +220,16 @@ static bool berry_policy(void)
     return r == BE_OK && net_ip(ip, sizeof ip);
 }
 
+/* FNV-1a over the framebuffer -> a cheap content fingerprint for the Wave-2 EPD gate.
+ * 32-bit is plenty: a collision only ever risks one skipped refresh, self-correcting on
+ * the next real change. Self-contained (no extra include). */
+static uint32_t fb_hash(const uint8_t *p, size_t n)
+{
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 16777619u; }
+    return h;
+}
+
 /* Best-effort WiFi (OTA-validate now; script/image pull in a later wave) -> render the
  * frame ON-DEVICE via Berry -> display. The device is autonomous: it renders even with
  * no network. Returns the next sleep duration. */
@@ -246,14 +261,26 @@ static uint32_t run_cycle_inner(const picpak_cfg_t *cfg)
     if (!berry_render())
         ESP_LOGW(TAG, "render failed -> displaying current framebuffer contents");
 
-    int64_t t_epd0 = esp_timer_get_time();
-    epd_init();
-    epd_write_full(fb_buffer());
-    epd_refresh();
-    epd_sleep();
-    ESP_LOGI(TAG, "TIMING epd=%lldms (display done)", (esp_timer_get_time() - t_epd0) / 1000);
-
-    vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));   /* let the EPD peaks decay before sleep */
+    /* Wave 2 -- EPD content-change gate: refresh the panel only when the rendered frame
+     * actually changed vs. the last displayed one (hash in RTC-RAM). Unchanged content
+     * skips the ~22 s refresh AND its charge-pump brownout window -> frequent wakes/polls
+     * become cheap (no EPD wear, no flicker). First cycle after a cold boot always refreshes
+     * (_valid == false). */
+    uint32_t h = fb_hash(fb_buffer(), EPD_FRAME_BYTES);
+    if (s_fb_hash_valid && h == s_fb_hash) {
+        ESP_LOGI(TAG, "EPD content unchanged (hash=%08lx) -> skip refresh", (unsigned long)h);
+    } else {
+        int64_t t_epd0 = esp_timer_get_time();
+        epd_init();
+        epd_write_full(fb_buffer());
+        epd_refresh();
+        epd_sleep();
+        ESP_LOGI(TAG, "TIMING epd=%lldms (display done, hash=%08lx)",
+                 (esp_timer_get_time() - t_epd0) / 1000, (unsigned long)h);
+        s_fb_hash = h;
+        s_fb_hash_valid = true;
+        vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));   /* let the EPD peaks decay before sleep */
+    }
     /* TODO(config-pull): the next wake interval should come from the Berry config script
      * (fetched per wake) / server, replacing this fixed default. */
     return DEFAULT_WAKE_S;
