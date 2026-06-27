@@ -27,6 +27,11 @@ bool net_ip(char *buf, size_t cap);
 bool net_ssid(char *buf, size_t cap);
 bool net_rssi(int *out);
 
+/* Live association state: true while the STA is associated AND holds an IP (set on GOT_IP, cleared on
+ * disconnect/stop). Unlike net_ip -- a snapshot that survives net_wifi_stop -- this reflects the
+ * CURRENT link, so a poll loop can tell a held connection from a torn-down one. */
+bool net_is_connected(void);
+
 /* A scanned access point. */
 typedef struct { char ssid[33]; int8_t rssi; uint8_t auth; } net_ap_t;
 

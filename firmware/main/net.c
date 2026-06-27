@@ -469,6 +469,10 @@ bool net_rssi(int *out)
     return true;
 }
 
+/* Live association state (set on GOT_IP, cleared on STA_DISCONNECTED + net_wifi_stop). The connect
+ * paths short-circuit on this same flag, so a poll loop can gate "skip connect" on a still-held link. */
+bool net_is_connected(void) { return s_connected; }
+
 int net_wifi_scan(net_ap_t *out, int max)
 {
     if (!out || max <= 0) return -1;
