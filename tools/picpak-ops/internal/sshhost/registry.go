@@ -134,7 +134,7 @@ func NewHostRegistry(cfg *config.Config, send pane.Sender, inventoryPane pane.Pa
 		runner := newRunner(rc, h)
 		r.runnersByHost[h.Name] = runner
 
-		if !h.Enabled {
+		if !h.IsEnabled() {
 			store.set(HostState{Host: h.Name, State: StateDisabled})
 			continue
 		}

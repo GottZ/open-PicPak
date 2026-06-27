@@ -56,7 +56,7 @@ func localPollCfg(t *testing.T) *config.Config {
 		t.Fatalf("config.Load: %v", err)
 	}
 	cfg.Hosts = []config.Host{
-		{Name: "local-bench", Local: true, Enabled: true},
+		{Name: "local-bench", Local: true, Enabled: boolp(true)},
 	}
 	// Replace the poll probe with a local shell that emits the golden capture.
 	cfg.Poll.Command = []string{"sh", "-c", "printf '%s' \"$0\"", goldenByID}
@@ -126,7 +126,7 @@ func TestRegistryDisabledHostHasNoWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	cfg.Hosts = []config.Host{{Name: "off-host", Local: true, Enabled: false}}
+	cfg.Hosts = []config.Host{{Name: "off-host", Local: true, Enabled: boolp(false)}}
 
 	reg := NewHostRegistry(cfg, func(tea.Msg) {}, "hosts:1")
 	defer reg.Stop()

@@ -113,7 +113,7 @@ fail_threshold  = 3
 name       = "host-a"
 ssh_target = "user@host.example"
 local      = false
-enabled    = true
+enabled    = true   # optional; omit = enabled, set false to skip a host without deleting it
 
 # --- build ------------------------------------------------------------------
 

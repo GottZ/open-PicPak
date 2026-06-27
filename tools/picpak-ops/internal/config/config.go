@@ -155,8 +155,14 @@ type Host struct {
 	Name      string `toml:"name"`       // display + map key; NOT a real hostname in the example
 	SSHTarget string `toml:"ssh_target"` // ssh alias resolved by ~/.ssh/config
 	Local     bool   `toml:"local"`      // true → bypass ssh, run via os/exec on this box
-	Enabled   bool   `toml:"enabled"`    // false → skip host without deleting its entry
+	Enabled   *bool  `toml:"enabled"`    // omitted → enabled; set false to skip without deleting the entry
 }
+
+// IsEnabled reports whether the host participates in polling/runs. A [[hosts]]
+// entry that is written down is active unless explicitly disabled (enabled =
+// false); omitting the key keeps it enabled — the zero value never silently
+// disables a configured host.
+func (h Host) IsEnabled() bool { return h.Enabled == nil || *h.Enabled }
 
 // Build is the [build] section (build axis 04-build.md §5; reconciled with the
 // 02-config.md shape). The richer 04-build keys are added alongside the original
