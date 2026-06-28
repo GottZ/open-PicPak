@@ -35,7 +35,6 @@ uint32_t     c2_poll_period(void);
 bool         c2_set_url(const char *url);
 bool         c2_set_period(uint32_t secs);
 
-/* C2 device auth (Wave 3d FW-half). c2_compute_auth: next HOTP triple c/otp/bc (false if no secret).
- * c2_set_secret: store the per-device HMAC key as a hex string in NVS. */
-bool c2_compute_auth(uint64_t *c_out, uint32_t *otp_out, uint32_t *bc_out);
-bool c2_set_secret(const char *hex);
+/* C2 long-term identity + session: bonding (the ECDSA keypair) lives in c2key.h; the re-key handshake
+ * + session HOTP poll are internal to cmd.c. The legacy bc-composite auth (c2_compute_auth /
+ * c2_set_secret) was removed at the Doc-15 cutover. */

@@ -170,75 +170,8 @@ uint32_t c2_poll_period(void)
     return v;   /* 0 = C2 poll disabled (default) */
 }
 
-/* --- C2 device auth (Doc 13 Wave 3d FW-half): HOTP triple c/otp/bc --- */
-/* Composite counter C = (boot_count << 24) | rtc_counter (auth-contract k=24). boot_count is the
- * reset-proof NVS counter; rtc_counter lives in RTC-RAM (survives a deep-sleep wake, nulled on a cold
- * boot / port-open reset) and is reset to 0 on a boot_count change, then ++ per request. */
-RTC_DATA_ATTR static uint32_t s_c2_rtc;
-RTC_DATA_ATTR static uint32_t s_c2_lastbc;
-
-static int hexval(char c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
-static size_t hex_decode(const char *hex, uint8_t *out, size_t cap)
-{
-    size_t n = strlen(hex);
-    if (n == 0 || (n & 1)) return 0;          /* must be a non-empty even-length hex string */
-    size_t b = n / 2;
-    if (b > cap) return 0;
-    for (size_t i = 0; i < b; i++) {
-        int hi = hexval(hex[2 * i]), lo = hexval(hex[2 * i + 1]);
-        if (hi < 0 || lo < 0) return 0;
-        out[i] = (uint8_t)((hi << 4) | lo);
-    }
-    return b;
-}
-
-bool c2_set_secret(const char *hex)
-{
-    uint8_t tmp[48];
-    if (hex_decode(hex, tmp, sizeof tmp) == 0) return false;   /* validate before storing */
-    nvs_handle_t h;
-    if (nvs_open(C2_NS, NVS_READWRITE, &h) != ESP_OK) return false;
-    esp_err_t e = nvs_set_str(h, "c2_secret", hex);
-    if (e == ESP_OK) e = nvs_commit(h);
-    nvs_close(h);
-    return e == ESP_OK;
-}
-
-/* Compute the next HOTP auth triple. Returns false if no c2_secret is provisioned. Advances the
- * per-request rtc_counter (after a boot_count change it restarts at 1 -> the server's recovery
- * window absorbs the jump). digits = 8 (the fleet wire value, auth-contract). */
-bool c2_compute_auth(uint64_t *c_out, uint32_t *otp_out, uint32_t *bc_out)
-{
-    char hex[100]; hex[0] = '\0';
-    nvs_handle_t h;
-    if (nvs_open(C2_NS, NVS_READONLY, &h) == ESP_OK) {
-        size_t l = sizeof hex;
-        if (nvs_get_str(h, "c2_secret", hex, &l) != ESP_OK) hex[0] = '\0';
-        nvs_close(h);
-    }
-    if (hex[0] == '\0') return false;
-    uint8_t secret[48];
-    size_t slen = hex_decode(hex, secret, sizeof secret);
-    if (slen == 0) return false;
-
-    uint32_t bc = ota_boots();
-    if (bc != s_c2_lastbc) { s_c2_rtc = 0; s_c2_lastbc = bc; }   /* boot_count changed -> rtc resets */
-    s_c2_rtc++;
-    uint64_t c = ((uint64_t)bc << 24) | (uint64_t)(s_c2_rtc & 0xFFFFFFu);
-    uint32_t otp = auth_hotp(secret, slen, c, 8);
-
-    if (c_out)   *c_out   = c;
-    if (otp_out) *otp_out = otp;
-    if (bc_out)  *bc_out  = bc;
-    return true;
-}
+/* Legacy bc-composite HOTP auth (hotp_secret + c2_compute_auth + the RTC bc counter) was removed at
+ * the Doc-15 cutover: devices authenticate only via the per-session secret (c2_rekey below). */
 
 /* Extract serial_number from the storage/dev_sn JSON blob ({"serial_number":"D22CHGW"}). The factory
  * identity is JSON (config-IS-Berry; render.be parses the same key) -> the C2 sn param needs the bare
@@ -380,36 +313,26 @@ cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran)
         nvs_close(h);
     }
 
+    /* Doc 15 (post-cutover): session-only auth. An un-bonded device cannot do C2 -> skip (must bond). */
+    if (!c2_key_present()) {
+        ESP_LOGW(TAG, "C2 poll: not bonded -> skip (run C2 BOND first)");
+        return CMD_INTENT_NONE;
+    }
     char url[512];
-    int n;
-    bool session = c2_key_present();   /* bonded (ECDSA keypair) -> Doc 15 session path */
-    if (session) {
-        /* Re-key on RTC-RAM loss (cold boot / reset), then HOTP over the RTC-RAM session secret with
-         * a FLAT counter (no boot_count) -> the bc-lockout cannot occur. A deep-sleep wake keeps the
-         * session (no re-key). */
-        if (!c2_sess_valid()) {
-            if (!c2_rekey(base, sn, s_c2sess.secret)) {
-                ESP_LOGW(TAG, "C2 poll: rekey failed -> skip");
-                return CMD_INTENT_NONE;
-            }
-            s_c2sess.counter = 0;
-            s_c2sess.magic = C2_SESS_MAGIC;
-        }
-        uint32_t cc = ++s_c2sess.counter;
-        uint32_t otp = auth_hotp(s_c2sess.secret, sizeof s_c2sess.secret, cc, 8);
-        n = snprintf(url, sizeof url, "%s?sn=%s&ack=%lu&c=%lu&otp=%lu",
-                     base, sn, (unsigned long)ack, (unsigned long)cc, (unsigned long)otp);
-    } else {
-        /* Legacy bc-composite path (un-bonded device; bridge until cutover). */
-        uint64_t c; uint32_t otp, bc;
-        if (!c2_compute_auth(&c, &otp, &bc)) {
-            ESP_LOGW(TAG, "C2 poll: no key/secret -> skip authed poll");
+    /* Re-key on RTC-RAM loss (cold boot / reset), then HOTP over the RTC-RAM session secret with a
+     * FLAT counter (no boot_count) -> no bc-lockout. A deep-sleep wake keeps the session (no re-key). */
+    if (!c2_sess_valid()) {
+        if (!c2_rekey(base, sn, s_c2sess.secret)) {
+            ESP_LOGW(TAG, "C2 poll: rekey failed -> skip");
             return CMD_INTENT_NONE;
         }
-        n = snprintf(url, sizeof url, "%s?sn=%s&ack=%lu&c=%llu&otp=%lu&bc=%lu",
-                     base, sn, (unsigned long)ack, (unsigned long long)c,
-                     (unsigned long)otp, (unsigned long)bc);
+        s_c2sess.counter = 0;
+        s_c2sess.magic = C2_SESS_MAGIC;
     }
+    uint32_t cc = ++s_c2sess.counter;
+    uint32_t otp = auth_hotp(s_c2sess.secret, sizeof s_c2sess.secret, cc, 8);
+    int n = snprintf(url, sizeof url, "%s?sn=%s&ack=%lu&c=%lu&otp=%lu",
+                     base, sn, (unsigned long)ack, (unsigned long)cc, (unsigned long)otp);
     if (n <= 0 || n >= (int)sizeof url) {
         ESP_LOGW(TAG, "C2 poll: URL build overflow (%d)", n);
         return CMD_INTENT_NONE;
@@ -443,9 +366,9 @@ cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran)
         ESP_LOGI(TAG, "C2 poll: 204 in sync (ack=%lu)", (unsigned long)ack);   /* len==0, nothing to do */
     } else {
         ESP_LOGW(TAG, "C2 poll: fetch failed");
-        /* session path: a 401 (backend rotated / stale) or transport error -> drop the session so the
-         * next poll re-keys. Self-healing; bounded (one extra handshake), never a hard lockout. */
-        if (session) c2_sess_invalidate();
+        /* a 401 (backend rotated / stale) or transport error -> drop the session so the next poll
+         * re-keys. Self-healing; bounded (one extra handshake), never a hard lockout. */
+        c2_sess_invalidate();
     }
     free(buf);
     return in;
