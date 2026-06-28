@@ -100,11 +100,12 @@ A full suite, built clean:
   config *and* procedural graphics (text, shapes, QR, live device variables) and renders the
   frame on-device. RAM feasibility validated on the C3 (VM ~3 KB, coexists with WiFi +
   framebuffer, no PSRAM); a littlefs key-value store gives scripts persistence.
-- **Built a HOTP-authenticated C2 command channel** — the device polls a self-hosted backend
-  over HTTPS, fetches a **Berry command script and runs it** on a deliberately safe surface
-  (config/NVS writes, read-only queries, store, and reboot/refresh/sleep intents — no drawing,
-  no OTA trigger). Per-device RFC-4226 HOTP auth (byte-compatible with the backend), HTTPS-only
-  because the payload is code, and the ack is persisted before the action so a reboot can't loop.
+- **Built a C2 command channel** — the device **long-polls** a self-hosted backend over HTTPS (a
+  single poll per wake on battery), fetches a **Berry command script and runs it** on a deliberately
+  safe surface (config/NVS writes, read-only queries, store, and reboot/refresh/sleep intents — no
+  drawing, no OTA trigger). Per-device **ECDSA bond + session HOTP** auth (the backend stores only the
+  public key), HTTPS-only because the payload is code, and the ack is persisted before the action so
+  a reboot can't loop.
 
 ### What I published
 

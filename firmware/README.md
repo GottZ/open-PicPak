@@ -23,8 +23,10 @@ steerable via a HOTP-authenticated **C2 command channel**.
 5. **console** — only on a *real* boot (power-on / reset / USB connect), never on a timer/button
    wake; a triple-press on any wake forces it on the next boot.
 6. **run-cycle** — WiFi (multi-SSID, by RSSI + priority) → fetch a server-rendered frame *or* render
-   on-device with Berry → display **only on a changed frame** → C2 poll (if enabled) → deep sleep.
-   On USB power the WLAN is held across cycles and decoupled only around the actual refresh.
+   on-device with Berry → display **only on a changed frame** → C2 poll (if enabled) → deep sleep for
+   `wake_s` (NVS, `SETWAKE`, default 1 h). On USB power the WLAN is held across cycles (decoupled only
+   around the actual refresh) and the C2 channel **long-polls** for near-instant commands; on battery
+   it does a single C2 poll per wake.
 
 ## Layout (`main/`)
 
@@ -104,6 +106,7 @@ surface. All writes persist to NVS:
 ```
 SETWIFI <ssid> <pass>                 save WiFi   (SETWIFI ADD/LIST/DEL <slug> = multi-WiFi store)
 SETURL  <url>                         save the frame URL
+SETWAKE <s>                           deep-sleep wake interval on battery (default 3600)
 NVSSET  <ns> <key> <val>              generic NVS string write (e.g. storage dev_sn ...)
 INFO                                  status
 REFRESH | SLEEP [s] | PRESS [n]       run a cycle now / sleep / simulate n button-press cycles
@@ -113,7 +116,7 @@ STORE OK|LIST|GET k|SET k v|DEL k     littlefs key-value store
 RTC   STAT|GET k|SET k v|DEL k        RTC-RAM key-value (ephemeral)
 NET   SCAN|TRY ssid pass|IP|SSID|RSSI|STOP|TXPOWER [dBm]
 BATT  [ON|OFF|ARM mv|CLEAR mv|RISE mv|WAKE s|STREAK n]   low-battery gate / status
-C2    RUN <berry> | URL <https-url> | PERIOD <s> | SECRET <hex> | AUTH   command channel
+C2    RUN <berry> | URL <https-url> | PERIOD <s> | BOND   command channel
 ERASE | HELP
 ```
 
@@ -181,10 +184,15 @@ SETWIFI <ssid> <password>           # or SETWIFI ADD <ssid> <password> for sever
 SETURL  <frame-url>
 ```
 
-To enable the remote command channel, point it at a self-hosted backend and arm the per-device key:
+To enable the remote command channel, point it at a self-hosted backend and bond the device:
 
 ```
 C2 URL    <https-url>               # HTTPS only — the response is executed as Berry
-C2 SECRET <hex>                     # per-device HOTP key (must match the backend row)
-C2 PERIOD <seconds>                 # poll cadence (0 = off, the default)
+C2 BOND                             # generate the long-term ECDSA P-256 keypair + print the public
+                                    #   key to register at the backend (the private key never leaves
+                                    #   the chip; a signed re-key derives each session's HOTP secret)
+C2 PERIOD <seconds>                 # >0 enables the channel (0 = off, the default)
 ```
+
+On USB power the device **long-polls** (the backend holds the request until a command for it lands or
+a ~25 s budget elapses); on battery it does one poll per wake.
