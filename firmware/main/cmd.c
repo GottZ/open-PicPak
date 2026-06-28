@@ -16,7 +16,8 @@
 #include "auth_core.h"  /* auth_hotp (HOTP, byte-compatible with the backend) */
 #include "nvs.h"
 #include <string.h>
-#include <stdlib.h>   /* malloc for the C2 response buffer */
+#include <stdio.h>    /* snprintf for the authed C2 poll URL */
+#include <stdlib.h>   /* malloc for the C2 response buffer + strtoul for the ack seq */
 
 static const char *TAG = "c2";
 
@@ -236,42 +237,115 @@ bool c2_compute_auth(uint64_t *c_out, uint32_t *otp_out, uint32_t *bc_out)
     return true;
 }
 
+/* Extract serial_number from the storage/dev_sn JSON blob ({"serial_number":"D22CHGW"}). The factory
+ * identity is JSON (config-IS-Berry; render.be parses the same key) -> the C2 sn param needs the bare
+ * value. Minimal scan, no cJSON pull-in: locate the key, the colon, the opening quote, copy to the
+ * closing quote. Returns false (and out="") on a missing key / unparseable blob. */
+static bool c2_device_serial(char *out, size_t cap)
+{
+    if (!out || cap == 0) return false;
+    out[0] = '\0';
+    char raw[160];
+    nvs_handle_t h;
+    if (nvs_open("storage", NVS_READONLY, &h) != ESP_OK) return false;
+    size_t l = sizeof raw;
+    esp_err_t e = nvs_get_str(h, "dev_sn", raw, &l);
+    nvs_close(h);
+    if (e != ESP_OK) return false;
+    const char *p = strstr(raw, "\"serial_number\"");
+    if (!p) return false;
+    p = strchr(p + 15, ':');            /* 15 = strlen("\"serial_number\"") */
+    if (!p) return false;
+    p = strchr(p, '"');                 /* opening quote of the value */
+    if (!p) return false;
+    p++;
+    size_t i = 0;
+    while (*p && *p != '"' && i < cap - 1) out[i++] = *p++;
+    out[i] = '\0';
+    return i > 0;
+}
+
 cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran)
 {
     if (ran) *ran = false;
     if (sleep_s) *sleep_s = 0;
 
-    char url[160]; url[0] = '\0';
+    char base[200]; base[0] = '\0';
     nvs_handle_t h;
     if (nvs_open(C2_NS, NVS_READONLY, &h) == ESP_OK) {
-        size_t l = sizeof url;
-        if (nvs_get_str(h, "c2_url", url, &l) != ESP_OK) url[0] = '\0';
+        size_t l = sizeof base;
+        if (nvs_get_str(h, "c2_url", base, &l) != ESP_OK) base[0] = '\0';
         nvs_close(h);
     }
-    if (url[0] == '\0') return CMD_INTENT_NONE;   /* not configured */
+    if (base[0] == '\0') return CMD_INTENT_NONE;   /* not configured */
     /* HTTPS-ONLY (RCE safety, design 13b §0): the C2 response is executed as code, so the server
      * MUST be CA-verified. Refuse a plaintext c2_url outright. */
-    if (strncmp(url, "https://", 8) != 0) {
+    if (strncmp(base, "https://", 8) != 0) {
         ESP_LOGW(TAG, "C2 poll: refusing non-https c2_url");
+        return CMD_INTENT_NONE;
+    }
+
+    /* Device identity for the backend's per-device cursor + HOTP row lookup. No serial -> no poll
+     * (an unkeyed request can only ever earn a 404/401). */
+    char sn[32];
+    if (!c2_device_serial(sn, sizeof sn)) {
+        ESP_LOGW(TAG, "C2 poll: no device serial (storage/dev_sn) -> skip");
+        return CMD_INTENT_NONE;
+    }
+
+    /* ack = the highest C2 seq already applied (persisted in picpak/c2_seq, default 0 = cold device).
+     * The backend advances its cursor forward-only (GREATEST) from this. */
+    uint32_t ack = 0;
+    if (nvs_open(C2_NS, NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_u32(h, "c2_seq", &ack) != ESP_OK) ack = 0;
+        nvs_close(h);
+    }
+
+    /* HOTP auth triple (c/otp/bc). No c2_secret provisioned -> no authed poll (the route is 401-only
+     * without it, so there is nothing to gain by hitting it). */
+    uint64_t c; uint32_t otp, bc;
+    if (!c2_compute_auth(&c, &otp, &bc)) {
+        ESP_LOGW(TAG, "C2 poll: no c2_secret -> skip authed poll");
+        return CMD_INTENT_NONE;
+    }
+
+    char url[512];
+    int n = snprintf(url, sizeof url, "%s?sn=%s&ack=%lu&c=%llu&otp=%lu&bc=%lu",
+                     base, sn, (unsigned long)ack, (unsigned long long)c,
+                     (unsigned long)otp, (unsigned long)bc);
+    if (n <= 0 || n >= (int)sizeof url) {
+        ESP_LOGW(TAG, "C2 poll: URL build overflow (%d)", n);
         return CMD_INTENT_NONE;
     }
 
     uint8_t *buf = malloc(C2_RESP_MAX);
     if (!buf) return CMD_INTENT_NONE;
     size_t len = 0;
-    bool ok = net_http_get(url, buf, C2_RESP_MAX - 1, &len);   /* https verified via crt_bundle (net.c) */
+    char seq[16];
+    bool ok = net_http_c2(url, buf, C2_RESP_MAX - 1, &len, seq, sizeof seq);   /* https verified via crt_bundle */
     cmd_intent_t in = CMD_INTENT_NONE;
     if (ok && len > 0) {
         buf[len] = '\0';                       /* NUL-terminate for be_loadstring */
         bool sok = false;
-        in = berry_c2((char *)buf, sleep_s, &sok);   /* persists no ack yet (see TODO) */
+        in = berry_c2((char *)buf, sleep_s, &sok);
         if (ran) *ran = true;
-        ESP_LOGI(TAG, "C2 poll: %u bytes, script ok=%d intent=%d", (unsigned)len, (int)sok, (int)in);
-        /* TODO(c2-ack): read X-C2-Seq from the response and persist last_seq BEFORE the caller
-         * actions the intent (the digest/ack-cursor reconcile). Needs the header from the fetch;
-         * lands with the real-backend auth wave (3d FW-half) where net_http_get gains a header-out. */
+        /* Persist the ack cursor BEFORE the caller actions the intent: a reboot/sleep intent must not
+         * make the device re-run this seq on the next poll. Acked on a 200 with a seq regardless of
+         * the Berry result -> a faulty script can't wedge the device in a poison-pill re-serve loop. */
+        if (seq[0]) {
+            uint32_t s = (uint32_t)strtoul(seq, NULL, 10);
+            nvs_handle_t hh;
+            if (nvs_open(C2_NS, NVS_READWRITE, &hh) == ESP_OK) {
+                nvs_set_u32(hh, "c2_seq", s);
+                nvs_commit(hh);
+                nvs_close(hh);
+            }
+        }
+        ESP_LOGI(TAG, "C2 poll: %u bytes seq=%s script ok=%d intent=%d", (unsigned)len, seq, (int)sok, (int)in);
+    } else if (ok) {
+        ESP_LOGI(TAG, "C2 poll: 204 in sync (ack=%lu)", (unsigned long)ack);   /* len==0, nothing to do */
     } else {
-        ESP_LOGW(TAG, "C2 poll: fetch failed/empty");
+        ESP_LOGW(TAG, "C2 poll: fetch failed");
     }
     free(buf);
     return in;

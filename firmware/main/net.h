@@ -45,6 +45,14 @@ int net_wifi_scan(net_ap_t *out, int max);
  * non-200, an over-cap response, or a transport error. */
 bool net_http_get(const char *url, uint8_t *buf, size_t cap, size_t *outlen);
 
+/* C2 poll GET: like net_http_get, but also captures the X-C2-Seq response header into seq_out (the
+ * seq the device acks once it applies the served script). Returns true on HTTP 200 (script body in
+ * buf, *outlen set, seq_out = the header value) AND on 204 (in sync: *outlen = 0, seq_out = ""). The
+ * caller tells the two apart by *outlen. URL validated like net_http_get; false on a bad URL, any
+ * other status, an over-cap response, or a transport error. */
+bool net_http_c2(const char *url, uint8_t *buf, size_t cap, size_t *outlen,
+                 char *seq_out, size_t seq_cap);
+
 /* Discard the connect cache -> the next connect does a full scan + DHCP and
  * re-caches. For tests (cold baseline vs. warm) and after a network change. */
 void net_cache_clear(void);
