@@ -35,7 +35,9 @@ CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 # The main task (run_cycle) calls snprintf (timing-report URL) + the WiFi/HTTP stack
 # -> the default ~3.5 KB is too tight ("Stack protection fault" in the main task, SP
 # just below the bound). Give reserve (RAM is plentiful).
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+# 16 KB: the C2 re-key path runs mbedTLS ECDSA P-256 sign + two TLS handshakes + ~1.7 KB of locals
+# in the main task; 6144 stack-overflowed (Wave 4 on-device, panic in vfprintf at the limit). Doc 15.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # HTTPS: compile in the ESP-IDF root cert bundle -> esp_http_client can verify against
 # public CAs (crt_bundle_attach in net.c/ota.c). FULL covers the common roots incl.
