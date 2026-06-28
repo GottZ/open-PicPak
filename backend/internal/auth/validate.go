@@ -47,6 +47,17 @@ func Validate(cfg Config, dev DeviceState, claimedC, bc uint64, otp uint32) Resu
 		}
 	case claimedC <= dev.LastCounter:
 		return Result{Reason: "replay"} // not strictly monotone
+	case bc > (dev.LastCounter >> KSplit):
+		// epoch advance: boot_count increased, so the device reset its rtc_counter to start a fresh
+		// epoch (this happens on EVERY deep-sleep wake / reset). boot_count is the reset-proof,
+		// monotonic NVS counter, so a strictly higher bc is a legitimate forward step, NOT a replay —
+		// even though the composite jumped by >= 2^KSplit, far beyond WindowFar. Accept the first
+		// counter of the new epoch within a fresh rtc window (the OTP match still proves the secret;
+		// monotonicity holds because bc only ever increases). Without this, the device 401-locks out
+		// after its first field reboot (the rtc window cannot bridge the 2^KSplit bc shift).
+		if claimedC <= (bc<<KSplit)+cfg.WindowFar && match(claimedC) {
+			return Result{OK: true, NewCounter: claimedC, Reason: "epoch-advance"}
+		}
 	case claimedC <= dev.LastCounter+cfg.Window:
 		if match(claimedC) {
 			return Result{OK: true, NewCounter: claimedC, Reason: "normal"}

@@ -57,4 +57,28 @@ func TestValidate(t *testing.T) {
 	if Validate(cfg, dev, base+5000, bc, otp(base+5000)).OK {
 		t.Error("jump beyond WINDOW_FAR must reject")
 	}
+
+	// --- epoch advance (the field bc-lockout regression guard) ---
+	// A boot_count increment (every deep-sleep wake / reset) resets rtc -> the composite jumps by
+	// 2^KSplit, far beyond WindowFar, but is a legitimate forward step with c and bc BOTH advanced
+	// consistently. MUST accept (this is exactly what the live device sends after its first reboot).
+	newEpoch := ((bc + 1) << KSplit) | 1
+	if r := Validate(cfg, dev, newEpoch, bc+1, otp(newEpoch)); !r.OK || r.NewCounter != newEpoch {
+		t.Errorf("epoch advance (bc++) must accept (field lockout bug): %+v", r)
+	}
+	// A multi-reboot gap (several boots while offline, no successful auth) still accepts the first
+	// authed poll on return.
+	gapEpoch := ((bc + 7) << KSplit) | 1
+	if r := Validate(cfg, dev, gapEpoch, bc+7, otp(gapEpoch)); !r.OK {
+		t.Errorf("multi-reboot epoch gap must accept: %+v", r)
+	}
+	// But a new epoch with a WRONG OTP must still reject (the secret is still required).
+	if Validate(cfg, dev, newEpoch, bc+1, otp(newEpoch+1)).OK {
+		t.Error("epoch advance with wrong OTP must reject")
+	}
+	// And a cross-epoch replay (an old epoch's counter, now behind a newer LastCounter) must reject.
+	devAdvanced := DeviceState{Secret: key, LastCounter: newEpoch, Bootstrapped: true}
+	if Validate(cfg, devAdvanced, base+1, bc, otp(base+1)).OK {
+		t.Error("cross-epoch replay (old epoch counter) must reject")
+	}
 }
