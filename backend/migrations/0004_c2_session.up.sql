@@ -6,7 +6,14 @@
 -- hotp_secret/bc path stays during the bridge window and is dropped at cutover. Idempotent.
 
 -- A bonded device is identified by its public key alone (no shared secret) -> hotp_secret nullable.
-ALTER TABLE device_auth ALTER COLUMN hotp_secret DROP NOT NULL;
+-- Guarded so this migration stays re-runnable AFTER 0005 dropped hotp_secret: the deploy re-applies
+-- every migration in order, so each must be idempotent against the FINAL schema, not just its own era.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'device_auth' AND column_name = 'hotp_secret') THEN
+    ALTER TABLE device_auth ALTER COLUMN hotp_secret DROP NOT NULL;
+  END IF;
+END $$;
 
 -- ed25519_pubkey from an earlier draft of this migration is superseded by ecdsa_pubkey.
 ALTER TABLE device_auth DROP CONSTRAINT IF EXISTS ed25519_pubkey_len;
