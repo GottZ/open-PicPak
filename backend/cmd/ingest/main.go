@@ -66,15 +66,23 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	// secret-path contract: GET /<token>/{pp|c2}?...  (token kept in env, never in code).
 	// One shared path token gates both endpoints for now; per-device HOTP supersedes it (wave 3d).
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if r.Method != http.MethodGet || s.token == "" || len(parts) < 2 || parts[0] != s.token {
+	if s.token == "" || len(parts) < 2 || parts[0] != s.token {
 		http.NotFound(w, r) // 404 == noise (mirrors the legacy sink)
 		return
 	}
-	switch parts[1] {
-	case "pp":
+	sub := ""
+	if len(parts) >= 3 {
+		sub = parts[2]
+	}
+	switch {
+	case parts[1] == "pp" && sub == "" && r.Method == http.MethodGet:
 		s.handleIngest(w, r)
-	case "c2":
+	case parts[1] == "c2" && sub == "" && r.Method == http.MethodGet:
 		s.handleC2(w, r)
+	case parts[1] == "c2" && sub == "challenge" && r.Method == http.MethodGet:
+		s.handleC2Challenge(w, r) // Doc 15 re-key handshake
+	case parts[1] == "c2" && sub == "rekey" && r.Method == http.MethodPost:
+		s.handleC2Rekey(w, r)
 	default:
 		http.NotFound(w, r)
 	}

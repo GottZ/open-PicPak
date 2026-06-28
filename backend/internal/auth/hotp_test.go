@@ -82,3 +82,45 @@ func TestValidate(t *testing.T) {
 		t.Error("cross-epoch replay (old epoch counter) must reject")
 	}
 }
+
+// TestValidateSession covers the Doc-15 flat session counter (no boot_count composite): bootstrap,
+// monotonic accept, replay/wrong-otp/no-session/beyond-window reject. A boot_count change never
+// appears here (the device re-keys instead), so there is no epoch-jump to handle.
+func TestValidateSession(t *testing.T) {
+	s := []byte("12345678901234567890")
+	cfg := Config{Digits: 8, Window: 8, WindowFar: 4096}
+	otp := func(c uint64) uint32 { return HOTP(s, c, cfg.Digits) }
+
+	// no session established yet -> reject (device must re-key first)
+	if ValidateSession(cfg, nil, 0, false, 1, otp(1)).OK {
+		t.Error("no session secret must reject")
+	}
+	// bootstrap: first poll of a fresh session (counter starts low)
+	if r := ValidateSession(cfg, s, 0, false, 1, otp(1)); !r.OK || r.NewCounter != 1 {
+		t.Fatalf("session bootstrap should accept: %+v", r)
+	}
+	// established session at lastCounter=10
+	if ValidateSession(cfg, s, 10, true, 10, otp(10)).OK {
+		t.Error("session replay (same counter) must reject")
+	}
+	if ValidateSession(cfg, s, 10, true, 5, otp(5)).OK {
+		t.Error("session replay (lower counter) must reject")
+	}
+	if r := ValidateSession(cfg, s, 10, true, 11, otp(11)); !r.OK || r.NewCounter != 11 {
+		t.Errorf("session monotonic next should accept: %+v", r)
+	}
+	if r := ValidateSession(cfg, s, 10, true, 100, otp(100)); !r.OK {
+		t.Errorf("session gap within window should accept: %+v", r)
+	}
+	if ValidateSession(cfg, s, 10, true, 11, otp(12)).OK {
+		t.Error("session wrong OTP must reject")
+	}
+	if ValidateSession(cfg, s, 10, true, 10+5000, otp(10+5000)).OK {
+		t.Error("session jump beyond window must reject")
+	}
+	// a stale-session counter (would match a DIFFERENT secret) must not validate against this secret
+	other := []byte("09876543210987654321")
+	if ValidateSession(cfg, s, 10, true, 11, HOTP(other, 11, cfg.Digits)).OK {
+		t.Error("otp from a different (stale-session) secret must reject")
+	}
+}

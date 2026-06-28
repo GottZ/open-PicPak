@@ -41,22 +41,24 @@ func (s *server) authDevice(ctx context.Context, tx pgx.Tx, serial string, q map
 		}
 		return ""
 	}
-	claimedC, err1 := strconv.ParseUint(get("c"), 10, 64)
-	bc, err2 := strconv.ParseUint(get("bc"), 10, 64)
-	otp64, err3 := strconv.ParseUint(get("otp"), 10, 32)
-	if err1 != nil || err2 != nil || err3 != nil {
-		auth.HOTP(dummyAuthKey, claimedC, 8) // equalise timing even on a malformed triple
+	// c + otp are needed by both auth paths; bc only by the legacy composite path.
+	claimedC, errC := strconv.ParseUint(get("c"), 10, 64)
+	otp64, errO := strconv.ParseUint(get("otp"), 10, 32)
+	if errC != nil || errO != nil {
+		auth.HOTP(dummyAuthKey, claimedC, 8) // equalise timing even on a malformed request
 		return false
 	}
 	otp := uint32(otp64)
 
-	var secret []byte
-	var lastBC, lastRTC int64
+	var legacySecret, sessionSecret []byte
+	var lastBC, lastRTC, sessLast int64
 	var digits int
+	var sessBoot bool
 	err := tx.QueryRow(ctx,
-		`SELECT hotp_secret, last_boot_count, last_rtc_counter, digits
+		`SELECT hotp_secret, last_boot_count, last_rtc_counter, digits,
+		        session_secret, session_last_counter, session_bootstrapped
 		   FROM device_auth WHERE serial = $1 FOR UPDATE`,
-		serial).Scan(&secret, &lastBC, &lastRTC, &digits)
+		serial).Scan(&legacySecret, &lastBC, &lastRTC, &digits, &sessionSecret, &sessLast, &sessBoot)
 	if errors.Is(err, pgx.ErrNoRows) {
 		auth.HOTP(dummyAuthKey, claimedC, digitsOr8(digits)) // unknown device: dummy HMAC, then fail
 		return false
@@ -64,22 +66,40 @@ func (s *server) authDevice(ctx context.Context, tx pgx.Tx, serial string, q map
 	if err != nil {
 		return false
 	}
+	cfg := auth.Config{Digits: digitsOr8(digits), Window: authWindow, WindowFar: authWindowFar}
 
-	// last_rtc_counter defaults to -1 (never accepted) -> not yet bootstrapped.
+	// Doc 15 session path: once a session secret is established (via the signed re-key handshake) the
+	// device authenticates with a FLAT session counter (no boot_count composite) -> no bc-lockout.
+	// Preferred whenever a session exists; the legacy path below serves only un-migrated devices.
+	if sessionSecret != nil {
+		res := auth.ValidateSession(cfg, sessionSecret, uint64(sessLast), sessBoot, claimedC, otp)
+		if !res.OK {
+			return false
+		}
+		_, uerr := tx.Exec(ctx,
+			`UPDATE device_auth SET session_last_counter = $1, session_bootstrapped = true, last_seen_at = now()
+			  WHERE serial = $2`, int64(res.NewCounter), serial)
+		return uerr == nil
+	}
+
+	// Legacy bc-composite path (bridge; dropped at cutover). last_rtc_counter defaults to -1 (not
+	// yet bootstrapped). The bc-epoch-advance case (Wave 0) keeps it field-functional meanwhile.
+	bc, errBC := strconv.ParseUint(get("bc"), 10, 64)
+	if errBC != nil || legacySecret == nil {
+		auth.HOTP(dummyAuthKey, claimedC, cfg.Digits)
+		return false
+	}
 	bootstrapped := lastRTC >= 0
 	var lastC uint64
 	if bootstrapped {
 		lastC = (uint64(lastBC) << auth.KSplit) | uint64(lastRTC)
 	}
-
-	res := auth.Validate(
-		auth.Config{Digits: digits, Window: authWindow, WindowFar: authWindowFar},
-		auth.DeviceState{Secret: secret, LastCounter: lastC, Bootstrapped: bootstrapped},
+	res := auth.Validate(cfg,
+		auth.DeviceState{Secret: legacySecret, LastCounter: lastC, Bootstrapped: bootstrapped},
 		claimedC, bc, otp)
 	if !res.OK {
 		return false
 	}
-
 	newBC := int64(res.NewCounter >> auth.KSplit)
 	newRTC := int64(res.NewCounter & ((1 << auth.KSplit) - 1))
 	if _, err := tx.Exec(ctx,
