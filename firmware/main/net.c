@@ -642,6 +642,33 @@ bool net_http_get(const char *url, uint8_t *buf, size_t cap, size_t *outlen)
     return true;
 }
 
+/* POST a body to url; returns the HTTP status code (e.g. 204), or -1 on a transport/setup error.
+ * Used by the C2 re-key handshake (small JSON body, no response body needed). https verified. */
+int net_http_post(const char *url, const char *content_type, const uint8_t *body, size_t bodylen)
+{
+    if (!url) return -1;
+    size_t ulen = strlen(url);
+    if (ulen < 8 || ulen > 512) return -1;
+    if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) return -1;
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .timeout_ms = 15000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .buffer_size = 1024,
+        .buffer_size_tx = 1024,
+    };
+    esp_http_client_handle_t h = esp_http_client_init(&cfg);
+    if (!h) return -1;
+    esp_http_client_set_method(h, HTTP_METHOD_POST);
+    if (content_type) esp_http_client_set_header(h, "Content-Type", content_type);
+    esp_http_client_set_post_field(h, (const char *)body, (int)bodylen);
+    esp_err_t err = esp_http_client_perform(h);
+    int status = esp_http_client_get_status_code(h);
+    esp_http_client_cleanup(h);
+    if (err != ESP_OK) { ESP_LOGE(TAG, "http_post err: %s", esp_err_to_name(err)); return -1; }
+    return status;
+}
+
 /* --- C2 poll GET: net_http_get + X-C2-Seq capture; treats 204 as a valid in-sync reply --- */
 typedef struct {
     uint8_t *buf; size_t cap; size_t len; bool overflow;

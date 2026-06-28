@@ -53,6 +53,11 @@ bool net_http_get(const char *url, uint8_t *buf, size_t cap, size_t *outlen);
 bool net_http_c2(const char *url, uint8_t *buf, size_t cap, size_t *outlen,
                  char *seq_out, size_t seq_cap);
 
+/* POST body (bodylen bytes) to url with the given Content-Type. Returns the HTTP status code, or -1
+ * on a transport/setup error. No response body is captured (the C2 re-key handshake only needs the
+ * status: 204 = accepted). URL validated like the GET helpers; https verified against the bundle. */
+int net_http_post(const char *url, const char *content_type, const uint8_t *body, size_t bodylen);
+
 /* Discard the connect cache -> the next connect does a full scan + DHCP and
  * re-caches. For tests (cold baseline vs. warm) and after a network change. */
 void net_cache_clear(void);

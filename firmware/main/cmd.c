@@ -18,6 +18,9 @@
 #include <string.h>
 #include <stdio.h>    /* snprintf for the authed C2 poll URL */
 #include <stdlib.h>   /* malloc for the C2 response buffer + strtoul for the ack seq */
+#include "c2key.h"          /* long-term ECDSA P-256 identity: bond + sign (Doc 15) */
+#include "mbedtls/sha256.h" /* re-key message hash */
+#include "esp_random.h"     /* session secret RNG */
 
 static const char *TAG = "c2";
 
@@ -265,6 +268,82 @@ static bool c2_device_serial(char *out, size_t cap)
     return i > 0;
 }
 
+/* --- Doc 15 session re-key + RTC-RAM session state --- */
+#define C2_SESS_MAGIC 0x53455332u   /* "SES2" — RTC-RAM session validity marker */
+/* RTC_NOINIT: survives a deep-sleep wake (reuse the session, no re-key) but reads as garbage on a
+ * cold boot / brownout / USB re-enum reset -> the magic mismatch forces a re-key. The exact survival
+ * per reset class is the G-RTC empirical gate (design 15 §6). */
+RTC_NOINIT_ATTR static struct {
+    uint32_t magic;
+    uint32_t counter;     /* flat per-session HOTP counter (no boot_count composite) */
+    uint8_t  secret[20];  /* session HOTP secret (RAM-only; never persisted to NVS) */
+} s_c2sess;
+
+static bool c2_sess_valid(void)      { return s_c2sess.magic == C2_SESS_MAGIC; }
+static void c2_sess_invalidate(void) { s_c2sess.magic = 0; }
+
+static void hexenc(const uint8_t *in, size_t n, char *out)
+{
+    static const char H[] = "0123456789abcdef";
+    for (size_t i = 0; i < n; i++) { out[2 * i] = H[in[i] >> 4]; out[2 * i + 1] = H[in[i] & 0xf]; }
+    out[2 * n] = '\0';
+}
+
+/* Extract the 32-hex value of "nonce" from the challenge JSON ({"nonce":"..."}) into out (>=33). */
+static bool c2_parse_nonce(const char *json, char *out)
+{
+    const char *p = strstr(json, "\"nonce\"");
+    if (!p) return false;
+    p = strchr(p + 7, ':'); if (!p) return false;
+    p = strchr(p, '"');     if (!p) return false;
+    p++;
+    int i = 0;
+    while (p[i] && p[i] != '"' && i < 32) { out[i] = p[i]; i++; }
+    out[i] = '\0';
+    return i == 32;
+}
+
+/* Re-key handshake (Doc 15): GET <base>/challenge -> sign the nonce+secret with the long-term ECDSA
+ * key -> POST <base>/rekey. On HTTP 204, writes the new 20-byte session secret into secret_out. */
+static bool c2_rekey(const char *base, const char *sn, uint8_t secret_out[20])
+{
+    char curl[256];
+    int n = snprintf(curl, sizeof curl, "%s/challenge?sn=%s", base, sn);
+    if (n <= 0 || n >= (int)sizeof curl) return false;
+    uint8_t cbuf[160]; size_t clen = 0;
+    if (!net_http_get(curl, cbuf, sizeof cbuf - 1, &clen)) { ESP_LOGW(TAG, "rekey: challenge failed"); return false; }
+    cbuf[clen] = '\0';
+    char nonce[40];
+    if (!c2_parse_nonce((char *)cbuf, nonce)) { ESP_LOGW(TAG, "rekey: no nonce in challenge"); return false; }
+
+    uint8_t secret[20];
+    esp_fill_random(secret, sizeof secret);
+    uint8_t sh[32];
+    mbedtls_sha256(secret, sizeof secret, sh, 0);
+    char shhex[65]; hexenc(sh, 32, shhex);
+    char msg[160];
+    int mlen = snprintf(msg, sizeof msg, "c2rekey\n%s\n%s\n%s", sn, nonce, shhex);
+    if (mlen <= 0 || mlen >= (int)sizeof msg) return false;
+
+    uint8_t sig[80]; size_t siglen = 0;
+    if (!c2_key_sign((uint8_t *)msg, mlen, sig, sizeof sig, &siglen)) { ESP_LOGW(TAG, "rekey: sign failed"); return false; }
+
+    char sechex[41]; hexenc(secret, 20, sechex);
+    char sighex[161]; hexenc(sig, siglen, sighex);
+    char body[400];
+    int blen = snprintf(body, sizeof body, "{\"nonce\":\"%s\",\"secret\":\"%s\",\"sig\":\"%s\"}", nonce, sechex, sighex);
+    if (blen <= 0 || blen >= (int)sizeof body) return false;
+
+    char rurl[256];
+    n = snprintf(rurl, sizeof rurl, "%s/rekey?sn=%s", base, sn);
+    if (n <= 0 || n >= (int)sizeof rurl) return false;
+    int st = net_http_post(rurl, "application/json", (uint8_t *)body, blen);
+    if (st != 204) { ESP_LOGW(TAG, "rekey: POST status %d", st); return false; }
+    memcpy(secret_out, secret, 20);
+    ESP_LOGI(TAG, "rekey OK: session established");
+    return true;
+}
+
 cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran)
 {
     if (ran) *ran = false;
@@ -301,18 +380,36 @@ cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran)
         nvs_close(h);
     }
 
-    /* HOTP auth triple (c/otp/bc). No c2_secret provisioned -> no authed poll (the route is 401-only
-     * without it, so there is nothing to gain by hitting it). */
-    uint64_t c; uint32_t otp, bc;
-    if (!c2_compute_auth(&c, &otp, &bc)) {
-        ESP_LOGW(TAG, "C2 poll: no c2_secret -> skip authed poll");
-        return CMD_INTENT_NONE;
-    }
-
     char url[512];
-    int n = snprintf(url, sizeof url, "%s?sn=%s&ack=%lu&c=%llu&otp=%lu&bc=%lu",
+    int n;
+    bool session = c2_key_present();   /* bonded (ECDSA keypair) -> Doc 15 session path */
+    if (session) {
+        /* Re-key on RTC-RAM loss (cold boot / reset), then HOTP over the RTC-RAM session secret with
+         * a FLAT counter (no boot_count) -> the bc-lockout cannot occur. A deep-sleep wake keeps the
+         * session (no re-key). */
+        if (!c2_sess_valid()) {
+            if (!c2_rekey(base, sn, s_c2sess.secret)) {
+                ESP_LOGW(TAG, "C2 poll: rekey failed -> skip");
+                return CMD_INTENT_NONE;
+            }
+            s_c2sess.counter = 0;
+            s_c2sess.magic = C2_SESS_MAGIC;
+        }
+        uint32_t cc = ++s_c2sess.counter;
+        uint32_t otp = auth_hotp(s_c2sess.secret, sizeof s_c2sess.secret, cc, 8);
+        n = snprintf(url, sizeof url, "%s?sn=%s&ack=%lu&c=%lu&otp=%lu",
+                     base, sn, (unsigned long)ack, (unsigned long)cc, (unsigned long)otp);
+    } else {
+        /* Legacy bc-composite path (un-bonded device; bridge until cutover). */
+        uint64_t c; uint32_t otp, bc;
+        if (!c2_compute_auth(&c, &otp, &bc)) {
+            ESP_LOGW(TAG, "C2 poll: no key/secret -> skip authed poll");
+            return CMD_INTENT_NONE;
+        }
+        n = snprintf(url, sizeof url, "%s?sn=%s&ack=%lu&c=%llu&otp=%lu&bc=%lu",
                      base, sn, (unsigned long)ack, (unsigned long long)c,
                      (unsigned long)otp, (unsigned long)bc);
+    }
     if (n <= 0 || n >= (int)sizeof url) {
         ESP_LOGW(TAG, "C2 poll: URL build overflow (%d)", n);
         return CMD_INTENT_NONE;
@@ -346,6 +443,9 @@ cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran)
         ESP_LOGI(TAG, "C2 poll: 204 in sync (ack=%lu)", (unsigned long)ack);   /* len==0, nothing to do */
     } else {
         ESP_LOGW(TAG, "C2 poll: fetch failed");
+        /* session path: a 401 (backend rotated / stale) or transport error -> drop the session so the
+         * next poll re-keys. Self-healing; bounded (one extra handshake), never a hard lockout. */
+        if (session) c2_sess_invalidate();
     }
     free(buf);
     return in;

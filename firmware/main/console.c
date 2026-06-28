@@ -8,6 +8,7 @@
 #include "wifi_store.h"
 #include "lowbatt.h"
 #include "cmd.h"
+#include "c2key.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -436,8 +437,20 @@ static int handle(char *line, uint32_t boot_count)
                        (unsigned long)bc, (unsigned long long)c, (unsigned long)otp);
             else
                 printf("ERR  no c2_secret (set via C2 SECRET <hex>)\r\n");
+        } else if (strcasecmp(sub, "BOND") == 0) {
+            /* Doc 15: ensure the long-term ECDSA P-256 keypair exists (generate on first call) and
+             * print the 65-byte uncompressed public point for the operator to register at the backend
+             * (device_auth.ecdsa_pubkey). The private key never leaves the chip. */
+            uint8_t pub[65]; size_t pl = 0;
+            if (c2_key_pubkey(pub, sizeof pub, &pl) && pl == 65) {
+                printf("C2   ecdsa_pubkey(%u)=", (unsigned)pl);
+                for (size_t i = 0; i < pl; i++) printf("%02x", pub[i]);
+                printf("\r\n");
+            } else {
+                printf("ERR  bond/keygen failed\r\n");
+            }
         } else {
-            printf("ERR  usage: C2 RUN <berry> | URL <https> | PERIOD <s> | SECRET <hex> | AUTH\r\n");
+            printf("ERR  usage: C2 RUN <berry> | URL <https> | PERIOD <s> | SECRET <hex> | AUTH | BOND\r\n");
         }
     } else if (strcasecmp(cmd, "HELP") == 0 || strcasecmp(cmd, "?") == 0) {
         print_help();
