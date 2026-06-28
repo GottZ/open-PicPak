@@ -26,8 +26,9 @@ import (
 var expectedKeys = []string{"v", "p", "bad", "bc", "rr", "usb", "up", "id"}
 
 type server struct {
-	pool  *pgxpool.Pool
-	token string // legacy secret path segment; "" disables the legacy route
+	pool     *pgxpool.Pool
+	token    string      // legacy secret path segment; "" disables the legacy route
+	notifier *c2Notifier // C2 long-poll wakeup hub (Design 16)
 }
 
 func main() {
@@ -52,7 +53,10 @@ func main() {
 		log.Fatalf("db unreachable: %v", err)
 	}
 
-	s := &server{pool: pool, token: token}
+	s := &server{pool: pool, token: token, notifier: newC2Notifier()}
+	// One LISTEN connection feeds the C2 long-poll wakeup hub for the whole fleet (Design 16).
+	go s.notifier.listenLoop(ctx, pool)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/", s.handle)

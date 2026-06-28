@@ -16,9 +16,13 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
+
+// c2MaxWaitS caps the long-poll hold budget a device may request via ?wait=<secs> (Design 16).
+const c2MaxWaitS = 25
 
 func (s *server) handleC2(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -80,7 +84,19 @@ func (s *server) handleC2(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "", http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent) // 204: in sync, nothing to do
+		// Long-poll opt-in (?wait=<secs>, Design 16): hold the request until a command for this device
+		// lands or the budget elapses -> near-instant delivery on USB power. Absent/<=0 -> immediate 204
+		// (the battery field poll wants a fast 204, no connection hold). The cursor is already committed;
+		// the hold below only READs the queue (the device acks the served seq on its next poll).
+		waitS, _ := strconv.Atoi(q.Get("wait"))
+		if waitS <= 0 {
+			w.WriteHeader(http.StatusNoContent) // 204: in sync, nothing to do
+			return
+		}
+		if waitS > c2MaxWaitS {
+			waitS = c2MaxWaitS
+		}
+		s.c2LongPoll(w, r, serial, applied, time.Duration(waitS)*time.Second)
 		return
 	}
 	if err != nil {
@@ -96,4 +112,47 @@ func (s *server) handleC2(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-C2-Seq", strconv.FormatInt(seq, 10))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(script))
+}
+
+// c2LongPoll holds the request until a command for serial (or the fleet '*') with seq > applied
+// appears, or the budget elapses. It writes the response (200 + Berry script, or 204). The caller has
+// already committed the cursor advance; this path only READs the queue. It waits on the in-process
+// notifier (fed by one LISTEN connection), so a held poll costs a goroutine, not a DB connection.
+func (s *server) c2LongPoll(w http.ResponseWriter, r *http.Request, serial string, applied int64, budget time.Duration) {
+	ctx := r.Context()
+	deadline := time.After(budget)
+	for {
+		// Grab the wake channel BEFORE the query: an insert racing between the query and the select
+		// still closes this channel -> we re-query (no lost wakeup).
+		wake := s.notifier.wait()
+
+		var seq int64
+		var script string
+		err := s.pool.QueryRow(ctx,
+			`SELECT seq, script FROM command_queue
+			 WHERE serial IN ($1, '*') AND seq > $2
+			 ORDER BY seq
+			 LIMIT 1`,
+			serial, applied).Scan(&seq, &script)
+		if err == nil {
+			w.Header().Set("X-C2-Seq", strconv.FormatInt(seq, 10))
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write([]byte(script))
+			return
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "", http.StatusInternalServerError)
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return // client disconnected -> nothing to write
+		case <-deadline:
+			w.WriteHeader(http.StatusNoContent) // budget elapsed: in sync
+			return
+		case <-wake:
+			// a command landed somewhere -> loop and re-query
+		}
+	}
 }
