@@ -28,12 +28,20 @@ void cmd_register(bvm *vm);
 cmd_intent_t berry_c2(const char *script, uint32_t *sleep_s, bool *ok_out);
 
 /* C2 poll (Wave 3b). c2_poll(): fetch the c2_url (NVS) over HTTPS and run the returned Berry script;
- * returns the post-run intent (caller actions it). Refuses a non-https c2_url. poll_period (NVS, 0=off)
- * is the keep-awake poll cadence. Config setters persist to NVS. */
-cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran);
+ * returns the post-run intent (caller actions it). Refuses a non-https c2_url. Config setters persist
+ * to NVS.
+ * wait_s > 0 (Design 16): long-poll — append &wait=<wait_s> so the backend holds the connection until
+ * a command lands or the budget elapses, and use a read timeout of wait_s + margin. wait_s == 0: a
+ * plain single poll (the battery field path). */
+cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran, uint32_t wait_s);
 uint32_t     c2_poll_period(void);
 bool         c2_set_url(const char *url);
 bool         c2_set_period(uint32_t secs);
+
+/* True when the USB keep-awake loop should C2 long-poll: the operator switch is on (c2_period > 0),
+ * the device is bonded, AND a c2_url is set. Gates the long-poll so an unconfigured device ticks
+ * instead of spinning on c2_poll's immediate skip-return. */
+bool         c2_keepawake_active(void);
 
 /* C2 long-term identity + session: bonding (the ECDSA keypair) lives in c2key.h; the re-key handshake
  * + session HOTP poll are internal to cmd.c. The legacy bc-composite auth (c2_compute_auth /

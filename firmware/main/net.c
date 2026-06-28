@@ -695,7 +695,7 @@ static esp_err_t c2_evt(esp_http_client_event_t *e)
 }
 
 bool net_http_c2(const char *url, uint8_t *buf, size_t cap, size_t *outlen,
-                 char *seq_out, size_t seq_cap)
+                 char *seq_out, size_t seq_cap, int timeout_ms)
 {
     if (outlen) *outlen = 0;
     if (seq_out && seq_cap) seq_out[0] = '\0';
@@ -712,7 +712,7 @@ bool net_http_c2(const char *url, uint8_t *buf, size_t cap, size_t *outlen,
         .url = url,
         .event_handler = c2_evt,
         .user_data = &ctx,
-        .timeout_ms = 15000,
+        .timeout_ms = timeout_ms > 0 ? timeout_ms : 15000,   /* long-poll passes wait+margin; 0 = default */
         .crt_bundle_attach = esp_crt_bundle_attach,   /* https verified against the root bundle */
         .buffer_size = 2048,
     };

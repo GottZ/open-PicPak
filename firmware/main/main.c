@@ -44,10 +44,12 @@
 #include "render_script.h"  /* RENDER_BE: embedded Berry render script (generated from render.be) */
 #include "policy_script.h"  /* POLICY_BE: embedded Berry net-phase script (generated from policy.be) */
 
-#define DEFAULT_WAKE_S 3600   /* 1 h, if the server delivers no header */
+/* DEFAULT_WAKE_S (battery wake fallback) now lives in config.h (shared with cfg_wake_s / console). */
 #define RETRY_WAKE_S   300    /* on WiFi/download error or missing config */
 #define BTN_GPIO       2      /* button, active-low (RE-verified, wakeup-capable) */
 #define KEEPALIVE_POLL_MS 100  /* USB/button poll interval in keep-awake mode */
+#define C2_LONGPOLL_S     25   /* keep-awake C2 long-poll hold budget (matches the backend cap); the
+                                * loop checks USB/button after each poll return -> <=this much latency */
 #define ALWAYS_AWAKE 0         /* field build: deep-sleep between cycles. Set to 1 for a
                                   bench/test build that never sleeps (USB stays reachable;
                                   keep-awake is SOF-dependent and proved unreliable). */
@@ -322,8 +324,17 @@ static uint32_t run_cycle_inner(const picpak_cfg_t *cfg, bool keep_online)
 
     led_on();   /* transfer done -> solid during render + EPD refresh */
 
+    uint32_t field_override = 0;   /* a C2 SLEEP intent overrides this cycle's wake interval */
     if (!keep_online) {
         if (connected) {
+            /* Field path (battery): one C2 poll per wake while WLAN is up, BEFORE the
+             * brownout-decoupling RF-off -> the device reconnects to the backend each cycle. A single
+             * poll (no long-poll hold): on battery the device deep-sleeps between wakes, so there is no
+             * connection to hold. c2_poll self-skips when C2 is unconfigured/unbonded. */
+            uint32_t c2_sl = 0;
+            cmd_intent_t c2in = c2_poll(&c2_sl, NULL, 0);
+            if (c2in == CMD_INTENT_REBOOT) esp_restart();           /* never returns */
+            if (c2in == CMD_INTENT_SLEEP && c2_sl) field_override = c2_sl;
             /* RF off BEFORE the EPD charge-pump peak (brownout decoupling), then settle so the
              * supply recovers between the WiFi peak and the EPD peak. */
             net_wifi_stop();
@@ -343,9 +354,10 @@ static uint32_t run_cycle_inner(const picpak_cfg_t *cfg, bool keep_online)
         }
         /* unchanged content: WLAN stays associated, panel untouched */
     }
-    /* TODO(config-pull): the next wake interval should come from the Berry config script
-     * (fetched per wake) / server, replacing this fixed default. */
-    return DEFAULT_WAKE_S;
+    /* Next wake from NVS (Design 16: resolves the interval half of TODO(config-pull) — SETWAKE / NVS
+     * picpak/wake_s, default DEFAULT_WAKE_S); a C2 SLEEP intent overrides it for this cycle. Pulling
+     * the rest of the schedule from the Berry config script stays a later wave. */
+    return field_override ? field_override : cfg_wake_s(DEFAULT_WAKE_S);
 }
 
 /* Keep the USB pad ON during run_cycle (1). The pad-detach was the OLD work-around for
@@ -408,33 +420,33 @@ static uint32_t run_keep_awake(const picpak_cfg_t *cfg, uint32_t wake_s)
     /* button is already configured with its ISR in button_isr_init() (early in app_main);
      * do NOT re-run configure_button() here — it would disable the interrupt. */
     while (usb_host_active()) {
-        bool by_button = false;
-        uint32_t c2_period = c2_poll_period();   /* NVS; 0 = C2 poll disabled (default) */
-        uint32_t c2_acc = 0;
-        for (uint32_t waited = 0; waited < wake_s * 1000UL; waited += KEEPALIVE_POLL_MS) {
-            vTaskDelay(pdMS_TO_TICKS(KEEPALIVE_POLL_MS));
-            /* Fast per-poll check, but confirm a disconnect over a window before sleeping
-             * -> a transient SOF gap (WiFi/EPD burst) no longer drops us into deep sleep. */
+        bool by_button = false, by_c2_refresh = false;
+        /* The field run_cycle(false) stopped the WLAN; bring it back up so the C2 long-poll can run. */
+        if (c2_keepawake_active() && !net_is_connected()) cycle_connect(cfg);
+        int64_t t0 = esp_timer_get_time();
+        while (esp_timer_get_time() - t0 < (int64_t)wake_s * 1000000LL) {
+            /* C2 long-poll (Design 16): the backend holds the connection until a command for this
+             * device lands or the budget elapses -> near-instant delivery, ~0 idle requests. Blocks up
+             * to ~C2_LONGPOLL_S. c2_poll persists any ack BEFORE returning the intent, so actioning a
+             * reboot here can't loop. When C2 is off/unbonded/disconnected we idle-tick instead. */
+            if (c2_keepawake_active() && net_is_connected()) {
+                uint32_t c2_sl = 0;
+                cmd_intent_t in = c2_poll(&c2_sl, NULL, C2_LONGPOLL_S);
+                if (in == CMD_INTENT_REBOOT) esp_restart();           /* never returns */
+                if (in == CMD_INTENT_SLEEP)  return c2_sl ? c2_sl : wake_s;
+                if (in == CMD_INTENT_REFRESH) { by_c2_refresh = true; break; }  /* -> run_cycle below */
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(KEEPALIVE_POLL_MS));
+            }
+            /* Confirm a disconnect over a window before sleeping -> a transient SOF gap (WiFi/EPD
+             * burst) no longer drops us into deep sleep. Checked after each poll return: a held
+             * long-poll delays this by at most one budget, acceptable on USB power. */
             if (!usb_serial_jtag_is_connected() && !usb_host_active()) {
                 ESP_LOGI(TAG, "USB host gone (windowed confirm) -> switching to deep sleep (%lus)",
                          (unsigned long)wake_s);
                 return wake_s;
             }
             if (button_pressed()) { by_button = true; break; }
-            /* C2 poll (Wave 3b): on cadence, while the WLAN is held up (1b.3), fetch + run the C2
-             * Berry script. c2_poll persists any ack BEFORE returning the intent, so actioning a
-             * reboot here can't loop. */
-            if (c2_period && net_is_connected()) {
-                c2_acc += KEEPALIVE_POLL_MS;
-                if (c2_acc >= c2_period * 1000UL) {
-                    c2_acc = 0;
-                    uint32_t c2_sl = 0;
-                    cmd_intent_t in = c2_poll(&c2_sl, NULL);
-                    if (in == CMD_INTENT_REBOOT) esp_restart();           /* never returns */
-                    if (in == CMD_INTENT_SLEEP)  return c2_sl ? c2_sl : wake_s;
-                    if (in == CMD_INTENT_REFRESH) break;                  /* -> run_cycle below */
-                }
-            }
         }
         if (by_button) {
             /* Single press = immediate refresh. A TRIPLE press is handled
@@ -444,7 +456,7 @@ static uint32_t run_keep_awake(const picpak_cfg_t *cfg, uint32_t wake_s)
             vTaskDelay(pdMS_TO_TICKS(800));                          /* let a possible triple complete */
             while (button_pressed()) vTaskDelay(pdMS_TO_TICKS(20));  /* debounce release */
         } else {
-            ESP_LOGI(TAG, "keep-awake: periodic refresh");
+            ESP_LOGI(TAG, "keep-awake: %s", by_c2_refresh ? "C2 refresh intent" : "periodic refresh");
         }
         wake_s = run_cycle(cfg, true);   /* USB data host present -> HOLD WLAN across cycles (Wave 1b.3) */
         led_on();   /* awake: stop blinking after run_cycle (also on failure) */

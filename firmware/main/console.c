@@ -117,6 +117,7 @@ static void cmd_info(uint32_t boot_count)
     printf("pass       : %s\r\n", cfg.pass[0] ? "(set)" : "(empty)");
     printf("multi-wifi : %s\r\n", wifi_store_has_entries() ? "configured" : "(empty)");
     printf("url        : %s\r\n", cfg.url[0] ? cfg.url : "(empty)");
+    printf("wake_s     : %lus\r\n", (unsigned long)cfg_wake_s(DEFAULT_WAKE_S));
     if (!have && cfg.url[0] && wifi_store_has_entries()) have = true;
     printf("config     : %s\r\n", have ? "complete" : "INCOMPLETE (wifi+url required)");
 }
@@ -184,6 +185,18 @@ static int handle(char *line, uint32_t boot_count)
         } else {
             esp_err_t e = cfg_set_url(rest);
             if (e == ESP_OK) printf("OK   URL saved (%s)\r\n", rest);
+            else printf("ERR  NVS write error %d\r\n", (int)e);
+        }
+    } else if (strcasecmp(cmd, "SETWAKE") == 0) {
+        /* Battery deep-sleep reconnect interval (seconds), NVS picpak/wake_s. Empty = show current. */
+        if (rest[0] == '\0') {
+            uint32_t w = cfg_wake_s(0);
+            if (w) printf("wake interval = %lus (battery reconnect cadence)\r\n", (unsigned long)w);
+            else   printf("wake interval = unset -> compile default\r\n");
+        } else {
+            uint32_t s = (uint32_t)strtoul(rest, NULL, 10);
+            esp_err_t e = cfg_set_wake_s(s);
+            if (e == ESP_OK) printf("OK   wake interval = %lus\r\n", (unsigned long)s);
             else printf("ERR  NVS write error %d\r\n", (int)e);
         }
     } else if (strcasecmp(cmd, "NVSSET") == 0) {

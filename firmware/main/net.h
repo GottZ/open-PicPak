@@ -49,9 +49,12 @@ bool net_http_get(const char *url, uint8_t *buf, size_t cap, size_t *outlen);
  * seq the device acks once it applies the served script). Returns true on HTTP 200 (script body in
  * buf, *outlen set, seq_out = the header value) AND on 204 (in sync: *outlen = 0, seq_out = ""). The
  * caller tells the two apart by *outlen. URL validated like net_http_get; false on a bad URL, any
- * other status, an over-cap response, or a transport error. */
+ * other status, an over-cap response, or a transport error.
+ * timeout_ms is the socket read timeout: a long-poll (?wait=N) passes N*1000 + margin so the held
+ * connection is not torn down before the backend's wait budget elapses; a plain poll passes 0 for the
+ * default. */
 bool net_http_c2(const char *url, uint8_t *buf, size_t cap, size_t *outlen,
-                 char *seq_out, size_t seq_cap);
+                 char *seq_out, size_t seq_cap, int timeout_ms);
 
 /* POST body (bodylen bytes) to url with the given Content-Type. Returns the HTTP status code, or -1
  * on a transport/setup error. No response body is captured (the C2 re-key handshake only needs the

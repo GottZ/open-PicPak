@@ -75,6 +75,28 @@ esp_err_t cfg_set_url(const char *url)
     return e;
 }
 
+uint32_t cfg_wake_s(uint32_t fallback)
+{
+    nvs_handle_t h;
+    uint32_t v = 0;
+    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_u32(h, "wake_s", &v) != ESP_OK) v = 0;
+        nvs_close(h);
+    }
+    return v ? v : fallback;   /* 0 / unset -> caller's compile-time default */
+}
+
+esp_err_t cfg_set_wake_s(uint32_t secs)
+{
+    nvs_handle_t h;
+    esp_err_t e = nvs_open(NS, NVS_READWRITE, &h);
+    if (e != ESP_OK) return e;
+    e = nvs_set_u32(h, "wake_s", secs);
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    return e;
+}
+
 bool cfg_is_verified(void)        { return get_flag("verified"); }
 void cfg_set_verified(bool v)     { set_flag("verified", v); }
 bool cfg_force_setup(void)        { return get_flag("fsetup"); }

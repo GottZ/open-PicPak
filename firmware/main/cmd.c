@@ -277,7 +277,19 @@ static bool c2_rekey(const char *base, const char *sn, uint8_t secret_out[20])
     return true;
 }
 
-cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran)
+bool c2_keepawake_active(void)
+{
+    if (c2_poll_period() == 0) return false;   /* operator switch: C2 PERIOD 0 = off */
+    if (!c2_key_present()) return false;       /* not bonded -> nothing to poll */
+    nvs_handle_t h; size_t l = 0; bool has_url = false;
+    if (nvs_open(C2_NS, NVS_READONLY, &h) == ESP_OK) {
+        has_url = (nvs_get_str(h, "c2_url", NULL, &l) == ESP_OK && l > 1);
+        nvs_close(h);
+    }
+    return has_url;
+}
+
+cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran, uint32_t wait_s)
 {
     if (ran) *ran = false;
     if (sleep_s) *sleep_s = 0;
@@ -331,18 +343,24 @@ cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran)
     }
     uint32_t cc = ++s_c2sess.counter;
     uint32_t otp = auth_hotp(s_c2sess.secret, sizeof s_c2sess.secret, cc, 8);
+    /* wait_s > 0 -> long-poll: the backend holds the connection until a command for this device lands
+     * or its wait budget elapses (Design 16). Give the socket a read timeout of wait_s + margin so the
+     * held connection outlives the server budget; a plain poll (wait_s == 0) uses the default. */
     int n = snprintf(url, sizeof url, "%s?sn=%s&ack=%lu&c=%lu&otp=%lu",
                      base, sn, (unsigned long)ack, (unsigned long)cc, (unsigned long)otp);
+    if (n > 0 && n < (int)sizeof url && wait_s > 0)
+        n += snprintf(url + n, sizeof url - n, "&wait=%lu", (unsigned long)wait_s);
     if (n <= 0 || n >= (int)sizeof url) {
         ESP_LOGW(TAG, "C2 poll: URL build overflow (%d)", n);
         return CMD_INTENT_NONE;
     }
+    int timeout_ms = wait_s > 0 ? (int)(wait_s + 8) * 1000 : 0;   /* 0 -> net_http_c2 default (15s) */
 
     uint8_t *buf = malloc(C2_RESP_MAX);
     if (!buf) return CMD_INTENT_NONE;
     size_t len = 0;
     char seq[16];
-    bool ok = net_http_c2(url, buf, C2_RESP_MAX - 1, &len, seq, sizeof seq);   /* https verified via crt_bundle */
+    bool ok = net_http_c2(url, buf, C2_RESP_MAX - 1, &len, seq, sizeof seq, timeout_ms);   /* https via crt_bundle */
     cmd_intent_t in = CMD_INTENT_NONE;
     if (ok && len > 0) {
         buf[len] = '\0';                       /* NUL-terminate for be_loadstring */
