@@ -1,15 +1,17 @@
 package main
 
 // C2 auth re-key handshake (Doc 15): establishes a per-session HOTP secret authenticated by the
-// device's long-term Ed25519 key. The backend holds ONLY the public key, so a DB breach cannot forge
-// a device. Flow:
-//   GET  /<token>/c2/challenge?sn=X            -> {"nonce": hex}   (single-use, short TTL)
-//   POST /<token>/c2/rekey?sn=X  {nonce,secret,sig}  -> 204        (sig over the nonce + secret hash)
+// device's long-term ECDSA P-256 key. The backend holds ONLY the public key, so a DB breach cannot
+// forge a device. (P-256, not Ed25519: Ed25519 is not implemented in ESP-IDF mbedTLS; ECDSA P-256 is.)
+// Flow:
+//   GET  /<token>/c2/challenge?sn=X                 -> {"nonce": hex}   (single-use, short TTL)
+//   POST /<token>/c2/rekey?sn=X  {nonce,secret,sig} -> 204             (ECDSA sig over sha256(msg))
 // The signed message is domain-separated and binds sn + nonce + sha256(secret), so a captured
 // signature cannot be replayed (nonce single-use) nor lifted to a different device/secret.
 
 import (
-	"crypto/ed25519"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -20,14 +22,31 @@ import (
 )
 
 const (
-	nonceLen = 16
-	nonceTTL = 60 * time.Second
+	nonceLen   = 16
+	nonceTTL   = 60 * time.Second
+	pubkeyLen  = 65 // uncompressed P-256 point: 0x04 || X(32) || Y(32)
+	secretSize = 20
 )
 
-// rekeyMsg is the exact byte string both sides sign/verify. The firmware must construct it identically.
+// rekeyMsg is the exact byte string both sides hash+sign/verify. The firmware must build it identically.
 func rekeyMsg(sn, nonceHex string, secret []byte) []byte {
 	h := sha256.Sum256(secret)
 	return []byte("c2rekey\n" + sn + "\n" + nonceHex + "\n" + hex.EncodeToString(h[:]))
+}
+
+// verifyRekeySig checks an ECDSA P-256 (ASN.1 DER) signature over sha256(rekeyMsg). pub is the raw
+// 65-byte uncompressed point. elliptic.Unmarshal rejects an off-curve / malformed point (nil x).
+func verifyRekeySig(pub []byte, sn, nonceHex string, secret, sig []byte) bool {
+	if len(pub) != pubkeyLen || pub[0] != 0x04 {
+		return false
+	}
+	x, y := elliptic.Unmarshal(elliptic.P256(), pub) //nolint:staticcheck // raw point in; ecdh has no ecdsa.Verify path
+	if x == nil {
+		return false
+	}
+	pk := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+	h := sha256.Sum256(rekeyMsg(sn, nonceHex, secret))
+	return ecdsa.VerifyASN1(pk, h[:], sig)
 }
 
 func (s *server) handleC2Challenge(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +64,7 @@ func (s *server) handleC2Challenge(w http.ResponseWriter, r *http.Request) {
 	// return a nonce in every case so the response shape is identical -> no device-existence oracle.
 	_, _ = s.pool.Exec(r.Context(),
 		`INSERT INTO c2_nonce (serial, nonce, issued_at)
-		 SELECT $1, $2, now() FROM device_auth WHERE serial = $1 AND ed25519_pubkey IS NOT NULL
+		 SELECT $1, $2, now() FROM device_auth WHERE serial = $1 AND ecdsa_pubkey IS NOT NULL
 		 ON CONFLICT (serial) DO UPDATE SET nonce = EXCLUDED.nonce, issued_at = now()`,
 		sn, nonce)
 	w.Header().Set("Content-Type", "application/json")
@@ -83,18 +102,17 @@ func (s *server) handleC2Rekey(w http.ResponseWriter, r *http.Request) {
 	var issued time.Time
 	// COALESCE keeps issued non-NULL when there is no pending nonce row (storedNonce stays nil -> reject).
 	qErr := tx.QueryRow(ctx,
-		`SELECT a.ed25519_pubkey, n.nonce, COALESCE(n.issued_at, 'epoch'::timestamptz)
+		`SELECT a.ecdsa_pubkey, n.nonce, COALESCE(n.issued_at, 'epoch'::timestamptz)
 		   FROM device_auth a LEFT JOIN c2_nonce n ON n.serial = a.serial
 		  WHERE a.serial = $1 FOR UPDATE OF a`,
 		sn).Scan(&pk, &storedNonce, &issued)
 
 	// Constant-shape failure: any problem -> a plain 401, no detail (no existence/replay oracle).
 	ok := qErr == nil && e1 == nil && e2 == nil && e3 == nil &&
-		pk != nil && len(pk) == ed25519.PublicKeySize &&
-		len(secret) == 20 && storedNonce != nil &&
+		pk != nil && len(secret) == secretSize && storedNonce != nil &&
 		subtle.ConstantTimeCompare(nonce, storedNonce) == 1 &&
 		time.Since(issued) < nonceTTL &&
-		ed25519.Verify(pk, rekeyMsg(sn, body.Nonce, secret), sig)
+		verifyRekeySig(pk, sn, body.Nonce, secret, sig)
 	if !ok {
 		http.Error(w, "", http.StatusUnauthorized)
 		return
