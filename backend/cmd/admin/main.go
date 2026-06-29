@@ -66,10 +66,15 @@ func runServer() {
 	// terminates at the reverse proxy, as with ingest.
 	addr := env("ADMIN_ADDR", "127.0.0.1:8081")
 
+	dh := deviceHandlers{pool: pool}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	// whoami is auth-gated (any valid key) — identity + capability, the SPA's read-only-vs-admin probe.
 	mux.Handle("GET /api/whoami", adminhttp.Auth(pool)(http.HandlerFunc(whoami)))
+	// device registry: reads are auth-gated (any key); register mutates → requireAdmin.
+	mux.Handle("GET /api/devices", adminhttp.Auth(pool)(http.HandlerFunc(dh.list)))
+	mux.Handle("GET /api/devices/{serial}", adminhttp.Auth(pool)(http.HandlerFunc(dh.get)))
+	mux.Handle("POST /api/devices", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(dh.register))))
 
 	handler := adminhttp.WithRequestID(mux)
 	log.Printf("admin listening on %s", addr)
