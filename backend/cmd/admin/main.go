@@ -67,14 +67,20 @@ func runServer() {
 	addr := env("ADMIN_ADDR", "127.0.0.1:8081")
 
 	dh := deviceHandlers{pool: pool}
+	ch := commandHandlers{pool: pool}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	// whoami is auth-gated (any valid key) — identity + capability, the SPA's read-only-vs-admin probe.
 	mux.Handle("GET /api/whoami", adminhttp.Auth(pool)(http.HandlerFunc(whoami)))
-	// device registry: reads are auth-gated (any key); register mutates → requireAdmin.
+	// device registry: reads are auth-gated (any key); mutations → requireAdmin.
 	mux.Handle("GET /api/devices", adminhttp.Auth(pool)(http.HandlerFunc(dh.list)))
 	mux.Handle("GET /api/devices/{serial}", adminhttp.Auth(pool)(http.HandlerFunc(dh.get)))
 	mux.Handle("POST /api/devices", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(dh.register))))
+	mux.Handle("PATCH /api/devices/{serial}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(dh.patch))))
+	mux.Handle("DELETE /api/devices/{serial}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(dh.delete))))
+	// command enqueue (RCE-capable) → requireAdmin, attributed to the operator key.
+	mux.Handle("POST /api/command", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(ch.enqueue))))
+	mux.Handle("POST /api/devices/{serial}/command", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(ch.enqueue))))
 
 	handler := adminhttp.WithRequestID(mux)
 	log.Printf("admin listening on %s", addr)

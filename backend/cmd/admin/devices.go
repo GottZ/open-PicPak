@@ -76,3 +76,49 @@ func (h deviceHandlers) register(w http.ResponseWriter, r *http.Request) {
 	}
 	adminhttp.WriteOK(w, r, map[string]any{"serial": body.Serial, "action": action})
 }
+
+// patch — PATCH /api/devices/{serial} (admin): update label and/or channel. Omitted fields preserve
+// the stored value (T11).
+func (h deviceHandlers) patch(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Label   *string `json:"label"`
+		Channel *string `json:"channel"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		adminhttp.WriteErr(w, r, http.StatusBadRequest, "bad_request", "malformed JSON body")
+		return
+	}
+	if body.Label == nil && body.Channel == nil {
+		adminhttp.WriteErr(w, r, http.StatusUnprocessableEntity, "nothing_to_update", "provide label and/or channel")
+		return
+	}
+	d, found, err := devicestore.Patch(r.Context(), h.pool, r.PathValue("serial"), body.Label, body.Channel)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			adminhttp.WriteErr(w, r, http.StatusUnprocessableEntity, "unknown_channel", "channel does not exist")
+			return
+		}
+		adminhttp.WriteErr(w, r, http.StatusInternalServerError, "internal", "patch failed")
+		return
+	}
+	if !found {
+		adminhttp.WriteErr(w, r, http.StatusNotFound, "not_found", "no such device")
+		return
+	}
+	adminhttp.WriteOK(w, r, map[string]any{"device": d})
+}
+
+// delete — DELETE /api/devices/{serial} (admin): the multi-table delete tx (D17.8).
+func (h deviceHandlers) delete(w http.ResponseWriter, r *http.Request) {
+	found, err := devicestore.Delete(r.Context(), h.pool, r.PathValue("serial"))
+	if err != nil {
+		adminhttp.WriteErr(w, r, http.StatusInternalServerError, "internal", "delete failed")
+		return
+	}
+	if !found {
+		adminhttp.WriteErr(w, r, http.StatusNotFound, "not_found", "no such device")
+		return
+	}
+	adminhttp.WriteOK(w, r, map[string]any{"serial": r.PathValue("serial"), "deleted": true})
+}

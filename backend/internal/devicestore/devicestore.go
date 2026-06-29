@@ -164,3 +164,44 @@ func Get(ctx context.Context, pool *pgxpool.Pool, serial string) (Detail, bool, 
 	}
 	return d, true, nil
 }
+
+// Patch updates label and/or channel; a nil argument preserves the stored value (T11). Returns the
+// refreshed read model, or found=false if the serial is unknown.
+func Patch(ctx context.Context, pool *pgxpool.Pool, serial string, label, channel *string) (Detail, bool, error) {
+	tag, err := pool.Exec(ctx,
+		`UPDATE devices SET channel = COALESCE($2, channel), label = COALESCE($3, label) WHERE serial = $1`,
+		serial, channel, label)
+	if err != nil {
+		return Detail{}, false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Detail{}, false, nil
+	}
+	return Get(ctx, pool, serial)
+}
+
+// Delete removes a device and everything keyed to it, in one tx (D17.8). CASCADE clears device_auth,
+// the C2 cursor, the log fragments and the nonce; command_queue and rollout_targets have no FK and are
+// cleared explicitly. Returns found=false if the serial does not exist (nothing is committed). Later
+// waves extend this tx (flag-gated telemetry+logs, FaaS render tables) — masterplan K2.
+func Delete(ctx context.Context, pool *pgxpool.Pool, serial string) (bool, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
+	if _, err := tx.Exec(ctx, `DELETE FROM command_queue WHERE serial = $1`, serial); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM rollout_targets WHERE serial = $1`, serial); err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM devices WHERE serial = $1`, serial)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil // unknown serial — the deferred rollback discards the no-op deletes
+	}
+	return true, tx.Commit(ctx)
+}
