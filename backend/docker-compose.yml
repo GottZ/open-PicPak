@@ -102,6 +102,32 @@ services:
     networks: [internal]
     restart: unless-stopped
 
+  # A17: operator control plane (bearer-authenticated CRUD + RCE-capable command enqueue). Runs in a
+  # SEPARATE process and address space from the public ingest binary — the privileged write path must
+  # never sit in the public parser. Built from the same Dockerfile via --build-arg CMD=admin.
+  admin:
+    build:
+      context: .
+      args:
+        CMD: admin
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-picpak}
+      POSTGRES_USER: ${POSTGRES_USER:-picpak}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGHOST: timescaledb:5432
+      ADMIN_ADDR: ":8081"                       # listen on all container interfaces; host publishes loopback only
+    ports:
+      # loopback ONLY — the operator plane is privileged (RCE-capable enqueue). NEVER INGEST_BIND,
+      # never a public IP. Reach it over the host loopback or a VPN; TLS terminates at the proxy.
+      - "127.0.0.1:8081:8081"
+    networks: [internal]
+    restart: unless-stopped
+
 volumes:
   tsdata:
   grafanadata:
