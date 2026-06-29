@@ -22,7 +22,7 @@ services:
       retries: 20
     networks: [internal]
 
-  # one-shot: applies all forward migrations (0001..0003) in order against the healthy DB, then
+  # one-shot: applies all forward migrations (0001..0007) in order against the healthy DB, then
   # exits 0. Each migration is idempotent (IF NOT EXISTS) -> safe to re-run; psql applies the -f
   # files in order. ON_ERROR_STOP makes any failure a non-zero exit.
   migrate:
@@ -48,6 +48,14 @@ services:
       - /migrations/0002_device_auth_digits_default.up.sql
       - "-f"
       - /migrations/0003_command_queue.up.sql
+      - "-f"
+      - /migrations/0004_c2_session.up.sql
+      - "-f"
+      - /migrations/0005_c2_cutover.up.sql
+      - "-f"
+      - /migrations/0006_c2_longpoll_notify.up.sql
+      - "-f"
+      - /migrations/0007_operator_keys.up.sql
     volumes:
       - ./migrations:/migrations:ro
     networks: [internal]
