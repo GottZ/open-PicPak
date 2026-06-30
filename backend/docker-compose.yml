@@ -97,6 +97,16 @@ services:
       PGHOST: timescaledb:5432
       INGEST_TOKEN: ${INGEST_TOKEN:?set INGEST_TOKEN in .env}
       LISTEN_ADDR: ":8080"
+      # A20 OTA serving — default-OFF (D20.11): flip OTA_SERVE_ENABLED only after the field FW is
+      # measured on-device to read X-Firmware-Version + replay X-Firmware-Ticket on the binary GET.
+      # An empty / <32 B OTA_TICKET_KEY 503-disables the binary serve (D20.9). Blobs are read-only
+      # here (admin owns the writes), the data-layer meeting point alongside the DB (§4.7).
+      FW_BLOB_DIR: /fwblobs
+      OTA_SERVE_ENABLED: ${OTA_SERVE_ENABLED:-false}
+      OTA_TICKET_KEY: ${OTA_TICKET_KEY:-}
+      OTA_TICKET_TTL: ${OTA_TICKET_TTL:-120s}
+    volumes:
+      - fwblobs:/fwblobs:ro
     ports:
       # Host bind address via INGEST_BIND (.env, gitignored) so a real IP never lands in the repo.
       # Default localhost (dev); set INGEST_BIND to a specific public IP to expose, or front with TLS.
@@ -124,6 +134,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       PGHOST: timescaledb:5432
       ADMIN_ADDR: ":8081"                       # listen on all container interfaces; host publishes loopback only
+      FW_BLOB_DIR: /fwblobs                     # A20: firmware register writes the blob here (:ro in ingest)
+    volumes:
+      - fwblobs:/fwblobs:rw
     ports:
       # loopback ONLY — the operator plane is privileged (RCE-capable enqueue). NEVER INGEST_BIND,
       # never a public IP. Reach it over the host loopback or a VPN; TLS terminates at the proxy.
@@ -134,6 +147,7 @@ services:
 volumes:
   tsdata:
   grafanadata:
+  fwblobs:                                      # firmware blobs: admin writes (:rw), ingest serves (:ro)
 
 networks:
   internal:
