@@ -4,3 +4,10 @@
 /data/
 /ingest
 *.log
+
+# Frontend (A19): the bun toolchain output. Rule order matters — exclude the
+# build output but keep the committed .gitkeep that satisfies //go:embed all:dist
+# (D19.3), so a checkout with no bun build still compiles.
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep

@@ -23,6 +23,7 @@ import (
 	"github.com/open-picpak/backend/internal/adminhttp"
 	"github.com/open-picpak/backend/internal/sealbox"
 	"github.com/open-picpak/backend/internal/secrets"
+	"github.com/open-picpak/backend/web"
 )
 
 func main() {
@@ -114,6 +115,13 @@ func runServer() {
 	mux.Handle("GET /api/secrets", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.list))))
 	mux.Handle("GET /api/secrets/{name}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.get))))
 	mux.Handle("DELETE /api/secrets/{name}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.del))))
+
+	// SPA catch-all (D19.1): the embedded Svelte admin UI on "/". Registered LAST —
+	// stdlib ServeMux longest-pattern precedence keeps every "/api/..." and "/healthz"
+	// route ahead of "/", so a wrong-method hit on a known API path stays its own 4xx,
+	// not the SPA. A binary built without the bun frontend stage serves a 503 hint here
+	// while all /api routes stay functional (D19.3).
+	mux.Handle("/", web.Handler())
 
 	handler := adminhttp.WithRequestID(mux)
 	log.Printf("admin listening on %s", addr)
