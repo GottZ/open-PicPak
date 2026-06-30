@@ -117,6 +117,11 @@ func runServer() {
 	mux.Handle("GET /api/secrets/{name}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.get))))
 	mux.Handle("DELETE /api/secrets/{name}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.del))))
 
+	// OTA serving/rollout management (A20): firmware register (admin, blob re-hash), channel default,
+	// rollout CRUD, and the authoritative GET /api/resolve. Reads auth-gated, mutations requireAdmin.
+	// FW_BLOB_DIR is mounted :rw here (register writes), :ro in ingest (serve streams) — §4.7.
+	registerOTARoutes(mux, pool, env("FW_BLOB_DIR", "/fwblobs"))
+
 	// SSE scaffold (D19.7): live roster/telemetry/log stream. auth-gated (any valid
 	// key, O1) — the generic events mirror the GET read routes. A feature channel
 	// that pushes admin-only data must additionally re-auth on is_admin (§4.5 hook).
