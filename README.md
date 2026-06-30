@@ -140,9 +140,11 @@ A full suite, built clean:
       disk in the public image and the service fails closed without it). It serves an embedded
       **operator web UI** — a Svelte 5 SPA (`//go:embed`, one binary, no CORS): key login, a live device
       roster over server-sent events, and read-only degradation for non-admin keys. The **log viewer**
-      (keyset-paged history, a live SSE tail, gap/suspect markers, and gapless stream reconstruct) ships
-      now; the remaining feature pages — OTA rollout, telemetry dashboard, Berry editor, FaaS editor,
-      Web-USB onboarding — mount into this shell in later waves.
+      (keyset-paged history, a live SSE tail, gap/suspect markers, and gapless stream reconstruct) and the
+      **telemetry dashboard** (per-device health verdicts, running version / battery / last-seen, a live
+      SSE telemetry tail, and light sparklines — Grafana stays for deep time-series) ship now; the
+      remaining feature pages — OTA rollout, Berry editor, FaaS editor, Web-USB onboarding — mount into
+      this shell in later waves.
 - [x] [`tools/`](tools/) — host-side tooling: the **picpak-ops** operator TUI
       (build / flash / console / OTA / telemetry / logs) and the air-gap gate
 
