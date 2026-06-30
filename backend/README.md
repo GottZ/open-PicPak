@@ -61,8 +61,9 @@ GET  /<INGEST_TOKEN>/c2?sn=<serial>&ack=<applied_seq>&c=<counter>&otp=<hotp>[&wa
 
 A second binary, built from `Dockerfile.admin` and run as its own compose service — a **process and
 address space separate from the public `ingest` parser**, so the privileged write path never sits in the
-binary the internet reaches. Bound to host loopback / VPN only (TLS terminates at a tunnel or proxy);
-never published.
+binary the internet reaches. Bind it to host loopback / VPN by default (reach it over an SSH tunnel);
+if you must expose it, put a reverse proxy with SSO / forward-auth in front, so the SSO gate sits ahead
+of the SPA's own bearer-key auth (defense in depth). It is never published naked.
 
 - **Bearer auth.** Operator keys live in `operator_keys` (sha256 of the token; the plaintext is shown
   once at mint and never stored). A soft-revoke (`disabled_at`) authenticates as if absent. Routes split
