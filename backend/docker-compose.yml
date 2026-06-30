@@ -63,6 +63,17 @@ services:
     networks: [internal]
     restart: "no"
 
+  # one-shot: a fresh named volume is created root-owned (0:0, 0755), but ingest/admin run as 65534
+  # (nobody) — without this the admin firmware register cannot write the blob. chown the volume to
+  # 65534 before the writers start; idempotent + fast on restart. A20 §4.7.
+  fwblobs-init:
+    image: alpine:3
+    command: ["chown", "-R", "65534:65534", "/fwblobs"]
+    volumes:
+      - fwblobs:/fwblobs
+    networks: [internal]
+    restart: "no"
+
   grafana:
     image: grafana/grafana:11.3.0
     depends_on:
@@ -89,6 +100,8 @@ services:
       timescaledb:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      fwblobs-init:
         condition: service_completed_successfully
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-picpak}
@@ -127,6 +140,8 @@ services:
       timescaledb:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      fwblobs-init:
         condition: service_completed_successfully
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-picpak}
