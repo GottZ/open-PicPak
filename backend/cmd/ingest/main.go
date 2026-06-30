@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/open-picpak/backend/internal/otaticket"
 )
 
 // expectedKeys mirror the legacy sink contract: a request is real telemetry only if the token
@@ -29,6 +31,13 @@ type server struct {
 	pool     *pgxpool.Pool
 	token    string      // legacy secret path segment; "" disables the legacy route
 	notifier *c2Notifier // C2 long-poll wakeup hub (Design 16)
+
+	// OTA serving (A20). otaServeEnabled gates the whole binary serve (default-off, D20.11); otaKey
+	// must be >=32 B to arm it (D20.9). All policy=data — env, never a code constant.
+	otaServeEnabled bool
+	otaKey          string
+	otaTTL          time.Duration
+	fwBlobDir       string
 }
 
 func main() {
@@ -42,6 +51,13 @@ func main() {
 	addr := env("LISTEN_ADDR", ":8080")
 	token := os.Getenv("INGEST_TOKEN") // legacy path token; keep out of code (air-gap)
 
+	// OTA serving config (A20) — policy=data, env only. Default-off (D20.11); weak/empty key 503-
+	// disables the binary serve at request time (D20.9). FW_BLOB_DIR is the read-only blob mount (§4.7).
+	otaServeEnabled := os.Getenv("OTA_SERVE_ENABLED") == "true"
+	otaKey := os.Getenv("OTA_TICKET_KEY")
+	otaTTL := otaTicketTTL()
+	fwBlobDir := env("FW_BLOB_DIR", "/fwblobs")
+
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -53,7 +69,8 @@ func main() {
 		log.Fatalf("db unreachable: %v", err)
 	}
 
-	s := &server{pool: pool, token: token, notifier: newC2Notifier()}
+	s := &server{pool: pool, token: token, notifier: newC2Notifier(),
+		otaServeEnabled: otaServeEnabled, otaKey: otaKey, otaTTL: otaTTL, fwBlobDir: fwBlobDir}
 	// One LISTEN connection feeds the C2 long-poll wakeup hub for the whole fleet (Design 16).
 	go s.notifier.listenLoop(ctx, pool)
 
@@ -61,7 +78,8 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/", s.handle)
 
-	log.Printf("ingest listening on %s (legacy token route %s)", addr, routeState(token))
+	log.Printf("ingest listening on %s (legacy token route %s, OTA serve %s)",
+		addr, routeState(token), otaServeState(otaServeEnabled, otaKey))
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	log.Fatal(srv.ListenAndServe())
 }
@@ -87,6 +105,8 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		s.handleC2Challenge(w, r) // Doc 15 re-key handshake
 	case parts[1] == "c2" && sub == "rekey" && r.Method == http.MethodPost:
 		s.handleC2Rekey(w, r)
+	case parts[1] == "firmware.bin" && sub == "" && r.Method == http.MethodGet:
+		s.handleFirmware(w, r) // A20 OTA binary serve — gated default-off + ticket (D20.11/D20.9/D20.8)
 	default:
 		http.NotFound(w, r)
 	}
@@ -110,6 +130,7 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusInternalServerError) // FW retries next wake
 		return
 	}
+	s.injectOTASignal(r.Context(), w, serial) // OTA signal, fail-open (D20.8) — after commit, before body
 	_, _ = w.Write([]byte("ok"))
 }
 
@@ -253,6 +274,31 @@ func routeState(token string) string {
 		return "DISABLED"
 	}
 	return "enabled"
+}
+
+// otaServeState describes the firmware.bin serve posture for the boot log (D20.9/D20.11): off by
+// default, explicitly flagged when serving is on but the key is too weak to sign with.
+func otaServeState(enabled bool, key string) string {
+	switch {
+	case !enabled:
+		return "DISABLED (default-off)"
+	case !otaticket.KeyStrong(key):
+		return "DISABLED (ticket key absent/weak)" // D20.9
+	default:
+		return "enabled"
+	}
+}
+
+// otaTicketTTL parses OTA_TICKET_TTL (a Go duration, e.g. "120s"); default 120s (§4.5) — long enough
+// for /pp→compare→firmware.bin, short enough to bound replay.
+func otaTicketTTL() time.Duration {
+	if v := os.Getenv("OTA_TICKET_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+		log.Printf("OTA_TICKET_TTL %q invalid, using 120s", v)
+	}
+	return 120 * time.Second
 }
 
 func pingWithRetry(ctx context.Context, pool *pgxpool.Pool, tries int, wait time.Duration) error {
