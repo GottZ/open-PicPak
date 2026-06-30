@@ -5,8 +5,10 @@ Self-hostable telemetry / OTA / log backend for the open-picpak fleet. Go servic
 ad-hoc plotting scripts.
 
 > **Status:** TimescaleDB + Grafana scaffold, schema migration, legacy telemetry ingest, and the
-> **C2 command channel** (per-device Berry command queue + per-device HOTP auth). OTA-signal piggyback,
-> firmware.bin serving, and log reassembly land in later waves.
+> **C2 command channel** (per-device Berry command queue + per-device HOTP auth), plus a
+> bearer-authenticated **operator control plane** (`cmd/admin`: admin API, encrypted secrets KV, and an
+> embedded Svelte operator web UI). OTA-signal piggyback, firmware.bin serving, and log reassembly land
+> in later waves.
 
 ## Quick start (local / dev)
 
@@ -51,8 +53,35 @@ GET  /<INGEST_TOKEN>/c2?sn=<serial>&ack=<applied_seq>&c=<counter>&otp=<hotp>[&wa
   process-wide `LISTEN` connection that fans out in-process to every waiter — or the budget elapses
   (→ 204). Absent/`wait<=0` returns 204 immediately (the battery field poll, no connection hold). One
   DB connection signals the whole fleet.
-- **Enqueue (operator):** insert into `command_queue (serial, script[, note])` — v1 is a SQL/CLI step;
-  a dedicated admin route lands later.
+- **Enqueue (operator):** `POST /api/command` (or per device, `POST /api/devices/{serial}/command`) on
+  the operator control plane below; the enqueue is attributed to the operator key. A direct SQL insert
+  into `command_queue (serial, script[, note])` still works for break-glass.
+
+## Operator control plane (`cmd/admin`)
+
+A second binary, built from `Dockerfile.admin` and run as its own compose service — a **process and
+address space separate from the public `ingest` parser**, so the privileged write path never sits in the
+binary the internet reaches. Bound to host loopback / VPN only (TLS terminates at a tunnel or proxy);
+never published.
+
+- **Bearer auth.** Operator keys live in `operator_keys` (sha256 of the token; the plaintext is shown
+  once at mint and never stored). A soft-revoke (`disabled_at`) authenticates as if absent. Routes split
+  `auth` (any valid key — reads) vs `requireAdmin` (mutations); `GET /api/whoami` reports
+  `{key_id, is_admin, label}`. Keys are minted/listed/revoked out-of-band:
+  `admin create-operator -label <name> [-admin]`.
+- **Encrypted secrets KV.** `PUT/GET/DELETE /api/secrets/{name}` over an AES-256-GCM sealed store; the
+  value is never echoed back. The master key (`SECRETS_KEY`, 32 bytes hex) is injected only into the
+  admin container, lives in a root-only file outside `.env`, and the service **fails closed** without it.
+  Break-glass decrypt is an out-of-band subcommand, not an HTTP route. Back up the key with the host —
+  key loss is total loss.
+- **Live events.** `GET /api/events` is a server-sent-events stream (device-roster snapshot + deltas
+  now; telemetry/log payloads in later waves) with a periodic re-auth that tears the stream down within
+  ~60 s of a key revocation.
+- **Operator web UI.** A Svelte 5 SPA embedded via `//go:embed` (one binary, no second container, no
+  CORS): key login, a live device roster, and read-only degradation for non-admin keys. A checkout
+  without the bun toolchain still builds — the Go binary serves a 503 hint while every `/api` route stays
+  functional. Feature pages (OTA, logs, telemetry, Berry, FaaS, Web-USB onboarding) mount into the shell
+  in later waves. Source + build: `backend/web/` (`bun install && bun run build`).
 
 ## Schema migration
 

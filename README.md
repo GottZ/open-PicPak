@@ -14,7 +14,7 @@ Everything is developed in public.
 |---|---|
 | `documentation/` | **published** |
 | `firmware/` | **in progress** — networked run-cycle + recovery guard + Berry render/config engine + HOTP-authed C2 command channel |
-| `backend/` | **in progress** — TimescaleDB + Grafana + telemetry/OTA/log schema + ingest + HOTP-authed C2 command channel |
+| `backend/` | **in progress** — TimescaleDB + Grafana + telemetry/OTA/log schema + ingest + HOTP-authed C2 command channel, plus a bearer-authenticated **operator control plane** (admin API, encrypted secrets KV, embedded Svelte operator web UI) |
 | `tools/` | **started** — picpak-ops operator TUI + air-gap gate (on-device validation pending) |
 | `web-usb/` | not public yet |
 
@@ -129,6 +129,14 @@ A full suite, built clean:
 - [x] [`backend/`](backend/) — self-hostable Docker backend: TimescaleDB + Grafana + the
       telemetry/OTA/log schema + legacy ingest, and the **C2 command channel** (per-device Berry
       command queue + per-device HOTP auth)
+- [x] **operator control plane** (in [`backend/`](backend/)) — a bearer-authenticated admin API in a
+      process and address space **separate from the public ingest parser**: device CRUD + RCE-capable
+      command enqueue, and an **encrypted secrets KV** (AES-256-GCM sealed; the master key is never on
+      disk in the public image and the service fails closed without it). It serves an embedded
+      **operator web UI** — a Svelte 5 SPA (`//go:embed`, one binary, no CORS): key login, a live device
+      roster over server-sent events, and read-only degradation for non-admin keys. The feature pages —
+      OTA rollout, log viewer, telemetry dashboard, Berry editor, FaaS editor, Web-USB onboarding —
+      mount into this shell in later waves.
 - [x] [`tools/`](tools/) — host-side tooling: the **picpak-ops** operator TUI
       (build / flash / console / OTA / telemetry / logs) and the air-gap gate
 
