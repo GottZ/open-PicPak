@@ -142,9 +142,13 @@ A full suite, built clean:
       roster over server-sent events, and read-only degradation for non-admin keys. The **log viewer**
       (keyset-paged history, a live SSE tail, gap/suspect markers, and gapless stream reconstruct) and the
       **telemetry dashboard** (per-device health verdicts, running version / battery / last-seen, a live
-      SSE telemetry tail, and light sparklines — Grafana stays for deep time-series) ship now; the
-      remaining feature pages — OTA rollout, Berry editor, FaaS editor, Web-USB onboarding — mount into
-      this shell in later waves.
+      SSE telemetry tail, and light sparklines — Grafana stays for deep time-series) ship now, as does the
+      **Berry command editor** — a capability-aware CodeMirror editor over the on-device C2 safe subset
+      (autocomplete + client-side lint that flags the render/policy-phase and severing calls, single-device
+      or typed-`'*'`-confirmed fleet enqueue, and an honest cursor-advance feedback model: *delivered +
+      attempted*, never *succeeded*, with a deep-link to the device log for the real outcome). The
+      remaining feature pages — OTA rollout, FaaS editor, Web-USB onboarding — mount into this shell in
+      later waves.
 - [x] [`tools/`](tools/) — host-side tooling: the **picpak-ops** operator TUI
       (build / flash / console / OTA / telemetry / logs) and the air-gap gate
 
