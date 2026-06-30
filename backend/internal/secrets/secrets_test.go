@@ -214,9 +214,12 @@ func TestSweep_PrevKeyReseal(t *testing.T) {
 
 	// rotation window: current=B, prev=A
 	boxAB := testBox(t, keyB, keyA)
-	n, err := Sweep(ctx, pool, boxAB)
+	n, stranded, err := Sweep(ctx, pool, boxAB)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
+	}
+	if len(stranded) != 0 {
+		t.Errorf("stranded %v, want none", stranded)
 	}
 	if n != 1 {
 		t.Errorf("re-sealed %d, want 1", n)
@@ -237,7 +240,7 @@ func TestSweep_PrevKeyReseal(t *testing.T) {
 	}
 
 	// second sweep: nothing left under prev
-	n2, err := Sweep(ctx, pool, boxAB)
+	n2, _, err := Sweep(ctx, pool, boxAB)
 	if err != nil {
 		t.Fatalf("sweep2: %v", err)
 	}
@@ -253,8 +256,66 @@ func TestSweep_NoPrevIsNoop(t *testing.T) {
 	if _, err := PutSecret(ctx, pool, b, "x", []byte("v")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	n, err := Sweep(ctx, pool, b)
-	if err != nil || n != 0 {
-		t.Errorf("no-prev sweep: n=%d err=%v, want 0/nil", n, err)
+	n, stranded, err := Sweep(ctx, pool, b)
+	if err != nil || n != 0 || stranded != nil {
+		t.Errorf("no-prev sweep: n=%d stranded=%v err=%v, want 0/nil/nil", n, stranded, err)
+	}
+}
+
+// GAP-M3 partial-failure: one bad row (openable under NEITHER key) is stranded and reported, but the
+// sweep still re-seals the good rows — a single fault never strands the rest (resumability).
+func TestSweep_PartialFailureStrandsBadRowOnly(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	boxA := testBox(t, keyA, "")
+	if _, err := PutSecret(ctx, pool, boxA, "good", []byte("good value")); err != nil {
+		t.Fatalf("put good: %v", err)
+	}
+	// a "bad" row sealed under key C — unopenable under either current(B) or prev(A)
+	boxC := testBox(t, "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2", "")
+	if _, err := PutSecret(ctx, pool, boxC, "bad", []byte("orphaned")); err != nil {
+		t.Fatalf("put bad: %v", err)
+	}
+
+	boxAB := testBox(t, keyB, keyA)
+	n, stranded, err := Sweep(ctx, pool, boxAB)
+	if err == nil {
+		t.Error("sweep with a stranded row returned nil err")
+	}
+	if n != 1 {
+		t.Errorf("re-sealed %d, want 1 (the good row)", n)
+	}
+	if len(stranded) != 1 || stranded[0] != "bad" {
+		t.Errorf("stranded = %v, want [bad]", stranded)
+	}
+	// the good row survived the partial failure and now opens under current alone
+	boxB := testBox(t, keyB, "")
+	if got, err := ResolveSecret(ctx, pool, boxB, "good"); err != nil || string(got) != "good value" {
+		t.Errorf("good row after partial sweep = %q, %v", got, err)
+	}
+}
+
+// GAP-M3 brick gate: rotate A->B without sweeping, then rotate B->C dropping A. The never-swept
+// A-row opens under neither current(C) nor prev(B): the sweep strands it instead of silently leaving
+// an unrecoverable row — the completion signal that the operator must NOT have dropped A yet.
+func TestSweep_DoubleRotateBeforeSweepIsCaught(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	boxA := testBox(t, keyA, "")
+	if _, err := PutSecret(ctx, pool, boxA, "early", []byte("sealed under A")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	// second rotation B->C started before the A->B sweep ran: prev is now B, A is gone
+	keyC := "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+	boxCB := testBox(t, keyC, keyB)
+	n, stranded, err := Sweep(ctx, pool, boxCB)
+	if err == nil {
+		t.Error("double-rotate brick not reported as error")
+	}
+	if n != 0 {
+		t.Errorf("re-sealed %d, want 0", n)
+	}
+	if len(stranded) != 1 || stranded[0] != "early" {
+		t.Errorf("stranded = %v, want [early] (the bricked row)", stranded)
 	}
 }

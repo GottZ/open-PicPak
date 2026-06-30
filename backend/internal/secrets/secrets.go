@@ -13,6 +13,7 @@ package secrets
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"time"
 
@@ -132,51 +133,71 @@ func ResolveSecret(ctx context.Context, q Querier, b *sealbox.Box, name string) 
 // Sweep is the rotation step: with a prev key loaded, it opens every secret (current → prev fallback)
 // and re-seals the prev-key rows under the current key with a fresh nonce, bumping key_version. It is
 // a no-op without a prev key, and runs boot-only (never in a request path — no re-seal-on-read race).
-// A hard Open failure aborts and is returned with the count re-sealed so far.
-func Sweep(ctx context.Context, q Querier, b *sealbox.Box) (reSealed int, err error) {
+//
+// GAP-M3 contracts:
+//   - Partial-failure / resumability: a per-row fault (opens under NEITHER key, or its re-seal write
+//     fails) is collected into `stranded` and the sweep CONTINUES — one bad row never strands the
+//     rest, and a re-run resumes cleanly. `err` is non-nil iff `stranded` is non-empty.
+//   - Completion gate: a non-empty `stranded` is the brick signal — the caller MUST keep
+//     SECRETS_KEY_PREV (those rows would be unrecoverable once prev drops).
+//   - Optimistic concurrency: the re-seal UPDATE only fires while the row still holds the ciphertext
+//     we opened, so a concurrent PUT-rotate is never clobbered.
+func Sweep(ctx context.Context, q Querier, b *sealbox.Box) (reSealed int, stranded []string, err error) {
 	if !b.HasPrev() {
-		return 0, nil
+		return 0, nil, nil
 	}
 	// Gather first: a single pgx connection cannot Exec mid-iteration of its own Query.
 	type row struct {
-		name        string
-		ct, nonce   []byte
+		name      string
+		ct, nonce []byte
 	}
 	var all []row
 	rows, err := q.Query(ctx, `SELECT name, ciphertext, nonce FROM secrets`)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	for rows.Next() {
 		var r row
 		if err := rows.Scan(&r.name, &r.ct, &r.nonce); err != nil {
 			rows.Close()
-			return 0, err
+			return 0, nil, err
 		}
 		all = append(all, r)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	for _, r := range all {
 		plaintext, usedPrev, oerr := b.Open(r.name, r.nonce, r.ct)
 		if oerr != nil {
-			return reSealed, oerr // hard: a row that opens under NEITHER key is a real integrity fault
+			stranded = append(stranded, r.name) // unopenable under either key — needs attention, keep prev
+			continue
 		}
 		if !usedPrev {
 			continue // already under the current key
 		}
 		nn, nct, serr := b.Seal(r.name, plaintext)
 		if serr != nil {
-			return reSealed, serr
+			stranded = append(stranded, r.name)
+			continue
 		}
-		if _, eerr := q.Exec(ctx,
-			`UPDATE secrets SET ciphertext = $2, nonce = $3, key_version = key_version + 1 WHERE name = $1`,
-			r.name, nct, nn); eerr != nil {
-			return reSealed, eerr
+		tag, eerr := q.Exec(ctx,
+			`UPDATE secrets SET ciphertext = $2, nonce = $3, key_version = key_version + 1
+			   WHERE name = $1 AND ciphertext = $4`,
+			r.name, nct, nn, r.ct)
+		if eerr != nil {
+			stranded = append(stranded, r.name)
+			continue
 		}
-		reSealed++
+		if tag.RowsAffected() == 1 {
+			reSealed++
+		}
+		// RowsAffected()==0 ⇒ a concurrent PUT already rewrote the row under the current key; its value
+		// is current, not stranded — leave it.
 	}
-	return reSealed, nil
+	if len(stranded) > 0 {
+		err = fmt.Errorf("sweep: %d secret(s) could not be re-sealed: %v", len(stranded), stranded)
+	}
+	return reSealed, stranded, err
 }

@@ -70,6 +70,14 @@ func runOperatorCLI(cmd string, args []string) int {
 }
 
 func createOperator(ctx context.Context, pool *pgxpool.Pool, label string, isAdmin bool) int {
+	// COH2: the minted bearer is shown once and must never land in a captured non-TTY stdout that
+	// Docker/journald persists as plaintext-at-rest. Refuse BEFORE minting/inserting so a non-TTY run
+	// leaves no orphan key whose token nobody ever saw — run it attached to an interactive terminal.
+	if !stdoutIsTTY() {
+		fmt.Fprintln(os.Stderr, "create-operator: refusing to print a bearer token to a non-TTY stdout "+
+			"(it would persist in container logs); run it attached to an interactive terminal")
+		return 3
+	}
 	token, hash := newOperatorToken()
 	var id int64
 	if err := pool.QueryRow(ctx,

@@ -22,6 +22,7 @@ import (
 
 	"github.com/open-picpak/backend/internal/adminhttp"
 	"github.com/open-picpak/backend/internal/sealbox"
+	"github.com/open-picpak/backend/internal/secrets"
 )
 
 func main() {
@@ -29,6 +30,8 @@ func main() {
 		switch os.Args[1] {
 		case "create-operator", "list-operators", "disable-operator":
 			os.Exit(runOperatorCLI(os.Args[1], os.Args[2:]))
+		case "-secret-decrypt", "secret-decrypt":
+			os.Exit(runSecretDecrypt(os.Stdin, os.Stdout, os.Stderr, stdoutIsTTY()))
 		}
 	}
 	runServer()
@@ -59,9 +62,10 @@ func runServer() {
 	// SEC-M3: the operator plane must hold a valid master key or refuse to boot — fail-closed,
 	// symmetric to the public ingest token gate. Checked before the DB connect so a missing/short/
 	// invalid SECRETS_KEY is a deterministic boot failure (not masked by a DB error), and so an admin
-	// without a usable key never serves even the device routes. The Box is wired into the secret
-	// routes in a later wave; here we only enforce its presence.
-	if _, err := sealbox.FromEnv(); err != nil {
+	// without a usable key never serves even the device routes. The Box is the master key for the
+	// secret routes and the boot rotation sweep.
+	box, err := sealbox.FromEnv()
+	if err != nil {
 		log.Fatalf("secrets: %v", err)
 	}
 
@@ -71,6 +75,18 @@ func runServer() {
 		log.Fatalf("db: %v", err)
 	}
 	defer pool.Close()
+
+	// GAP-M3: boot-only rotation sweep. With SECRETS_KEY_PREV set, re-seal prev-key rows under the
+	// current key. A stranded row is a brick signal — the service still comes up to serve the rest,
+	// but SECRETS_KEY_PREV must stay set until the warning clears (never drop prev while rows remain).
+	if box.HasPrev() {
+		reSealed, stranded, serr := secrets.Sweep(ctx, pool, box)
+		log.Printf("secrets: rotation sweep re-sealed %d row(s)", reSealed)
+		if serr != nil {
+			log.Printf("secrets: ROTATION INCOMPLETE — keep SECRETS_KEY_PREV set; %d secret(s) not re-sealed: %v",
+				len(stranded), stranded)
+		}
+	}
 
 	// Operator zone binds to loopback/VPN by default — NEVER the public ingest interface. TLS
 	// terminates at the reverse proxy, as with ingest.
@@ -91,6 +107,13 @@ func runServer() {
 	// command enqueue (RCE-capable) → requireAdmin, attributed to the operator key.
 	mux.Handle("POST /api/command", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(ch.enqueue))))
 	mux.Handle("POST /api/devices/{serial}/command", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(ch.enqueue))))
+	// secrets KV (write-only; value never echoed) → requireAdmin. The break-glass decrypt path is the
+	// out-of-band `admin -secret-decrypt` subcommand, not an HTTP route.
+	sh := secretHandlers{pool: pool, box: box}
+	mux.Handle("PUT /api/secrets/{name}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.put))))
+	mux.Handle("GET /api/secrets", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.list))))
+	mux.Handle("GET /api/secrets/{name}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.get))))
+	mux.Handle("DELETE /api/secrets/{name}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.del))))
 
 	handler := adminhttp.WithRequestID(mux)
 	log.Printf("admin listening on %s", addr)
