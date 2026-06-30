@@ -1,44 +1,82 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { Resource } from '../../lib/resource.svelte'
   import { apiFetch } from '../../lib/api'
+  import { EventsClient, type RosterDelta } from '../../lib/events.svelte'
   import type { Device, DevicesResponse } from '../../lib/api/types'
 
   // SCAFFOLD (design 19 §4.4): Doc 22 replaces this with the telemetry dashboard.
-  // Its sole purpose is to prove the shell end-to-end — whoami → authed GET →
-  // render. W4 wires the `devices` SSE delta onto this same roster (snapshot +
-  // diff); for now it is a one-shot GET /api/devices.
+  // The shell's end-to-end liveness proof — whoami → authed GET → render → SSE
+  // delta. `devices` is the single source: the initial GET paints it, then the
+  // SSE snapshot (authoritative) + deltas keep it live (D19.7).
+  let devices = $state<Device[]>([])
   const roster = new Resource<DevicesResponse>(() => apiFetch<DevicesResponse>('/api/devices'))
 
-  onMount(() => void roster.load())
+  let events = $state<EventsClient | null>(null)
+  const live = $derived(events?.status ?? 'idle')
+
+  function applyDelta(d: RosterDelta): void {
+    if (d.op === 'remove') {
+      devices = devices.filter((x) => x.serial !== d.device.serial)
+      return
+    }
+    const i = devices.findIndex((x) => x.serial === d.device.serial)
+    if (i >= 0) {
+      devices[i] = d.device
+    } else {
+      devices = [...devices, d.device].sort((a, b) => a.serial.localeCompare(b.serial))
+    }
+  }
+
+  onMount(() => {
+    void roster.load().then(() => {
+      // SSE snapshot becomes authoritative once it lands; the GET is the first paint.
+      if (roster.data) devices = roster.data.devices
+    })
+    events = new EventsClient({
+      onSnapshot: (s) => {
+        devices = [...s.devices].sort((a, b) => a.serial.localeCompare(b.serial))
+      },
+      onDevices: applyDelta,
+    })
+    void events.connect()
+  })
+
+  onDestroy(() => events?.close())
 
   function seenLabel(d: Device): string {
     return d.last_seen ? new Date(d.last_seen).toLocaleString() : '—'
   }
+
+  const showTable = $derived(devices.length > 0)
+  const showLoading = $derived(!showTable && (roster.status === 'loading' || roster.status === 'idle'))
+  const showError = $derived(!showTable && roster.status === 'error')
+  const showEmpty = $derived(!showTable && roster.status === 'ready')
 </script>
 
 <section class="fleet">
   <header>
     <h1>Fleet</h1>
+    <span class="live live-{live}" title="live event stream">{live}</span>
     <button onclick={roster.reload} disabled={roster.status === 'loading'}>refresh</button>
   </header>
 
-  {#if roster.status === 'loading' || roster.status === 'idle'}
+  {#if showLoading}
     <p class="muted" aria-busy="true">loading roster…</p>
-  {:else if roster.status === 'error'}
+  {:else if showError}
     <div class="error" role="alert">
       <p>{roster.error?.message}</p>
       {#if roster.error?.requestId}<p class="muted">request {roster.error.requestId}</p>{/if}
     </div>
-  {:else if roster.data && roster.data.devices.length === 0}
+  {:else if showEmpty}
     <p class="muted">No devices registered yet.</p>
-  {:else if roster.data}
+  {:else if showTable}
     <table>
       <thead>
         <tr><th>Serial</th><th>Label</th><th>Channel</th><th>Last seen</th><th>Bond</th></tr>
       </thead>
       <tbody>
-        {#each roster.data.devices as d (d.serial)}
+        {#each devices as d (d.serial)}
           <tr>
             <td class="mono">{d.serial}</td>
             <td>{d.label ?? '—'}</td>
@@ -64,7 +102,7 @@
   header {
     display: flex;
     align-items: baseline;
-    justify-content: space-between;
+    gap: 0.75rem;
     border-bottom: 1px solid var(--border);
     padding-bottom: 0.5rem;
   }
@@ -72,6 +110,21 @@
     margin: 0;
     font-size: 1.35rem;
     font-weight: 600;
+    flex: 1;
+  }
+  .live {
+    font-family: monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+  .live-open {
+    color: var(--ok);
+  }
+  .live-error,
+  .live-connecting {
+    color: var(--warn);
   }
   table {
     border-collapse: collapse;

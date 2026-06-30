@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/open-picpak/backend/internal/adminhttp"
+	"github.com/open-picpak/backend/internal/operator"
 	"github.com/open-picpak/backend/internal/sealbox"
 	"github.com/open-picpak/backend/internal/secrets"
 	"github.com/open-picpak/backend/web"
@@ -116,6 +117,12 @@ func runServer() {
 	mux.Handle("GET /api/secrets/{name}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.get))))
 	mux.Handle("DELETE /api/secrets/{name}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.del))))
 
+	// SSE scaffold (D19.7): live roster/telemetry/log stream. auth-gated (any valid
+	// key, O1) — the generic events mirror the GET read routes. A feature channel
+	// that pushes admin-only data must additionally re-auth on is_admin (§4.5 hook).
+	eh := newEventsHandler(ctx, pool)
+	mux.Handle("GET /api/events", adminhttp.Auth(pool)(http.HandlerFunc(eh.handle)))
+
 	// SPA catch-all (D19.1): the embedded Svelte admin UI on "/". Registered LAST —
 	// stdlib ServeMux longest-pattern precedence keeps every "/api/..." and "/healthz"
 	// route ahead of "/", so a wrong-method hit on a known API path stays its own 4xx,
@@ -131,7 +138,14 @@ func runServer() {
 
 func whoami(w http.ResponseWriter, r *http.Request) {
 	op, _ := adminhttp.Operator(r.Context())
-	adminhttp.WriteOK(w, r, map[string]any{"key_id": op.KeyID, "is_admin": op.IsAdmin, "label": op.Label})
+	adminhttp.WriteOK(w, r, whoamiFields(op))
+}
+
+// whoamiFields is the GET /api/whoami payload (sans the envelope's success).
+// The field name is **is_admin** (snake_case) — the SPA's read-only badge
+// (design 19 D19.6) derives off it; a rename breaks T9, not silently the UI.
+func whoamiFields(op operator.AuthResult) map[string]any {
+	return map[string]any{"key_id": op.KeyID, "is_admin": op.IsAdmin, "label": op.Label}
 }
 
 func env(k, def string) string {
