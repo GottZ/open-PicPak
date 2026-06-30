@@ -56,6 +56,8 @@ services:
       - /migrations/0006_c2_longpoll_notify.up.sql
       - "-f"
       - /migrations/0007_operator_keys.up.sql
+      - "-f"
+      - /migrations/0008_secrets.up.sql
     volumes:
       - ./migrations:/migrations:ro
     networks: [internal]
