@@ -38,11 +38,11 @@ export const AREAS: AreaMeta[] = [
 
 /**
  * Lazy per area so each is its own chunk; the feature docs replace the
- * AreaPlaceholder slots with their real pages. `/fleet` ships the scaffold
- * roster now (the SSE/whoami liveness proof — Doc 22 replaces it).
+ * AreaPlaceholder slots with their real pages. `/fleet` ships the Doc 22
+ * telemetry dashboard (it replaced the Doc 19 scaffold roster).
  */
 export const areaRoutes = {
-  '/fleet': () => import('./fleet/FleetRoster.svelte'),
+  '/fleet': () => import('./fleet/FleetDashboard.svelte'),
   '/ota': () => import('./AreaPlaceholder.svelte'),
   '/logs': () => import('./logs/LogViewer.svelte'),
   '/berry': () => import('./AreaPlaceholder.svelte'),

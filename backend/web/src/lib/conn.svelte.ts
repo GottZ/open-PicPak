@@ -1,5 +1,5 @@
 // Shell-wide live-connection status (design 19 D19.14, K13). The active page's
-// EventsClient mirrors its SseClient status here (FleetRoster syncs it via a
+// EventsClient mirrors its SseClient status here (FleetDashboard syncs it via a
 // $effect); App.svelte renders ConnIndicator off it, so an operator always knows
 // when the live views are stale because the stream dropped. A22's "reconnecting
 // — live view paused" banner reuses THIS signal rather than inventing its own.
