@@ -30,3 +30,20 @@ func TestIngest_DoesNotLinkSecretMaterial(t *testing.T) {
 		}
 	}
 }
+
+// D22.1 — the telemetry READ package (internal/telemetry, cmd/admin-only) must not link into the public
+// ingest parser. ingest keeps its OWN write INSERT (main.go) and never imports the read side. This is
+// structural hygiene (the same go-toolchain-verified guard as T7), not the secret boundary — telemetry
+// carries no secret — but it keeps the read/write split honest at the linker.
+func TestIngest_DoesNotLinkTelemetryRead(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", ".").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list -deps: %v\n%s", err, out)
+	}
+	const banned = "github.com/open-picpak/backend/internal/telemetry"
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) == banned {
+			t.Errorf("cmd/ingest links %s — the telemetry read package must stay cmd/admin-only (D22.1)", banned)
+		}
+	}
+}

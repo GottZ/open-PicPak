@@ -35,6 +35,8 @@ func dbPool(t *testing.T) *pgxpool.Pool {
 	for _, stmt := range []string{
 		`TRUNCATE rollout_targets`,
 		`TRUNCATE command_queue`,
+		`TRUNCATE telemetry`,
+		`TRUNCATE logs`,
 		`UPDATE channels SET default_version = NULL`,
 		`DELETE FROM operator_keys`,
 		`DELETE FROM devices`,

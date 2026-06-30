@@ -75,6 +75,8 @@ func dbPool(t *testing.T) *pgxpool.Pool {
 	t.Cleanup(pool.Close)
 	for _, stmt := range []string{
 		`TRUNCATE rollout_targets`,
+		`TRUNCATE telemetry`,
+		`TRUNCATE logs`,
 		`UPDATE channels SET default_version = NULL`,
 		`DELETE FROM devices`,
 		`DELETE FROM firmware_versions`,
@@ -107,7 +109,7 @@ func TestDelete_CascadesRolloutTargets_DB(t *testing.T) {
 	mustExec(t, pool, `INSERT INTO rollout_targets (serial, channel, version, state)
 	                   VALUES ('dev1','stable','v1','active'), ('*','stable','v2','active')`)
 
-	found, err := Delete(ctx, pool, "dev1")
+	found, err := Delete(ctx, pool, "dev1", false)
 	if err != nil || !found {
 		t.Fatalf("delete dev1: found=%v err=%v", found, err)
 	}
@@ -131,5 +133,52 @@ func TestDelete_CascadesRolloutTargets_DB(t *testing.T) {
 	res, err := rollout.ResolveTarget(ctx, pool, "dev1")
 	if err != nil || res.Version != "v2" || res.Source != rollout.SourceFleet {
 		t.Errorf("re-registered resolve = %+v (err %v), want v2/fleet", res, err)
+	}
+}
+
+// T11 (D22.11/K2) — the device-delete telemetry+logs purge is FLAG-GATED, both directions. Flag ON → the
+// serial's telemetry AND logs rows are dropped in the same tx (both-or-neither); flag OFF (default) → the
+// rows SURVIVE (retention-managed), which is exactly the data-bleed window the flag exists to close.
+// Red: (a) an unconditional purge destroys rows a retention/forensics policy required to outlive the
+// delete; (b) flag-off lets a re-registered same serial inherit the old device's telemetry as its own.
+func TestDelete_TelemetryPurge_FlagGated_T11(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+
+	seed := func(serial string) {
+		mustExec(t, pool, `INSERT INTO devices (serial, channel) VALUES ($1,'stable')`, serial)
+		mustExec(t, pool, `INSERT INTO telemetry (time, serial, batt_pct) VALUES (now(),$1,50)`, serial)
+		mustExec(t, pool, `INSERT INTO logs (time, serial, payload) VALUES (now(),$1,'hello')`, serial)
+	}
+	count := func(table, serial string) int {
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE serial=$1`, serial).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		return n
+	}
+
+	// flag OFF (default): the time-series rows SURVIVE the delete.
+	seed("dev-keep")
+	if found, err := Delete(ctx, pool, "dev-keep", false); err != nil || !found {
+		t.Fatalf("delete dev-keep: found=%v err=%v", found, err)
+	}
+	if got := count("telemetry", "dev-keep"); got != 1 {
+		t.Errorf("flag-off: telemetry must survive the delete; got %d, want 1", got)
+	}
+	if got := count("logs", "dev-keep"); got != 1 {
+		t.Errorf("flag-off: logs must survive the delete; got %d, want 1", got)
+	}
+
+	// flag ON: the time-series rows are purged in the SAME tx as the control-plane delete.
+	seed("dev-purge")
+	if found, err := Delete(ctx, pool, "dev-purge", true); err != nil || !found {
+		t.Fatalf("delete dev-purge: found=%v err=%v", found, err)
+	}
+	if got := count("telemetry", "dev-purge"); got != 0 {
+		t.Errorf("flag-on: telemetry must be purged; got %d, want 0", got)
+	}
+	if got := count("logs", "dev-purge"); got != 0 {
+		t.Errorf("flag-on: logs must be purged; got %d, want 0", got)
 	}
 }

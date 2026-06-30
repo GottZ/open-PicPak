@@ -94,7 +94,7 @@ func runServer() {
 	// terminates at the reverse proxy, as with ingest.
 	addr := env("ADMIN_ADDR", "127.0.0.1:8081")
 
-	dh := deviceHandlers{pool: pool}
+	dh := deviceHandlers{pool: pool, purgeTelemetry: envBool("ADMIN_DELETE_PURGES_TELEMETRY", false)}
 	ch := commandHandlers{pool: pool}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
@@ -127,6 +127,12 @@ func runServer() {
 	// retention of its own, so it would grow unbounded from reassembly without this.
 	registerLogRoutes(mux, pool)
 	startFragmentPrune(ctx, pool)
+
+	// Telemetry dashboard read surface (A22): the enriched fleet list (the 22→17 seam — adds
+	// running_ver/batt/health), the per-device latest+history, and the non-secret SPA config (Grafana/
+	// webhook base URLs). All auth-gated (read-only key reaches them); the verdict thresholds + caps are
+	// ADMIN_TELEMETRY_* env (Policy=Data, D22.10).
+	registerTelemetryRoutes(mux, pool)
 
 	// SSE scaffold (D19.7): live roster/telemetry/log stream. auth-gated (any valid
 	// key, O1) — the generic events mirror the GET read routes. A feature channel

@@ -182,9 +182,17 @@ func Patch(ctx context.Context, pool *pgxpool.Pool, serial string, label, channe
 
 // Delete removes a device and everything keyed to it, in one tx (D17.8). CASCADE clears device_auth,
 // the C2 cursor, the log fragments and the nonce; command_queue and rollout_targets have no FK and are
-// cleared explicitly. Returns found=false if the serial does not exist (nothing is committed). Later
-// waves extend this tx (flag-gated telemetry+logs, FaaS render tables) — masterplan K2.
-func Delete(ctx context.Context, pool *pgxpool.Pool, serial string) (bool, error) {
+// cleared explicitly. Returns found=false if the serial does not exist (nothing is committed).
+//
+// purgeTimeSeries (the A22/A21 K2 seam, gated by ADMIN_DELETE_PURGES_TELEMETRY default-off) additionally
+// drops this serial's telemetry AND logs rows IN THE SAME TX — both-or-neither (D22.11). The hypertables
+// have no FK to devices and are retention-managed (telemetry 365 d, logs 90 d), so without this a
+// decommissioned/handed-off device's battery curves, boot history, src_ip and log lines otherwise linger
+// up to a year and BLEED into a re-registered same serial (D17.4 re-bond). Default-off because
+// immediate-purge-vs-retention is an operator data-lifecycle choice; opt-in for right-to-erasure. The
+// purge is plain SQL here in Doc 17's tx, NOT routed through Doc 22's read-only internal/telemetry — so
+// the 22→17 seam (Doc 17 telemetry-read-free) holds. Later waves extend this tx (FaaS render tables, K2).
+func Delete(ctx context.Context, pool *pgxpool.Pool, serial string, purgeTimeSeries bool) (bool, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -195,6 +203,15 @@ func Delete(ctx context.Context, pool *pgxpool.Pool, serial string) (bool, error
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM rollout_targets WHERE serial = $1`, serial); err != nil {
 		return false, err
+	}
+	if purgeTimeSeries {
+		// both-or-neither under the one flag: telemetry (D22.11, A22) + logs (A21's half, parked here).
+		if _, err := tx.Exec(ctx, `DELETE FROM telemetry WHERE serial = $1`, serial); err != nil {
+			return false, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM logs WHERE serial = $1`, serial); err != nil {
+			return false, err
+		}
 	}
 	tag, err := tx.Exec(ctx, `DELETE FROM devices WHERE serial = $1`, serial)
 	if err != nil {

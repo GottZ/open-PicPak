@@ -13,7 +13,13 @@ import (
 	"github.com/open-picpak/backend/internal/devicestore"
 )
 
-type deviceHandlers struct{ pool *pgxpool.Pool }
+// deviceHandlers serves the Doc 17 device registry. purgeTelemetry (env ADMIN_DELETE_PURGES_TELEMETRY,
+// default-off) is the A22 D22.11 seam: when set, a device delete also purges its telemetry+logs rows in
+// the same tx (both-or-neither). It is read here (not in internal/telemetry) so the 22→17 read-free seam holds.
+type deviceHandlers struct {
+	pool           *pgxpool.Pool
+	purgeTelemetry bool
+}
 
 // list — GET /api/devices (auth): identity + membership + bond state for the whole fleet.
 func (h deviceHandlers) list(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +117,7 @@ func (h deviceHandlers) patch(w http.ResponseWriter, r *http.Request) {
 
 // delete — DELETE /api/devices/{serial} (admin): the multi-table delete tx (D17.8).
 func (h deviceHandlers) delete(w http.ResponseWriter, r *http.Request) {
-	found, err := devicestore.Delete(r.Context(), h.pool, r.PathValue("serial"))
+	found, err := devicestore.Delete(r.Context(), h.pool, r.PathValue("serial"), h.purgeTelemetry)
 	if err != nil {
 		adminhttp.WriteErr(w, r, http.StatusInternalServerError, "internal", "delete failed")
 		return
