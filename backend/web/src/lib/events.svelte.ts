@@ -25,6 +25,8 @@ export interface EventHandlers {
   onTelemetry?: (data: unknown) => void
   /** New log row — payload owned by Doc 21. */
   onLog?: (data: unknown) => void
+  /** A device's C2 cursor advanced — payload owned by Doc 23 (the Berry feedback model). */
+  onC2Cursor?: (data: unknown) => void
 }
 
 /** Teardown seam — the SAME teardown the 401 interceptor runs (auth.svelte.ts). */
@@ -61,6 +63,9 @@ export function dispatchEvent(
       break
     case 'log':
       handlers.onLog?.(data)
+      break
+    case 'c2cursor':
+      handlers.onC2Cursor?.(data)
       break
     case 'error':
       teardown.close()

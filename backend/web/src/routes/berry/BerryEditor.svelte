@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { Resource } from '../../lib/resource.svelte'
   import { apiFetch, toApiError } from '../../lib/api'
   import StateView from '../../lib/StateView.svelte'
@@ -7,6 +7,15 @@
   import { session } from '../../lib/auth.svelte'
   import { notify } from '../../lib/toasts.svelte'
   import { mutationAffordance } from '../../lib/readonly'
+  import { EventsClient } from '../../lib/events.svelte'
+  import {
+    type RecentCommand,
+    type RecentResponse,
+    type CursorMap,
+    buildFeedback,
+    parseCursorEvent,
+    applyCursorEvent,
+  } from '../../lib/berry/feedback'
   import { createBerryEditor, type BerryEditorHandle } from '../../lib/berry/editor'
   import { lint, type Finding } from '../../lib/berry/lint'
   import {
@@ -56,6 +65,7 @@
   let findings = $state<Finding[]>([])
   let editorEl = $state<HTMLDivElement | null>(null)
   let handle: BerryEditorHandle | null = null
+  let events: EventsClient | null = null
 
   void caps.load().then(() => {
     if (caps.data) manifest = { capabilities: caps.data.capabilities, builtins: caps.data.builtins }
@@ -80,7 +90,10 @@
     })
   })
 
-  onDestroy(() => handle?.destroy())
+  onDestroy(() => {
+    handle?.destroy()
+    events?.close()
+  })
 
   const errorCount = $derived(findings.filter((f) => f.severity === 'error').length)
   const warnCount = $derived(findings.filter((f) => f.severity === 'warning').length)
@@ -125,12 +138,40 @@
         target.kind === 'fleet' ? `fleet (${fleetCount} device${fleetCount === 1 ? '' : 's'})` : target.serial
       notify.success(`enqueued seq ${res.seq} → ${where} (delivered on the device's next poll)`)
       typedArm = '' // disarm after a fleet broadcast so the next one re-confirms
+      void reloadRecent() // surface the new command in the feedback list (pending until the cursor crosses)
     } catch (e) {
       notify.error(toApiError(e))
     } finally {
       enqueuing = false
     }
   }
+
+  // ---- feedback (W4) — cursor-advance ack, told honestly (D23.4): "applied" = delivered + attempted,
+  // NEVER succeeded. Seed from the rehydration read (D23.9), then the c2cursor SSE carries live deltas. ----
+  let recentCommands = $state<RecentCommand[]>([])
+  let cursors = $state<CursorMap>({})
+
+  async function reloadRecent(): Promise<void> {
+    try {
+      const res = await apiFetch<RecentResponse>('/api/berry/commands/recent')
+      recentCommands = res.commands
+    } catch {
+      /* feedback is best-effort; a failed rehydration leaves the list empty, not an error page */
+    }
+  }
+
+  const feedback = $derived(buildFeedback(recentCommands, cursors))
+
+  onMount(() => {
+    void reloadRecent()
+    events = new EventsClient({
+      onC2Cursor: (data) => {
+        const ev = parseCursorEvent(data)
+        if (ev) cursors = applyCursorEvent(cursors, ev)
+      },
+    })
+    void events.connect()
+  })
 </script>
 
 <section class="berry">
@@ -266,6 +307,30 @@
           </aside>
         {/if}
       </div>
+
+      <section class="feedback">
+        <h2>feedback</h2>
+        <p class="muted">
+          Cursor-advance only. <strong>“applied” means delivered + attempted — not proof the script ran</strong>:
+          the device persists the ack even if the script faulted, and there is no device→server result
+          channel. The device log is the only place the real outcome may surface.
+        </p>
+        {#if feedback.length === 0}
+          <p class="muted">no recent commands.</p>
+        {:else}
+          <ul class="fb-list">
+            {#each feedback as f (f.seq)}
+              <li class="fb {f.state}">
+                <span class="seq">seq {f.seq}</span>
+                <span class="fb-serial mono">{f.serial}</span>
+                <span class="fb-label">{f.label}</span>
+                {#if f.note}<span class="fb-note">“{f.note}”</span>{/if}
+                {#if f.logSerial}<a class="loglink" href="/logs" title="filter the log view to {f.logSerial}">view device log ↗</a>{/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
     {/snippet}
   </StateView>
 </section>
@@ -464,6 +529,55 @@
   }
   .warn-inline {
     color: var(--warn, #d08770);
+    font-size: 0.8rem;
+  }
+  .feedback {
+    border-top: 1px solid var(--border);
+    padding-top: 0.75rem;
+  }
+  .feedback h2 {
+    margin: 0 0 0.25rem;
+    font-size: 1rem;
+  }
+  .fb-list {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .fb {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    border-left: 3px solid var(--border);
+    padding: 0.2rem 0.6rem;
+    font-size: 0.85rem;
+  }
+  .fb.applied {
+    border-left-color: var(--accent);
+  }
+  .fb.partial {
+    border-left-color: var(--warn, #d08770);
+  }
+  .fb.pending {
+    border-left-color: var(--fg-muted);
+  }
+  .fb .seq {
+    color: var(--fg-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .fb-serial {
+    font-weight: 600;
+  }
+  .fb-note {
+    color: var(--fg-muted);
+    font-style: italic;
+  }
+  .loglink {
+    color: var(--accent);
     font-size: 0.8rem;
   }
 </style>

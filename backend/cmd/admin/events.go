@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/open-picpak/backend/internal/adminhttp"
+	"github.com/open-picpak/backend/internal/commandstore"
 	"github.com/open-picpak/backend/internal/devicestore"
 	"github.com/open-picpak/backend/internal/logquery"
 	"github.com/open-picpak/backend/internal/operator"
@@ -156,6 +157,7 @@ type sseHub struct {
 	authenticate func(ctx context.Context, token string) (operator.AuthResult, bool, error)
 	logs         func(ctx context.Context, hw logquery.HighWater) ([]logquery.TailEvent, logquery.HighWater, error)
 	telemetry    func(ctx context.Context, hw telemetry.Watermark) ([]telemetry.Event, telemetry.Watermark, error)
+	cursor       func(ctx context.Context) ([]commandstore.Cursor, error)
 
 	mu      sync.Mutex
 	subs    map[*sseSub]struct{}
@@ -256,6 +258,7 @@ func (h *sseHub) runLoop() {
 	lastSent := map[string]devicestore.Row{}
 	var logHW logquery.HighWater
 	var telemetryHW telemetry.Watermark
+	cursorState := map[string]int64{}
 	for {
 		select {
 		case <-h.life.Done():
@@ -267,6 +270,7 @@ func (h *sseHub) runLoop() {
 			lastSent = h.tickRoster(lastSent)
 			logHW = h.tickLogs(logHW)
 			telemetryHW = h.tickTelemetry(telemetryHW)
+			cursorState = h.tickC2Cursor(cursorState)
 		}
 	}
 }
@@ -332,6 +336,55 @@ func (h *sseHub) tickTelemetry(hw telemetry.Watermark) telemetry.Watermark {
 		h.broadcastJSON("telemetry", e) // hub frame-builder json.Marshal's it — frame integrity (COH9/Q6)
 	}
 	return nhw
+}
+
+// c2CursorEvent is the `c2cursor` payload (Design 23 §4.5 / D23.7): one device's C2 ack position. The
+// editor's feedback model resolves a pending command to "applied (delivered + attempted)" when a device's
+// applied_seq crosses the enqueued seq — never "succeeded" (D23.4). last_poll_at is display-only.
+type c2CursorEvent struct {
+	Serial     string     `json:"serial"`
+	AppliedSeq int64      `json:"applied_seq"`
+	LastPollAt *time.Time `json:"last_poll_at"`
+}
+
+// diffCursors computes the c2cursor deltas: one event per serial whose applied_seq CHANGED since the last
+// snapshot (D23.7). last_poll_at advances on every poll but is NEVER a delta trigger (T9) — a poll that
+// only bumps last_poll_at yields nothing, exactly the discipline diffRoster applies to last_seen. The
+// first tick (last empty) re-emits every current cursor like the roster producer: the deltas are
+// idempotent (applied_seq for a serial), so a cursor that advanced between the editor's rehydration read
+// and this first tick is delivered, not swallowed — pending never gets stuck. Pure → unit-testable.
+func diffCursors(last map[string]int64, cur []commandstore.Cursor) ([]c2CursorEvent, map[string]int64) {
+	next := make(map[string]int64, len(cur))
+	var out []c2CursorEvent
+	for _, c := range cur {
+		next[c.Serial] = c.AppliedSeq
+		if prev, ok := last[c.Serial]; !ok || prev != c.AppliedSeq {
+			out = append(out, c2CursorEvent{Serial: c.Serial, AppliedSeq: c.AppliedSeq, LastPollAt: c.LastPollAt})
+		}
+	}
+	return out, next
+}
+
+// tickC2Cursor runs the C2-cursor poll-and-diff once (D23.7) and broadcasts one `c2cursor` event per
+// device whose applied_seq moved; returns the new per-serial state (unchanged on a poll error, or when no
+// producer is wired). No NOTIFY, no migration — the same poll-and-diff shape as the roster producer (a
+// device_c2_cursor UPDATE-NOTIFY is a later scale optimization, §8 O3).
+func (h *sseHub) tickC2Cursor(last map[string]int64) map[string]int64 {
+	if h.cursor == nil {
+		return last
+	}
+	opCtx, cancel := context.WithTimeout(h.life, 10*time.Second)
+	cursors, err := h.cursor(opCtx)
+	cancel()
+	if err != nil {
+		log.Printf("sse: c2 cursor poll failed: %v", err)
+		return last
+	}
+	events, next := diffCursors(last, cursors)
+	for _, e := range events {
+		h.broadcastJSON("c2cursor", e) // hub frame-builder json.Marshal's it — frame integrity (Q6)
+	}
+	return next
 }
 
 // diffRoster computes the roster deltas between the last-sent state and the
@@ -402,6 +455,9 @@ func newEventsHandler(life context.Context, pool *pgxpool.Pool) *eventsHandler {
 		},
 		telemetry: func(ctx context.Context, hw telemetry.Watermark) ([]telemetry.Event, telemetry.Watermark, error) {
 			return trepo.TailTelemetry(ctx, hw, tpol.cfg, tpol.channelMismatchWarn, tpol.fleetMax, time.Now())
+		},
+		cursor: func(ctx context.Context) ([]commandstore.Cursor, error) {
+			return commandstore.CursorSnapshot(ctx, pool)
 		},
 		subs: map[*sseSub]struct{}{},
 	}}
