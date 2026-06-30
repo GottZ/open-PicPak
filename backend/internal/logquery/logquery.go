@@ -32,6 +32,8 @@ import (
 type Line struct {
 	Time      time.Time `json:"time"`
 	Serial    string    `json:"serial"`
+	Seq       *int64    `json:"seq"`        // the ROW seq (nullable on ota-snapshot) — the client's dedup/order key
+	Idx       int       `json:"idx"`        // token index within the row — completes the per-line identity
 	BootCount *int64    `json:"boot_count"` // nullable (ota-snapshot / absent bc)
 	Source    string    `json:"source"`
 	Gap       bool      `json:"gap"`
@@ -192,7 +194,7 @@ LIMIT  $8`
 	page := Page{Lines: []Line{}, ReachedEdge: !hasMore}
 	for _, r := range recs {
 		for i, text := range SplitPayload(r.payload, sep) {
-			ln := Line{Time: r.t, Serial: r.serial, BootCount: r.boot, Source: r.source, Text: text}
+			ln := Line{Time: r.t, Serial: r.serial, Seq: r.seq, Idx: i, BootCount: r.boot, Source: r.source, Text: text}
 			if i == 0 { // gap/suspect mark only the row's first line — one divider per boundary
 				ln.Gap, ln.Suspect = r.gap, r.suspect
 			}
