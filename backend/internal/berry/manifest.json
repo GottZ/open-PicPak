@@ -1,0 +1,69 @@
+{
+  "capabilities": [
+    {"name": "set_url", "params": [{"name": "url", "type": "string"}], "ret": "bool", "class": "command", "risk": "severing", "doc": "Set the C2 server URL in NVS. Severing: a wrong URL strands the device from C2 (USB recovery only)."},
+    {"name": "set_wifi", "params": [{"name": "ssid", "type": "string"}, {"name": "pass", "type": "string"}], "ret": "bool", "class": "command", "risk": "severing", "doc": "Replace the primary Wi-Fi credentials in NVS. Severing: wrong credentials strand the device (USB recovery only)."},
+    {"name": "wifi_add", "params": [{"name": "ssid", "type": "string"}, {"name": "pass", "type": "string"}, {"name": "prio", "type": "int", "opt": true}], "ret": "bool", "class": "command", "doc": "Add a Wi-Fi network to the multi-AP store (additive; optional priority)."},
+    {"name": "nvs_set", "params": [{"name": "ns", "type": "string"}, {"name": "key", "type": "string"}, {"name": "val", "type": "string"}], "ret": "bool", "class": "command", "risk": "severing", "doc": "Write a string to an arbitrary NVS namespace/key. Severing: overwriting the C2 URL or Wi-Fi keys strands the device."},
+    {"name": "net_clear", "params": [], "ret": "nil", "class": "command", "risk": "severing", "doc": "Clear the cached network/BSSID association hints. Severing if it drops the only path back to C2."},
+    {"name": "tx_power", "params": [{"name": "dbm", "type": "int", "opt": true}], "ret": "int", "class": "command", "doc": "Get the Wi-Fi TX power in dBm; set it when given an argument (hard-capped on-device)."},
+
+    {"name": "ip", "params": [], "ret": "string", "class": "query", "doc": "Current IP address, or nil if not connected."},
+    {"name": "ssid", "params": [], "ret": "string", "class": "query", "doc": "Current associated SSID, or nil."},
+    {"name": "rssi", "params": [], "ret": "int", "class": "query", "doc": "Current RSSI in dBm, or nil."},
+    {"name": "connected", "params": [], "ret": "bool", "class": "query", "doc": "True if the Wi-Fi link is up."},
+
+    {"name": "reboot", "params": [], "ret": "nil", "class": "intent", "doc": "Reboot the device after the poll completes (the ack persists first). Self-disconnecting: feedback waits for the next poll."},
+    {"name": "refresh", "params": [], "ret": "nil", "class": "intent", "doc": "Force an EPD full refresh after the poll completes."},
+    {"name": "device_sleep", "params": [{"name": "s", "type": "int", "opt": true}], "ret": "nil", "class": "intent", "doc": "Deep-sleep for s seconds (0 = default cadence; clamped to 24h on-device). Self-disconnecting: feedback waits for the next wake/poll."},
+
+    {"name": "store_set", "params": [{"name": "key", "type": "string"}, {"name": "val", "type": "any"}], "ret": "bool", "class": "store", "doc": "Persist a value to the on-device key/value store (flash-backed)."},
+    {"name": "store_get", "params": [{"name": "key", "type": "string"}], "ret": "any", "class": "store", "doc": "Read a value from the store, or nil if absent."},
+    {"name": "store_del", "params": [{"name": "key", "type": "string"}], "ret": "bool", "class": "store", "doc": "Delete a store key."},
+    {"name": "store_has", "params": [{"name": "key", "type": "string"}], "ret": "bool", "class": "store", "doc": "True if the store holds the key."},
+    {"name": "store_keys", "params": [{"name": "prefix", "type": "string", "opt": true}], "ret": "list", "class": "store", "doc": "List store keys, optionally filtered by prefix."},
+    {"name": "store_ok", "params": [], "ret": "bool", "class": "store", "doc": "True if the persistent store mounted successfully."},
+
+    {"name": "rtc_set", "params": [{"name": "key", "type": "string"}, {"name": "val", "type": "any"}], "ret": "bool", "class": "rtc", "doc": "Persist a value to RTC memory (survives deep sleep, not power loss)."},
+    {"name": "rtc_get", "params": [{"name": "key", "type": "string"}], "ret": "any", "class": "rtc", "doc": "Read a value from RTC memory, or nil."},
+    {"name": "rtc_del", "params": [{"name": "key", "type": "string"}], "ret": "bool", "class": "rtc", "doc": "Delete an RTC-memory key."},
+    {"name": "rtc_has", "params": [{"name": "key", "type": "string"}], "ret": "bool", "class": "rtc", "doc": "True if RTC memory holds the key."},
+
+    {"name": "dev_mac", "params": [], "ret": "string", "class": "dev", "doc": "Wi-Fi station MAC address."},
+    {"name": "dev_bt_mac", "params": [], "ret": "string", "class": "dev", "doc": "Bluetooth MAC address."},
+    {"name": "nvs_str", "params": [{"name": "ns", "type": "string"}, {"name": "key", "type": "string"}], "ret": "string", "class": "dev", "doc": "Read-only string read from an NVS namespace/key, or nil."},
+    {"name": "dev_chip", "params": [], "ret": "string", "class": "dev", "doc": "Chip model string."},
+    {"name": "dev_uptime_ms", "params": [], "ret": "int", "class": "dev", "doc": "Milliseconds since boot."},
+    {"name": "dev_reset", "params": [], "ret": "string", "class": "dev", "doc": "Last reset reason."},
+    {"name": "dev_batt_mv", "params": [], "ret": "int", "class": "dev", "doc": "Battery voltage in millivolts."},
+    {"name": "dev_batt_pct", "params": [], "ret": "int", "class": "dev", "doc": "Battery charge percentage."},
+    {"name": "dev_usb_connected", "params": [], "ret": "bool", "class": "dev", "doc": "True if USB is connected."},
+    {"name": "dev_boots", "params": [], "ret": "int", "class": "dev", "doc": "Reset-proof total boot count."},
+    {"name": "dev_bad_boots", "params": [], "ret": "int", "class": "dev", "doc": "Consecutive bad-boot count tracked by the recovery guard."},
+    {"name": "dev_guard_threshold", "params": [], "ret": "int", "class": "dev", "doc": "Recovery-guard bad-boot threshold."},
+    {"name": "dev_logbuf", "params": [], "ret": "string", "class": "dev", "doc": "Recent on-device log ring as text."},
+
+    {"name": "wifi_scan", "params": [], "ret": "", "class": "forbidden", "doc": "Policy-phase (net, Wi-Fi up) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "wifi_connect", "params": [], "ret": "", "class": "forbidden", "doc": "Policy-phase (net, Wi-Fi up) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "wifi_ip", "params": [], "ret": "", "class": "forbidden", "doc": "Policy-phase (net, Wi-Fi up) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "wifi_ssid", "params": [], "ret": "", "class": "forbidden", "doc": "Policy-phase (net, Wi-Fi up) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "wifi_rssi", "params": [], "ret": "", "class": "forbidden", "doc": "Policy-phase (net, Wi-Fi up) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "wifi_stop", "params": [], "ret": "", "class": "forbidden", "doc": "Policy-phase (net, Wi-Fi up) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "http_get", "params": [], "ret": "", "class": "forbidden", "doc": "Policy-phase (net, Wi-Fi up) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+
+    {"name": "fill", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "pixel", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "rect", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "disc", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "circle", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "triangle", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "text", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."}
+  ],
+  "builtins": [
+    "if", "elif", "else", "end", "for", "while", "do", "def", "return", "break", "continue",
+    "var", "static", "true", "false", "nil", "import", "as", "and", "or", "not", "in",
+    "class", "self", "super", "try", "except", "raise",
+    "print", "str", "int", "real", "number", "bool", "bytes", "list", "map", "range",
+    "size", "type", "assert", "format", "classname", "classof", "isinstance", "issubclass",
+    "compile", "json", "math", "string"
+  ]
+}

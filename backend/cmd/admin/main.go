@@ -134,6 +134,11 @@ func runServer() {
 	// ADMIN_TELEMETRY_* env (Policy=Data, D22.10).
 	registerTelemetryRoutes(mux, pool)
 
+	// Berry editor read surface (A23 W1): the capability manifest (the editor's C2 safe-subset catalog,
+	// declared DATA + parity-tested against the firmware be_regfunc sites, D23.2). Auth-gated (any valid
+	// key — a read-only operator may author/lint a draft; only enqueue is admin-gated). No write path here.
+	registerBerryRoutes(mux, pool)
+
 	// SSE scaffold (D19.7): live roster/telemetry/log stream. auth-gated (any valid
 	// key, O1) — the generic events mirror the GET read routes. A feature channel
 	// that pushes admin-only data must additionally re-auth on is_admin (§4.5 hook).
