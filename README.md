@@ -131,15 +131,18 @@ A full suite, built clean:
       command queue + per-device HOTP auth), and **OTA serving + rollout management** — a single
       authoritative resolver (per-serial pin ▸ channel fleet ▸ default), firmware register with
       server-side re-hash, and a download-ticket-authorized `firmware.bin` serve (default-off until
-      the field firmware is measured on-device)
+      the field firmware is measured on-device), plus **device-log reassembly** — the WiFi log
+      ride-along becomes a gapless per-device stream (offset-ack / gap / suspect / monotone seq,
+      idempotent byte-exact fragments) the operator can query and live-tail
 - [x] **operator control plane** (in [`backend/`](backend/)) — a bearer-authenticated admin API in a
       process and address space **separate from the public ingest parser**: device CRUD + RCE-capable
       command enqueue, and an **encrypted secrets KV** (AES-256-GCM sealed; the master key is never on
       disk in the public image and the service fails closed without it). It serves an embedded
       **operator web UI** — a Svelte 5 SPA (`//go:embed`, one binary, no CORS): key login, a live device
-      roster over server-sent events, and read-only degradation for non-admin keys. The feature pages —
-      OTA rollout, log viewer, telemetry dashboard, Berry editor, FaaS editor, Web-USB onboarding —
-      mount into this shell in later waves.
+      roster over server-sent events, and read-only degradation for non-admin keys. The **log viewer**
+      (keyset-paged history, a live SSE tail, gap/suspect markers, and gapless stream reconstruct) ships
+      now; the remaining feature pages — OTA rollout, telemetry dashboard, Berry editor, FaaS editor,
+      Web-USB onboarding — mount into this shell in later waves.
 - [x] [`tools/`](tools/) — host-side tooling: the **picpak-ops** operator TUI
       (build / flash / console / OTA / telemetry / logs) and the air-gap gate
 
