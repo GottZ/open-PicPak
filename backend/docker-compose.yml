@@ -106,12 +106,13 @@ services:
 
   # A17: operator control plane (bearer-authenticated CRUD + RCE-capable command enqueue). Runs in a
   # SEPARATE process and address space from the public ingest binary — the privileged write path must
-  # never sit in the public parser. Built from the same Dockerfile via --build-arg CMD=admin.
+  # never sit in the public parser. A19: built from Dockerfile.admin, which adds a bun frontend stage
+  # that compiles the Svelte SPA into web/dist before the Go build embeds it (//go:embed). The ingest
+  # image keeps the plain Dockerfile and never enters web/ (D19.2).
   admin:
     build:
       context: .
-      args:
-        CMD: admin
+      dockerfile: Dockerfile.admin
     depends_on:
       timescaledb:
         condition: service_healthy

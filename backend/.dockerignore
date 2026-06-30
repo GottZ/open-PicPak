@@ -7,3 +7,11 @@ migrations/
 grafana/
 docker-compose.yml
 .git
+
+# Frontend (A19): the admin frontend stage (Dockerfile.admin) runs bun install +
+# build itself, so the host's node_modules and any local dist build must not bloat
+# the context. The committed web/dist/.gitkeep IS kept (negation) so //go:embed
+# all:dist stays satisfiable in every build, including the ingest image (D19.3).
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep

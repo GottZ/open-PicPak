@@ -1,0 +1,26 @@
+{
+  "name": "open-picpak-admin-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.1.2",
+    "@tsconfig/svelte": "5.0.8",
+    "@types/node": "24.12.3",
+    "eventsource-parser": "3.1.0",
+    "sv-router": "0.16.3",
+    "svelte": "5.56.3",
+    "svelte-check": "4.6.0",
+    "typescript": "6.0.3",
+    "vite": "8.0.16",
+    "vite-plugin-compression2": "2.5.3",
+    "vitest": "4.1.8"
+  }
+}

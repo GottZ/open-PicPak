@@ -1,0 +1,32 @@
+# Admin operator-plane image: the Go control-plane binary (cmd/admin) with the
+# Svelte 5 SPA (backend/web) embedded via //go:embed all:dist. A bun frontend
+# stage builds web/dist ahead of the Go build (D19.8 — svelte-check is the hard
+# gate, run before vite build so type errors never reach the image). The public
+# ingest image (Dockerfile) is untouched and never enters web/ (D19.2). Both
+# binaries stay CGO-free statics on scratch (no shell, no packages).
+
+# --- frontend stage: build the SPA ---
+FROM oven/bun:1-alpine AS frontend
+WORKDIR /web
+# deps first (cache layer): only re-installs when package.json / bun.lock move.
+COPY web/package.json web/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY web/ ./
+# svelte-check (bun run check) BEFORE vite build — a type error fails the image.
+RUN bun run check && bun run build
+
+# --- go build stage ---
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# Overlay the built SPA over the committed dist/.gitkeep placeholder, so
+# //go:embed all:dist embeds the real production build (not the 503 stub).
+COPY --from=frontend /web/dist ./web/dist
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/admin
+
+FROM scratch
+COPY --from=build /out/app /app
+USER 65534:65534
+ENTRYPOINT ["/app"]
