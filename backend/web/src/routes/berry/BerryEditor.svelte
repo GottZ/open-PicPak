@@ -1,8 +1,12 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { Resource } from '../../lib/resource.svelte'
-  import { apiFetch } from '../../lib/api'
+  import { apiFetch, toApiError } from '../../lib/api'
   import StateView from '../../lib/StateView.svelte'
+  import DevicePicker from '../../lib/DevicePicker.svelte'
+  import { session } from '../../lib/auth.svelte'
+  import { notify } from '../../lib/toasts.svelte'
+  import { mutationAffordance } from '../../lib/readonly'
   import { createBerryEditor, type BerryEditorHandle } from '../../lib/berry/editor'
   import { lint, type Finding } from '../../lib/berry/lint'
   import {
@@ -13,6 +17,17 @@
     signature,
     RISK_SEVERING,
   } from '../../lib/berry/catalog'
+  import {
+    type Target,
+    type RiskLevel,
+    buildEnqueue,
+    canEnqueue,
+    blastRadius,
+    riskLevel,
+    scriptOk,
+    SCRIPT_MAX,
+  } from '../../lib/berry/enqueue'
+  import type { Device, DevicesResponse } from '../../lib/api/types'
   import { loadDraft, saveDraft } from '../../lib/draft'
 
   // Berry C2 command editor (Design 23, W2) — author + lint + autocomplete ONLY. No enqueue ships here
@@ -73,6 +88,49 @@
   function group(m: Manifest, key: CapClass): Capability[] {
     return m.capabilities.filter((c) => c.class === key)
   }
+
+  // ---- enqueue (W3) — the first RCE-shipping surface (Doc 17 §4.5 verbatim, no new backend) ----
+  const devices = new Resource<DevicesResponse>(() => apiFetch<DevicesResponse>('/api/devices'))
+  let deviceList = $state<Device[]>([])
+  let targetKind = $state<'one' | 'fleet'>('one')
+  let selectedSerial = $state<string | null>(null)
+  let note = $state('')
+  let typedArm = $state('') // the operator types '*' here to arm a fleet broadcast (D23.6)
+  let enqueuing = $state(false)
+
+  void devices.load().then(() => {
+    if (devices.data) deviceList = devices.data.devices
+  })
+
+  const target = $derived<Target | null>(
+    targetKind === 'fleet'
+      ? { kind: 'fleet' }
+      : selectedSerial
+        ? { kind: 'one', serial: selectedSerial }
+        : null,
+  )
+  // server stays authoritative via requireAdmin (Doc 17 §4.3); this is the cosmetic gate (T7/D19.6).
+  const affordance = $derived(mutationAffordance(session.is_admin))
+  const risk = $derived<RiskLevel>(riskLevel(findings, target))
+  const fleetCount = $derived(blastRadius(deviceList))
+  const ready = $derived(canEnqueue(target, typedArm, session.is_admin, script))
+
+  async function doEnqueue(): Promise<void> {
+    if (!target || !ready || enqueuing) return
+    enqueuing = true
+    try {
+      const { path, body } = buildEnqueue(target, script, note)
+      const res = await apiFetch<{ success: true; seq: number; serial: string }>(path, { method: 'POST', body })
+      const where =
+        target.kind === 'fleet' ? `fleet (${fleetCount} device${fleetCount === 1 ? '' : 's'})` : target.serial
+      notify.success(`enqueued seq ${res.seq} → ${where} (delivered on the device's next poll)`)
+      typedArm = '' // disarm after a fleet broadcast so the next one re-confirms
+    } catch (e) {
+      notify.error(toApiError(e))
+    } finally {
+      enqueuing = false
+    }
+  }
 </script>
 
 <section class="berry">
@@ -111,6 +169,78 @@
                 {/each}
               </ul>
             {/if}
+          </div>
+
+          <div class="enqueue">
+            <div class="target" role="radiogroup" aria-label="enqueue target">
+              <span class="lbl">target</span>
+              <label><input type="radio" name="target" value="one" bind:group={targetKind} /> one device</label>
+              <label><input type="radio" name="target" value="fleet" bind:group={targetKind} /> fleet '*'</label>
+            </div>
+
+            {#if targetKind === 'one'}
+              <DevicePicker devices={deviceList} bind:value={selectedSerial} placeholder="pick a target device…" />
+            {:else}
+              <div class="fleet-arm">
+                <p class="danger" role="status">
+                  ⚠ broadcast to {fleetCount} device{fleetCount === 1 ? '' : 's'}. The queue is append-only —
+                  there is no recall. A device onboarded later will not receive it (its cursor seeds past
+                  this command).
+                </p>
+                <label class="arm">
+                  type <code>*</code> to arm the broadcast:
+                  <input
+                    type="text"
+                    bind:value={typedArm}
+                    aria-label="type asterisk to arm the fleet broadcast"
+                    autocomplete="off"
+                  />
+                </label>
+              </div>
+            {/if}
+
+            {#if risk !== 'normal'}
+              <p class="risk {risk}" role="alert">
+                {#if risk === 'fleet-severing'}
+                  ⚠ HIGHEST RISK — a fleet-wide severing command can strand the WHOLE fleet at once (USB
+                  recovery only). It is allowed, but there is no recall.
+                {:else}
+                  ⚠ this script calls a severing capability — it can cut the device's own C2 path (USB
+                  recovery only).
+                {/if}
+              </p>
+            {/if}
+
+            <label class="note">
+              note
+              <input
+                type="text"
+                bind:value={note}
+                placeholder="operator label (lands in the audit trail)"
+                maxlength="200"
+              />
+            </label>
+
+            <div class="actions">
+              <button
+                type="button"
+                class="enqueue-btn"
+                disabled={affordance.disabled || !ready || enqueuing}
+                title={affordance.disabled ? affordance.title : ''}
+                aria-disabled={affordance['aria-disabled'] || !ready}
+                onclick={doEnqueue}
+              >
+                {enqueuing ? 'enqueuing…' : 'Enqueue'}
+              </button>
+              {#if !scriptOk(script)}
+                <span class="muted">{script.length} / {SCRIPT_MAX} chars</span>
+              {/if}
+              {#if errorCount > 0}
+                <span class="warn-inline"
+                  >⚠ {errorCount} lint error{errorCount === 1 ? '' : 's'} — on-device is authoritative</span
+                >
+              {/if}
+            </div>
           </div>
         </div>
 
@@ -234,6 +364,106 @@
   }
   .doc {
     color: var(--fg-muted);
+    font-size: 0.8rem;
+  }
+  .enqueue {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .target {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .target .lbl {
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+  }
+  .target label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  .fleet-arm {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .danger {
+    margin: 0;
+    color: var(--danger);
+    font-size: 0.85rem;
+  }
+  .arm {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .arm input,
+  .note input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--fg);
+    padding: 0.3rem 0.5rem;
+    font-size: 0.88rem;
+  }
+  .arm input {
+    width: 4rem;
+    font-family: var(--mono, monospace);
+  }
+  .note {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.82rem;
+    color: var(--fg-muted);
+  }
+  .risk {
+    margin: 0;
+    border-radius: 6px;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.85rem;
+  }
+  .risk.severing {
+    border: 1px solid var(--warn, #d08770);
+    color: var(--warn, #d08770);
+  }
+  .risk.fleet-severing {
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    font-weight: 600;
+  }
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .enqueue-btn {
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--bg, #0b0f17);
+    border-radius: 6px;
+    padding: 0.35rem 1.1rem;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .enqueue-btn:disabled {
+    background: transparent;
+    color: var(--fg-muted);
+    cursor: not-allowed;
+    border-color: var(--border);
+  }
+  .warn-inline {
+    color: var(--warn, #d08770);
     font-size: 0.8rem;
   }
 </style>
