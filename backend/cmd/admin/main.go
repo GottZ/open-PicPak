@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/open-picpak/backend/internal/adminhttp"
+	"github.com/open-picpak/backend/internal/sealbox"
 )
 
 func main() {
@@ -55,6 +56,15 @@ func openPool(ctx context.Context) (*pgxpool.Pool, error) {
 }
 
 func runServer() {
+	// SEC-M3: the operator plane must hold a valid master key or refuse to boot — fail-closed,
+	// symmetric to the public ingest token gate. Checked before the DB connect so a missing/short/
+	// invalid SECRETS_KEY is a deterministic boot failure (not masked by a DB error), and so an admin
+	// without a usable key never serves even the device routes. The Box is wired into the secret
+	// routes in a later wave; here we only enforce its presence.
+	if _, err := sealbox.FromEnv(); err != nil {
+		log.Fatalf("secrets: %v", err)
+	}
+
 	ctx := context.Background()
 	pool, err := openPool(ctx)
 	if err != nil {
