@@ -33,7 +33,10 @@ func dbPool(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	// FK-safe reset (channels FK-references firmware_versions, so no TRUNCATE CASCADE on the FW table).
+	// `logs` has NO FK on serial, so `DELETE FROM devices` does NOT cascade it (device_log_cursor /
+	// device_log_fragment DO cascade) — truncate it explicitly so A21 reassembly counts start clean.
 	for _, stmt := range []string{
+		`TRUNCATE logs`,
 		`TRUNCATE rollout_targets`,
 		`UPDATE channels SET default_version = NULL`,
 		`DELETE FROM devices`,

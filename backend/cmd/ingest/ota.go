@@ -71,7 +71,7 @@ func (s *server) handleFirmware(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusForbidden) // T1 — no anonymous binary
 		return
 	}
-	_, version, err := otaticket.Verify(s.otaKey, token)
+	sn, version, err := otaticket.Verify(s.otaKey, token)
 	if err != nil {
 		http.Error(w, "", http.StatusForbidden) // T2/T3 expired/forged — constant message, no detail
 		return
@@ -112,7 +112,14 @@ func (s *server) handleFirmware(w http.ResponseWriter, r *http.Request) {
 		log.Printf("ota blob stream %q: %v", version, err) // client/transport drop; headers already sent
 	}
 
-	// TODO(K12): if r.Header.Get("X-Picpak-Log") != "", persist it as a one-row logs.source='ota-snapshot'
-	// via Doc 21's logingest.InsertSnapshot(serial, body) — the brownout-during-OTA diagnostic window.
-	// A21 owns the statement; this handler only invokes it. Deferred until A21 lands (masterplan K12).
+	// masterplan K12: a log ride-along on the OTA download is the brownout-during-OTA diagnostic window.
+	// Persist it as ONE logs.source='ota-snapshot' row (seq/offset NULL, no reassembly) — the statement
+	// lives in A21's logingest, this handler only invokes it. Best-effort: the binary already streamed
+	// (headers sent), so a snapshot-write failure is logged, never surfaced. Serial comes from the
+	// VERIFIED ticket (sn), not a spoofable query param.
+	if body := r.Header.Get("X-Picpak-Log"); body != "" {
+		if err := insertSnapshot(r.Context(), s.pool, sn, ni(r.URL.Query().Get("bc")), body); err != nil {
+			log.Printf("ota log snapshot %s (version %q): %v", sn, version, err)
+		}
+	}
 }

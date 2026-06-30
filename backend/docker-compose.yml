@@ -22,9 +22,11 @@ services:
       retries: 20
     networks: [internal]
 
-  # one-shot: applies all forward migrations (0001..0007) in order against the healthy DB, then
-  # exits 0. Each migration is idempotent (IF NOT EXISTS) -> safe to re-run; psql applies the -f
-  # files in order. ON_ERROR_STOP makes any failure a non-zero exit.
+  # one-shot: applies all forward migrations in order against the healthy DB, then exits 0. Each
+  # migration is idempotent (IF NOT EXISTS) -> safe to re-run; psql applies the -f files in order.
+  # ON_ERROR_STOP makes any failure a non-zero exit. The list jumps 0008 -> 0010 on purpose: 0009
+  # (faas tables, A24) is not built yet (masterplan K1); migrations are independent idempotent DDL,
+  # so a gap is safe, and A24's 0009 file slots in before 0010 here when it lands (keeps it monotone).
   migrate:
     image: postgres:18-alpine                  # lightweight psql client (local)
     depends_on:
@@ -58,6 +60,8 @@ services:
       - /migrations/0007_operator_keys.up.sql
       - "-f"
       - /migrations/0008_secrets.up.sql
+      - "-f"
+      - /migrations/0010_device_log_cursor_last_seq.up.sql
     volumes:
       - ./migrations:/migrations:ro
     networks: [internal]

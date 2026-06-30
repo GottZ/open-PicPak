@@ -38,6 +38,9 @@ type server struct {
 	otaKey          string
 	otaTTL          time.Duration
 	fwBlobDir       string
+
+	// Log reassembly (A21). logFrameMax is the frame plausibility cap (D21.6) — policy=data, env only.
+	logFrameMax int64
 }
 
 func main() {
@@ -57,6 +60,7 @@ func main() {
 	otaKey := os.Getenv("OTA_TICKET_KEY")
 	otaTTL := otaTicketTTL()
 	fwBlobDir := env("FW_BLOB_DIR", "/fwblobs")
+	logFrameMax := logFrameMaxFromEnv() // A21 frame plausibility cap (D21.6)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -70,7 +74,8 @@ func main() {
 	}
 
 	s := &server{pool: pool, token: token, notifier: newC2Notifier(),
-		otaServeEnabled: otaServeEnabled, otaKey: otaKey, otaTTL: otaTTL, fwBlobDir: fwBlobDir}
+		otaServeEnabled: otaServeEnabled, otaKey: otaKey, otaTTL: otaTTL, fwBlobDir: fwBlobDir,
+		logFrameMax: logFrameMax}
 	// One LISTEN connection feeds the C2 long-poll wakeup hub for the whole fleet (Design 16).
 	go s.notifier.listenLoop(ctx, pool)
 
@@ -125,16 +130,29 @@ func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.ingest(r.Context(), r, q, serial); err != nil {
+	ackOff, acked, err := s.ingest(r.Context(), r, q, serial)
+	if err != nil {
 		log.Printf("ingest %s: %v", serial, err)
 		http.Error(w, "", http.StatusInternalServerError) // FW retries next wake
 		return
+	}
+	// masterplan K11: the log ack rides this post-commit /pp path FIRST, then the OTA signal. The header
+	// is set only on a committed, acked push (durable-before-ack, D21.2/Doc 04 §5.4); a COMMIT failure
+	// returns err above and the header is never set (T2). injectOTASignal's fail-open return MUST NOT
+	// pre-empt this — else a committed log delta gets no ack, the FW re-pushes forever and overruns its
+	// ring, dropping real log lines (A21 O5).
+	if acked {
+		w.Header().Set("X-Log-Ack-Offset", strconv.FormatInt(ackOff, 10))
 	}
 	s.injectOTASignal(r.Context(), w, serial) // OTA signal, fail-open (D20.8) — after commit, before body
 	_, _ = w.Write([]byte("ok"))
 }
 
-func (s *server) ingest(ctx context.Context, r *http.Request, q map[string][]string, serial string) error {
+// ingest writes the telemetry row and, when the push carries a log ride-along, reassembles it inside the
+// SAME tx (A21). It returns the durable log-ack high-water + whether the push was acked, so handleIngest
+// can echo X-Log-Ack-Offset post-commit (D21.2). acked is false on a telemetry-only push or a skipped bad
+// frame (D21.6); err is non-nil only on a real DB/tx failure (the caller 500s and the FW retries).
+func (s *server) ingest(ctx context.Context, r *http.Request, q map[string][]string, serial string) (ackOff int64, acked bool, err error) {
 	get := func(k string) string {
 		if v, ok := q[k]; ok && len(v) > 0 {
 			return v[0]
@@ -146,7 +164,7 @@ func (s *server) ingest(ctx context.Context, r *http.Request, q map[string][]str
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
 
@@ -158,7 +176,7 @@ func (s *server) ingest(ctx context.Context, r *http.Request, q map[string][]str
 		 ON CONFLICT (serial) DO UPDATE SET last_seen = now(),
 		   mac = COALESCE(devices.mac, EXCLUDED.mac)`,
 		serial, mac); err != nil {
-		return fmt.Errorf("device upsert: %w", err)
+		return 0, false, fmt.Errorf("device upsert: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx,
@@ -172,20 +190,24 @@ func (s *server) ingest(ctx context.Context, r *http.Request, q map[string][]str
 		nbool(get("usb")), ni(get("up")), ntext(get("fw")), ntext(get("ch")),
 		d["run"], ni(d["runstate"]), ni(d["o0"]), ni(d["o1"]), ntext(d["inv"]), ni(d["boots"]),
 		ni(d["rr"]), ni(d["ota_rr"]), ni(d["mv"]), ni(d["mv_err"]), ntext(d["stage"]), nIP(srcIP)); err != nil {
-		return fmt.Errorf("telemetry insert: %w", err)
+		return 0, false, fmt.Errorf("telemetry insert: %w", err)
 	}
 
-	// X-Picpak-Log: store the ring tail. Full reassembly + offset-ack + gap/suspect is wave S5f;
-	// here we just persist the payload with the device-claimed offset (NULL if absent).
+	// X-Picpak-Log ride-along: reassemble the ring tail (A21) — offset-ack / gap / suspect / seq /
+	// idempotent fragment, in this SAME tx so a bad log frame can never lose the telemetry (D21.6). The
+	// ack value is read-your-write inside the tx and echoed by the caller only after COMMIT (D21.2).
 	if logHdr := r.Header.Get("X-Picpak-Log"); logHdr != "" {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO logs (time, serial, boot_count, offset_start, payload, source)
-			 VALUES (now(), $1, $2, $3, $4, 'telemetry')`,
-			serial, ni(get("bc")), ni(get("off")), logHdr); err != nil {
-			return fmt.Errorf("log insert: %w", err)
+		if lf, ok := parseLogFrame(q, r.Header.Get("X-Picpak-Log-Frame")); ok {
+			ackOff, acked, err = reassembleLog(ctx, tx, serial, lf, logHdr, s.logFrameMax)
+			if err != nil {
+				return 0, false, err
+			}
 		}
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return 0, false, err // COMMIT failed → withhold the ack (T2); telemetry not durable, FW retries
+	}
+	return ackOff, acked, nil
 }
 
 // parseDiag splits the X-Picpak-Diag single-line header ("k=v k=v ...") into a map. Tolerant:
