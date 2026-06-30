@@ -127,8 +127,11 @@ A full suite, built clean:
       script over HTTPS). Validates Berry on the C3 (no PSRAM, coexists with WiFi); host-previewable.
       Battery uses the stock divider/curve recovered by disassembly.
 - [x] [`backend/`](backend/) — self-hostable Docker backend: TimescaleDB + Grafana + the
-      telemetry/OTA/log schema + legacy ingest, and the **C2 command channel** (per-device Berry
-      command queue + per-device HOTP auth)
+      telemetry/OTA/log schema + legacy ingest, the **C2 command channel** (per-device Berry
+      command queue + per-device HOTP auth), and **OTA serving + rollout management** — a single
+      authoritative resolver (per-serial pin ▸ channel fleet ▸ default), firmware register with
+      server-side re-hash, and a download-ticket-authorized `firmware.bin` serve (default-off until
+      the field firmware is measured on-device)
 - [x] **operator control plane** (in [`backend/`](backend/)) — a bearer-authenticated admin API in a
       process and address space **separate from the public ingest parser**: device CRUD + RCE-capable
       command enqueue, and an **encrypted secrets KV** (AES-256-GCM sealed; the master key is never on
