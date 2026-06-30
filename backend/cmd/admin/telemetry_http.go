@@ -16,9 +16,12 @@ import (
 // never RequireAdmin — a read-only operator must reach the dashboard, mirroring the log viewer Q5). The
 // query mechanics live in internal/telemetry (read-only, D22.1); policy (thresholds, caps, base URLs) is
 // ADMIN_TELEMETRY_*/ADMIN_*_BASE_URL env here, the owning process (mechanism=code / policy=data, D22.10).
-type telemetryHandlers struct {
-	repo                *telemetry.Repo
-	cfg                 telemetry.VerdictCfg // the per-device verdict thresholds (Policy=Data)
+// telemetryPolicy is the env-driven Policy=Data for the telemetry surface (verdict thresholds, caps,
+// base URLs). It is loaded once and shared by BOTH the REST routes (registerTelemetryRoutes) and the SSE
+// producer (newEventsHandler, events.go) so the dashboard and the live stream agree on one verdict
+// authority (D22.4) and one set of thresholds.
+type telemetryPolicy struct {
+	cfg                 telemetry.VerdictCfg // the per-device verdict thresholds
 	fleetMax            int                  // ADMIN_TELEMETRY_FLEET_MAX_DEVICES
 	historyWindow       time.Duration        // ADMIN_TELEMETRY_HISTORY_WINDOW
 	historyMaxRows      int                  // ADMIN_TELEMETRY_HISTORY_MAX_ROWS
@@ -27,12 +30,8 @@ type telemetryHandlers struct {
 	webhookBaseURL      string               // ADMIN_WEBHOOK_BASE_URL — unset → editor hides the webhook URL
 }
 
-// registerTelemetryRoutes mounts the 3 read routes on Doc 17's mux. GET /api/devices/{serial}/telemetry
-// is MORE specific than Doc 17's GET /api/devices/{serial}, so stdlib longest-pattern precedence routes
-// each correctly (no conflict, registration order irrelevant).
-func registerTelemetryRoutes(mux *http.ServeMux, pool *pgxpool.Pool) {
-	h := telemetryHandlers{
-		repo: telemetry.NewRepo(pool),
+func loadTelemetryPolicy() telemetryPolicy {
+	return telemetryPolicy{
 		cfg: telemetry.VerdictCfg{
 			StaleAfter:           envDurOr("ADMIN_TELEMETRY_STALE_AFTER", 3*time.Hour),
 			BrownoutResetReasons: envCSV("ADMIN_TELEMETRY_BROWNOUT_RESET_REASONS", []string{"brownout"}),
@@ -48,6 +47,20 @@ func registerTelemetryRoutes(mux *http.ServeMux, pool *pgxpool.Pool) {
 		grafanaBaseURL:      os.Getenv("ADMIN_GRAFANA_BASE_URL"),
 		webhookBaseURL:      os.Getenv("ADMIN_WEBHOOK_BASE_URL"),
 	}
+}
+
+// telemetryHandlers serves the REST routes; it embeds the shared policy (its fields are promoted, so the
+// handlers read h.cfg/h.fleetMax/… directly).
+type telemetryHandlers struct {
+	repo *telemetry.Repo
+	telemetryPolicy
+}
+
+// registerTelemetryRoutes mounts the 3 read routes on Doc 17's mux. GET /api/devices/{serial}/telemetry
+// is MORE specific than Doc 17's GET /api/devices/{serial}, so stdlib longest-pattern precedence routes
+// each correctly (no conflict, registration order irrelevant).
+func registerTelemetryRoutes(mux *http.ServeMux, pool *pgxpool.Pool) {
+	h := telemetryHandlers{repo: telemetry.NewRepo(pool), telemetryPolicy: loadTelemetryPolicy()}
 	mux.Handle("GET /api/fleet", adminhttp.Auth(pool)(http.HandlerFunc(h.fleet)))
 	mux.Handle("GET /api/devices/{serial}/telemetry", adminhttp.Auth(pool)(http.HandlerFunc(h.deviceTelemetry)))
 	mux.Handle("GET /api/config", adminhttp.Auth(pool)(http.HandlerFunc(h.config)))

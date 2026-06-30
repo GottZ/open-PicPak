@@ -13,6 +13,7 @@ import (
 
 	"github.com/open-picpak/backend/internal/devicestore"
 	"github.com/open-picpak/backend/internal/operator"
+	"github.com/open-picpak/backend/internal/telemetry"
 )
 
 func strptr(s string) *string { return &s }
@@ -264,6 +265,53 @@ func TestSSEHubDeltaFanOut(t *testing.T) {
 	mu.Unlock()
 	if got != 1 {
 		t.Errorf("stable roster after first tick: got %d devices frames, want exactly 1 (no churn)", got)
+	}
+}
+
+// The telemetry producer fans onto the SAME hub as the roster/log producers (D22.7): a tick with one
+// telemetry delta broadcasts exactly one `telemetry` frame, and a sparse stream (nothing new after) adds
+// no churn. The fake producer mimics prime→diff→quiet; this proves the tickTelemetry → broadcastJSON
+// wiring without a DB (the watermark query itself is covered by the telemetry package's T7 DB test).
+func TestSSEHubTelemetryFanOut(t *testing.T) {
+	life, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := sseConfig{tick: 10 * time.Millisecond, ping: time.Second, reauth: time.Second, writeWindow: time.Second, maxConn: 8}
+	h := newTestHub(life, nil, okAuth, cfg)
+
+	var cmu sync.Mutex
+	calls := 0
+	h.telemetry = func(context.Context, telemetry.Watermark) ([]telemetry.Event, telemetry.Watermark, error) {
+		cmu.Lock()
+		defer cmu.Unlock()
+		calls++
+		if calls == 1 { // one delta on the first diff tick, then a quiet stream
+			return []telemetry.Event{{Serial: "D2AAAA1", Health: "OK", RunningVer: "fw"}}, telemetry.Watermark{Set: true}, nil
+		}
+		return nil, telemetry.Watermark{Set: true}, nil
+	}
+
+	sub, ok := h.subscribe()
+	if !ok {
+		t.Fatal("subscribe failed")
+	}
+	var mu sync.Mutex
+	teleFrames := 0
+	go func() {
+		for f := range sub.ch {
+			if f.name == "telemetry" {
+				mu.Lock()
+				teleFrames++
+				mu.Unlock()
+			}
+		}
+	}()
+	waitFor(t, time.Second, func() bool { mu.Lock(); defer mu.Unlock(); return teleFrames == 1 })
+	time.Sleep(60 * time.Millisecond)
+	mu.Lock()
+	got := teleFrames
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("sparse telemetry stream: got %d telemetry frames, want exactly 1 (no churn)", got)
 	}
 }
 

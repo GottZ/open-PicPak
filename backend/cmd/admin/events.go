@@ -34,6 +34,7 @@ import (
 	"github.com/open-picpak/backend/internal/devicestore"
 	"github.com/open-picpak/backend/internal/logquery"
 	"github.com/open-picpak/backend/internal/operator"
+	"github.com/open-picpak/backend/internal/telemetry"
 )
 
 // sseConfig holds the env-driven SSE timings (Mechanism=Code / Policy=Data:
@@ -154,6 +155,7 @@ type sseHub struct {
 	roster       func(ctx context.Context) ([]devicestore.Row, error)
 	authenticate func(ctx context.Context, token string) (operator.AuthResult, bool, error)
 	logs         func(ctx context.Context, hw logquery.HighWater) ([]logquery.TailEvent, logquery.HighWater, error)
+	telemetry    func(ctx context.Context, hw telemetry.Watermark) ([]telemetry.Event, telemetry.Watermark, error)
 
 	mu      sync.Mutex
 	subs    map[*sseSub]struct{}
@@ -248,10 +250,12 @@ func (h *sseHub) runLoop() {
 	t := time.NewTicker(h.cfg.tick)
 	defer t.Stop()
 
-	// Per-hub producer state. Both producers share the one tick (D21.12): the roster diff and the log
-	// poll-and-diff fan onto the same connections. A failure in one does not skip the other.
+	// Per-hub producer state. All producers share the one tick (D21.12): the roster diff, the log
+	// poll-and-diff and the telemetry watermark diff fan onto the same connections. A failure in one
+	// does not skip the others (each tick* swallows its own error and returns the unchanged cursor).
 	lastSent := map[string]devicestore.Row{}
 	var logHW logquery.HighWater
+	var telemetryHW telemetry.Watermark
 	for {
 		select {
 		case <-h.life.Done():
@@ -262,6 +266,7 @@ func (h *sseHub) runLoop() {
 			}
 			lastSent = h.tickRoster(lastSent)
 			logHW = h.tickLogs(logHW)
+			telemetryHW = h.tickTelemetry(telemetryHW)
 		}
 	}
 }
@@ -302,6 +307,29 @@ func (h *sseHub) tickLogs(hw logquery.HighWater) logquery.HighWater {
 	}
 	for _, e := range events {
 		h.broadcastJSON("log", e) // hub frame-builder json.Marshal's it — frame integrity (Q6)
+	}
+	return nhw
+}
+
+// tickTelemetry runs the telemetry watermark poll-and-diff once (D22.7) and broadcasts one `telemetry`
+// event per device that pushed since the watermark; returns the advanced watermark (unchanged on a poll
+// error, or when no producer is wired). The first tick PRIMES (sets the watermark, emits nothing) so a
+// fresh stream never floods — the SSE is a live tail of per-device liveness/health, the snapshot rides
+// the REST GET /api/fleet. This fulfills Doc 19's deferred contract: the telemetry channel carries the
+// per-row last_seen/health the roster diff key deliberately omits (else every push churns the roster).
+func (h *sseHub) tickTelemetry(hw telemetry.Watermark) telemetry.Watermark {
+	if h.telemetry == nil {
+		return hw
+	}
+	opCtx, cancel := context.WithTimeout(h.life, 10*time.Second)
+	events, nhw, err := h.telemetry(opCtx, hw)
+	cancel()
+	if err != nil {
+		log.Printf("sse: telemetry poll failed: %v", err)
+		return hw
+	}
+	for _, e := range events {
+		h.broadcastJSON("telemetry", e) // hub frame-builder json.Marshal's it — frame integrity (COH9/Q6)
 	}
 	return nhw
 }
@@ -356,6 +384,10 @@ func newEventsHandler(life context.Context, pool *pgxpool.Pool) *eventsHandler {
 	// splits identically on the live stream and on backfill; batch caps one tick's fan-out.
 	logSep := env("LOG_LINE_SEPARATOR", "|")
 	logBatch := envInt("LOG_TAIL_BATCH", 200)
+	// The telemetry producer shares the REST routes' policy (one verdict authority + one threshold set,
+	// D22.4/D22.10) and its own read repo over the same pool.
+	tpol := loadTelemetryPolicy()
+	trepo := telemetry.NewRepo(pool)
 	return &eventsHandler{hub: &sseHub{
 		life: life,
 		cfg:  loadSSEConfig(),
@@ -367,6 +399,9 @@ func newEventsHandler(life context.Context, pool *pgxpool.Pool) *eventsHandler {
 		},
 		logs: func(ctx context.Context, hw logquery.HighWater) ([]logquery.TailEvent, logquery.HighWater, error) {
 			return logquery.Tail(ctx, pool, hw, logSep, logBatch)
+		},
+		telemetry: func(ctx context.Context, hw telemetry.Watermark) ([]telemetry.Event, telemetry.Watermark, error) {
+			return trepo.TailTelemetry(ctx, hw, tpol.cfg, tpol.channelMismatchWarn, tpol.fleetMax, time.Now())
 		},
 		subs: map[*sseSub]struct{}{},
 	}}
