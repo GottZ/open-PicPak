@@ -3,6 +3,7 @@
   import { Resource } from '../../lib/resource.svelte'
   import { apiFetch } from '../../lib/api'
   import { EventsClient, type RosterDelta } from '../../lib/events.svelte'
+  import { conn } from '../../lib/conn.svelte'
   import type { Device, DevicesResponse } from '../../lib/api/types'
 
   // SCAFFOLD (design 19 §4.4): Doc 22 replaces this with the telemetry dashboard.
@@ -13,7 +14,12 @@
   const roster = new Resource<DevicesResponse>(() => apiFetch<DevicesResponse>('/api/devices'))
 
   let events = $state<EventsClient | null>(null)
-  const live = $derived(events?.status ?? 'idle')
+  // Mirror the live stream status into the shell-wide indicator (D19.14): the
+  // ConnIndicator in App.svelte reads conn.status, so the operator sees "live /
+  // reconnecting / offline" in the header regardless of which page owns the stream.
+  $effect(() => {
+    conn.status = events?.status ?? 'idle'
+  })
 
   function applyDelta(d: RosterDelta): void {
     if (d.op === 'remove') {
@@ -42,7 +48,10 @@
     void events.connect()
   })
 
-  onDestroy(() => events?.close())
+  onDestroy(() => {
+    events?.close()
+    conn.status = 'idle' // no live stream once this page unmounts
+  })
 
   function seenLabel(d: Device): string {
     return d.last_seen ? new Date(d.last_seen).toLocaleString() : '—'
@@ -57,7 +66,6 @@
 <section class="fleet">
   <header>
     <h1>Fleet</h1>
-    <span class="live live-{live}" title="live event stream">{live}</span>
     <button onclick={roster.reload} disabled={roster.status === 'loading'}>refresh</button>
   </header>
 
@@ -111,20 +119,6 @@
     font-size: 1.35rem;
     font-weight: 600;
     flex: 1;
-  }
-  .live {
-    font-family: monospace;
-    font-size: 0.7rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--fg-muted);
-  }
-  .live-open {
-    color: var(--ok);
-  }
-  .live-error,
-  .live-connecting {
-    color: var(--warn);
   }
   table {
     border-collapse: collapse;

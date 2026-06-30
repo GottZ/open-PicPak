@@ -5,6 +5,8 @@
   import { session } from './lib/auth.svelte'
   import { AREAS } from './routes'
   import Login from './Login.svelte'
+  import Toaster from './lib/Toaster.svelte'
+  import ConnIndicator from './lib/ConnIndicator.svelte'
 
   onMount(() => void session.restore())
 </script>
@@ -25,6 +27,7 @@
         {/each}
       </nav>
       <div class="identity">
+        <ConnIndicator />
         <!-- Read-only degradation (D19.6): the badge is comfort; the server's
              requireAdmin (design 17 §4.2) is the truth. -->
         <span class="badge" class:admin={session.is_admin}>
@@ -39,6 +42,9 @@
     </main>
   </div>
 {/if}
+
+<!-- One toast region for the whole shell (D19.11) — always mounted. -->
+<Toaster />
 
 <style>
   .boot {
