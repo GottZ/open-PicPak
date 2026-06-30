@@ -15,11 +15,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -337,4 +339,96 @@ func PruneFragments(ctx context.Context, pool *pgxpool.Pool, ttl time.Duration) 
 		return 0, fmt.Errorf("fragment prune: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+// ---- live tail (the SSE `log` producer's data side, A21 W3 / Design 21 §4.5) ----
+
+// HighWater is the forward poll-and-diff cursor the SSE producer advances each hub tick (D21.12). Set is
+// false until the first prime — a cold producer starts from the newest existing row (or DB now() on an
+// empty table) and emits ONLY rows that arrive AFTER, so the SSE is a live tail (history comes from the
+// REST keyset query, §4.3); the DB is the source of truth, SSE the accelerator.
+type HighWater struct {
+	Time   time.Time
+	Serial string
+	Seq    int64 // COALESCE(seq,0)
+	Ctid   string
+	Set    bool
+}
+
+// TailEvent is one new log row for the SSE `log` payload (Design 21 §4.5). Lines is the server-split
+// payload; the hub json.Marshal's this whole value (frame integrity, Q6). seq/boot_count are nullable.
+type TailEvent struct {
+	Serial    string    `json:"serial"`
+	Time      time.Time `json:"time"`
+	Seq       *int64    `json:"seq"`
+	BootCount *int64    `json:"boot_count"`
+	Source    string    `json:"source"`
+	Gap       bool      `json:"gap"`
+	Suspect   bool      `json:"suspect"`
+	Lines     []string  `json:"lines"`
+}
+
+// Tail returns log rows strictly NEWER than hw (forward keyset, ascending so the client appends in
+// order), advancing and returning the high-water. On a cold hw (Set==false) it PRIMES — sets the
+// high-water to the newest existing row (or DB now() if empty) and returns NO events — so a fresh
+// producer never floods the recent window; only rows arriving after the prime are emitted. `time >=
+// hw.Time` gives hypertable chunk exclusion (the keyset alone would scan from any chunk). batch caps one
+// tick; the remainder rides the next tick (hw advances to the last emitted row, no loss).
+func Tail(ctx context.Context, pool *pgxpool.Pool, hw HighWater, sep string, batch int) ([]TailEvent, HighWater, error) {
+	if sep == "" {
+		sep = "|"
+	}
+	if batch <= 0 {
+		batch = 200
+	}
+	if !hw.Set {
+		var nhw HighWater
+		err := pool.QueryRow(ctx,
+			`SELECT time, serial, COALESCE(seq,0), ctid::text
+			 FROM logs ORDER BY time DESC, serial DESC, COALESCE(seq,0) DESC, ctid DESC LIMIT 1`).
+			Scan(&nhw.Time, &nhw.Serial, &nhw.Seq, &nhw.Ctid)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			// empty table: prime at the DB clock with a zero baseline → emit only future arrivals
+			if err := pool.QueryRow(ctx, `SELECT now()`).Scan(&nhw.Time); err != nil {
+				return nil, hw, fmt.Errorf("tail prime now: %w", err)
+			}
+			nhw.Serial, nhw.Seq, nhw.Ctid = "", 0, "(0,0)"
+		case err != nil:
+			return nil, hw, fmt.Errorf("tail prime: %w", err)
+		}
+		nhw.Set = true
+		return nil, nhw, nil
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT time, serial, boot_count, seq, payload, source, gap, suspect, ctid::text
+		 FROM logs
+		 WHERE time >= $1
+		   AND (time, serial, COALESCE(seq,0), ctid) > ($1, $2, $3, $4::tid)
+		 ORDER BY time ASC, serial ASC, COALESCE(seq,0) ASC, ctid ASC
+		 LIMIT $5`,
+		hw.Time, hw.Serial, hw.Seq, hw.Ctid, batch)
+	if err != nil {
+		return nil, hw, fmt.Errorf("tail query: %w", err)
+	}
+	defer rows.Close()
+
+	out := []TailEvent{}
+	nhw := hw
+	for rows.Next() {
+		var r dbRow
+		if err := rows.Scan(&r.t, &r.serial, &r.boot, &r.seq, &r.payload, &r.source, &r.gap, &r.suspect, &r.ctid); err != nil {
+			return nil, hw, fmt.Errorf("tail scan: %w", err)
+		}
+		out = append(out, TailEvent{
+			Serial: r.serial, Time: r.t, Seq: r.seq, BootCount: r.boot, Source: r.source,
+			Gap: r.gap, Suspect: r.suspect, Lines: SplitPayload(r.payload, sep),
+		})
+		nhw = HighWater{Time: r.t, Serial: r.serial, Seq: r.seqOrZero(), Ctid: r.ctid, Set: true}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, hw, fmt.Errorf("tail rows: %w", err)
+	}
+	return out, nhw, nil
 }

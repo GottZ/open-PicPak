@@ -32,6 +32,7 @@ import (
 
 	"github.com/open-picpak/backend/internal/adminhttp"
 	"github.com/open-picpak/backend/internal/devicestore"
+	"github.com/open-picpak/backend/internal/logquery"
 	"github.com/open-picpak/backend/internal/operator"
 )
 
@@ -152,6 +153,7 @@ type sseHub struct {
 	// Injectable seams (faked in tests, bound to the real pool in newEventsHandler).
 	roster       func(ctx context.Context) ([]devicestore.Row, error)
 	authenticate func(ctx context.Context, token string) (operator.AuthResult, bool, error)
+	logs         func(ctx context.Context, hw logquery.HighWater) ([]logquery.TailEvent, logquery.HighWater, error)
 
 	mu      sync.Mutex
 	subs    map[*sseSub]struct{}
@@ -246,7 +248,10 @@ func (h *sseHub) runLoop() {
 	t := time.NewTicker(h.cfg.tick)
 	defer t.Stop()
 
+	// Per-hub producer state. Both producers share the one tick (D21.12): the roster diff and the log
+	// poll-and-diff fan onto the same connections. A failure in one does not skip the other.
 	lastSent := map[string]devicestore.Row{}
+	var logHW logquery.HighWater
 	for {
 		select {
 		case <-h.life.Done():
@@ -255,23 +260,50 @@ func (h *sseHub) runLoop() {
 			if h.subCount() == 0 {
 				return // last subscriber left — stop (no idle polling)
 			}
-			opCtx, cancel := context.WithTimeout(h.life, 10*time.Second)
-			rows, err := h.roster(opCtx)
-			cancel()
-			if err != nil {
-				log.Printf("sse: roster poll failed: %v", err)
-				continue
-			}
-			cur := make(map[string]devicestore.Row, len(rows))
-			for _, row := range rows {
-				cur[row.Serial] = row
-			}
-			for _, d := range diffRoster(lastSent, cur) {
-				h.broadcastDelta(d)
-			}
-			lastSent = cur
+			lastSent = h.tickRoster(lastSent)
+			logHW = h.tickLogs(logHW)
 		}
 	}
+}
+
+// tickRoster polls + diffs the device roster once and broadcasts the changed rows; returns the new
+// last-sent state (unchanged on a poll error).
+func (h *sseHub) tickRoster(lastSent map[string]devicestore.Row) map[string]devicestore.Row {
+	opCtx, cancel := context.WithTimeout(h.life, 10*time.Second)
+	rows, err := h.roster(opCtx)
+	cancel()
+	if err != nil {
+		log.Printf("sse: roster poll failed: %v", err)
+		return lastSent
+	}
+	cur := make(map[string]devicestore.Row, len(rows))
+	for _, row := range rows {
+		cur[row.Serial] = row
+	}
+	for _, d := range diffRoster(lastSent, cur) {
+		h.broadcastDelta(d)
+	}
+	return cur
+}
+
+// tickLogs runs the forward log poll-and-diff once (D21.12) and broadcasts one `log` event per new row;
+// returns the advanced high-water (unchanged on a poll error, or when no producer is wired). The first
+// tick primes the high-water and emits nothing — the SSE is a live tail, history rides the REST query.
+func (h *sseHub) tickLogs(hw logquery.HighWater) logquery.HighWater {
+	if h.logs == nil {
+		return hw
+	}
+	opCtx, cancel := context.WithTimeout(h.life, 10*time.Second)
+	events, nhw, err := h.logs(opCtx, hw)
+	cancel()
+	if err != nil {
+		log.Printf("sse: log poll failed: %v", err)
+		return hw
+	}
+	for _, e := range events {
+		h.broadcastJSON("log", e) // hub frame-builder json.Marshal's it — frame integrity (Q6)
+	}
+	return nhw
 }
 
 // diffRoster computes the roster deltas between the last-sent state and the
@@ -295,14 +327,21 @@ func diffRoster(last, cur map[string]devicestore.Row) []rosterDelta {
 	return out
 }
 
-// broadcastDelta marshals one roster delta (HUB-side json.Marshal — frame
-// integrity invariant) and fans it as a `devices` event.
-func (h *sseHub) broadcastDelta(d rosterDelta) {
-	data, err := json.Marshal(d)
+// broadcastJSON is the hub frame-builder: it json.Marshal's any payload (which escapes embedded
+// newline/CRLF) and fans it as a named event. Centralizing the marshal HERE is the frame-integrity
+// invariant every producer inherits (roster, log, telemetry, …) — a device-supplied string (a log line,
+// a label) can never inject a premature SSE frame boundary for any connected operator (Q6).
+func (h *sseHub) broadcastJSON(name string, v any) {
+	data, err := json.Marshal(v)
 	if err != nil {
 		return
 	}
-	h.broadcast(sseFrame{name: "devices", data: data})
+	h.broadcast(sseFrame{name: name, data: data})
+}
+
+// broadcastDelta fans one roster delta as a `devices` event via the hub frame-builder.
+func (h *sseHub) broadcastDelta(d rosterDelta) {
+	h.broadcastJSON("devices", d)
 }
 
 // eventsHandler serves GET /api/events over the shared hub.
@@ -313,6 +352,10 @@ type eventsHandler struct {
 // newEventsHandler wires the SSE handler. life is the process lifecycle context;
 // pool drives the in-stream re-auth + the roster poll.
 func newEventsHandler(life context.Context, pool *pgxpool.Pool) *eventsHandler {
+	// The tail separator MUST match the REST query handler's LOG_LINE_SEPARATOR (logs_http.go) so a line
+	// splits identically on the live stream and on backfill; batch caps one tick's fan-out.
+	logSep := env("LOG_LINE_SEPARATOR", "|")
+	logBatch := envInt("LOG_TAIL_BATCH", 200)
 	return &eventsHandler{hub: &sseHub{
 		life: life,
 		cfg:  loadSSEConfig(),
@@ -321,6 +364,9 @@ func newEventsHandler(life context.Context, pool *pgxpool.Pool) *eventsHandler {
 		},
 		authenticate: func(ctx context.Context, token string) (operator.AuthResult, bool, error) {
 			return operator.Authenticate(ctx, pool, token)
+		},
+		logs: func(ctx context.Context, hw logquery.HighWater) ([]logquery.TailEvent, logquery.HighWater, error) {
+			return logquery.Tail(ctx, pool, hw, logSep, logBatch)
 		},
 		subs: map[*sseSub]struct{}{},
 	}}

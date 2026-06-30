@@ -259,3 +259,88 @@ func TestQuery_GapOnFirstLineOnly(t *testing.T) {
 		}
 	}
 }
+
+// Tail poll-and-diff (the SSE producer's data side): a cold prime emits nothing (live tail), forward
+// rows emit ascending exactly once, an unchanged high-water re-poll emits nothing. Red: prime floods the
+// window; or a stale high-water re-emits already-sent rows on every tick.
+func TestTail_ForwardPollDiff(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	// seed one row, then PRIME on the non-empty table → hw at the seed, no emit
+	insLog(t, pool, base.Add(time.Second), "S", i64(1), i64(1), "old|", "telemetry", false, false)
+	ev0, hw0, err := Tail(ctx, pool, HighWater{}, "|", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ev0) != 0 {
+		t.Fatalf("prime emitted %d events, want 0 (live tail primes silently)", len(ev0))
+	}
+	if !hw0.Set {
+		t.Fatal("prime must set the high-water")
+	}
+
+	// rows that arrive AFTER the prime → emitted ascending, payload split into lines
+	insLog(t, pool, base.Add(2*time.Second), "S", i64(1), i64(2), "a|b|", "telemetry", false, false)
+	insLog(t, pool, base.Add(3*time.Second), "S", i64(1), i64(3), "c|", "telemetry", true, false)
+	ev1, hw1, err := Tail(ctx, pool, hw0, "|", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ev1) != 2 {
+		t.Fatalf("emitted %d, want 2", len(ev1))
+	}
+	if !reflect.DeepEqual(ev1[0].Lines, []string{"a", "b"}) || !reflect.DeepEqual(ev1[1].Lines, []string{"c"}) {
+		t.Fatalf("lines=%v / %v", ev1[0].Lines, ev1[1].Lines)
+	}
+	if !ev1[1].Gap {
+		t.Fatal("the gap flag should ride the tail event")
+	}
+
+	// re-poll with the advanced high-water → no re-emit
+	ev2, _, err := Tail(ctx, pool, hw1, "|", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ev2) != 0 {
+		t.Fatalf("re-poll emitted %d, want 0 (no re-emit at a stable high-water)", len(ev2))
+	}
+
+	// one more arrival → only it
+	insLog(t, pool, base.Add(4*time.Second), "S", i64(1), i64(4), "d|", "telemetry", false, false)
+	ev3, _, err := Tail(ctx, pool, hw1, "|", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ev3) != 1 || !reflect.DeepEqual(ev3[0].Lines, []string{"d"}) {
+		t.Fatalf("final poll=%+v, want one row [d]", ev3)
+	}
+}
+
+// Tail batch cap: more new rows than the batch → the tick returns batch, the high-water advances to the
+// last emitted, the next tick drains the remainder (no loss). Red: a too-small batch drops the tail.
+func TestTail_BatchCap(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	insLog(t, pool, base.Add(time.Second), "S", i64(1), i64(1), "seed|", "telemetry", false, false)
+	_, hw, err := Tail(ctx, pool, HighWater{}, "|", 2) // prime
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := int64(2); i <= 4; i++ { // 3 rows after the prime
+		insLog(t, pool, base.Add(time.Duration(i)*time.Second), "S", i64(1), i64(i), fmt.Sprintf("l%d|", i), "telemetry", false, false)
+	}
+	ev1, hw1, err := Tail(ctx, pool, hw, "|", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ev1) != 2 {
+		t.Fatalf("first tick emitted %d, want 2 (batch cap)", len(ev1))
+	}
+	ev2, _, err := Tail(ctx, pool, hw1, "|", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ev2) != 1 {
+		t.Fatalf("second tick emitted %d, want the remaining 1", len(ev2))
+	}
+}
