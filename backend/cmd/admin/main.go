@@ -122,6 +122,12 @@ func runServer() {
 	// FW_BLOB_DIR is mounted :rw here (register writes), :ro in ingest (serve streams) — §4.7.
 	registerOTARoutes(mux, pool, env("FW_BLOB_DIR", "/fwblobs"))
 
+	// Log viewer read surface (A21): keyset query + serials picker + gapless reconstruct, all auth-gated
+	// (read-only, D21.7). Plus the minimal fragment-prune ticker (§4.7) — the fragment table has no
+	// retention of its own, so it would grow unbounded from reassembly without this.
+	registerLogRoutes(mux, pool)
+	startFragmentPrune(ctx, pool)
+
 	// SSE scaffold (D19.7): live roster/telemetry/log stream. auth-gated (any valid
 	// key, O1) — the generic events mirror the GET read routes. A feature channel
 	// that pushes admin-only data must additionally re-auth on is_admin (§4.5 hook).
