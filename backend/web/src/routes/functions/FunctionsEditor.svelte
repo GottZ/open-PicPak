@@ -1,72 +1,165 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { Resource } from '../../lib/resource.svelte'
   import { apiFetch, toApiError } from '../../lib/api'
   import StateView from '../../lib/StateView.svelte'
   import { session } from '../../lib/auth.svelte'
   import { notify } from '../../lib/toasts.svelte'
   import { mutationAffordance } from '../../lib/readonly'
+  import { loadDraft, saveDraft, clearDraft } from '../../lib/draft'
+  import { createFaasEditor, type FaasEditorHandle } from '../../lib/faas/editor'
+  import { CAP_ENTRIES, CTX_ENTRIES, RETURN_ENTRIES, TEMPLATE } from '../../lib/faas/catalog'
   import {
-    TRIGGER_TYPES,
-    newFunctionError,
-    blastRadiusLabel,
-    type NewFunctionDraft,
-  } from '../../lib/faas/functions'
+    DITHER_OPTIONS,
+    RENDER_MODES,
+    emptyTriggerFields,
+    parseTriggerFields,
+    buildTriggerConfig,
+    parseEgress,
+    formatEgress,
+    webhookURL,
+    validCron,
+    type TriggerFields,
+  } from '../../lib/faas/config'
+  import { TRIGGER_TYPES, newFunctionError, blastRadiusLabel, type NewFunctionDraft } from '../../lib/faas/functions'
   import type {
     TriggerType,
     FunctionsResponse,
     FunctionResponse,
-    FunctionDetail,
     CreateFunctionResponse,
+    SecretsResponse,
+    ConfigResponse,
   } from '../../lib/faas/types'
 
-  // FaaS function editor (Design 25, W1) — the function list + CRUD (create / enable-toggle / delete) +
-  // a read-only view of a function's source, config and bindings. NO execution ships here: the code
-  // editor (CM6) lands in W2, test-run in W3, the bind picker in W4. Every function source, config value,
-  // secret NAME, egress host and serial renders as a TEXT NODE (Svelte auto-escapes {…}); {@html} is
-  // banned (D19.10 — function source + operator input are foreign/attacker-influenced). The server stays
-  // authoritative on every mutation via requireAdmin (D25.11); the read-only affordance is cosmetic.
-
-  const SOURCE_PLACEHOLDER = 'export default async (ctx, cap) => ({ image })'
+  // FaaS function editor (Design 25, W2) — the CM6 code editor + capability completion + the config forms
+  // (trigger / egress / secrets / dither / enabled, Policy=Data over the faas_functions row) + the
+  // webhook-token surface. AUTHOR-ONLY: no test-run / execution ships here (that is W3, admin-gated + the
+  // first RCE surface). Every function source, config value, secret NAME, egress host and serial renders
+  // as a TEXT NODE (Svelte auto-escapes {…}); {@html} is banned (D19.10). The server stays authoritative
+  // on every mutation via requireAdmin (D25.11); the read-only affordance is cosmetic — a non-admin sees a
+  // read-only editor + no Save/Enable/Delete/rotate/secret-edit.
 
   const functions = new Resource<FunctionsResponse>(() => apiFetch<FunctionsResponse>('/api/functions'))
   void functions.load()
 
-  // selected function detail (loaded on demand — keyed by selection, so managed by hand rather than a
-  // Resource). detail carries the source + config + the serials bound to it (its blast radius).
+  // non-secret SPA config (webhook base URL, D22.13) — loaded once, best-effort (a failure just hides the
+  // webhook URL). GET /api/config is auth-gated (any key).
+  let webhookBase = $state('')
+  void apiFetch<ConfigResponse>('/api/config')
+    .then((c) => (webhookBase = c.webhook_base_url))
+    .catch(() => {})
+
+  // secret NAMES for the binding picker (Doc 18 metadata, D25.7). GET /api/secrets is admin-only, so this
+  // only loads for an admin (a read-only operator sees the bound names as read-only chips, never a value).
+  let secretNames = $state<string[]>([])
+  if (session.is_admin) {
+    void apiFetch<SecretsResponse>('/api/secrets')
+      .then((r) => (secretNames = r.secrets.map((s) => s.name)))
+      .catch(() => {})
+  }
+
+  // ---- selection + loaded detail ----
   let selectedId = $state<number | null>(null)
   let detail = $state<FunctionResponse | null>(null)
   let detailStatus = $state<'idle' | 'loading' | 'error'>('idle')
   let detailError = $state<string | null>(null)
 
-  // create form
+  // ---- editable state (mirrors the loaded function; the editor drives `source`) ----
+  let source = $state('')
+  let boundSecrets = $state<string[]>([])
+  let trigFields = $state<TriggerFields>(emptyTriggerFields())
+  let egressText = $state('')
+  // baseline snapshot to derive the dirty flag (source + config vs what was loaded).
+  let baseline = $state<{ source: string; trig: string; egress: string; secrets: string } | null>(null)
+
+  // ---- create form ----
   let newName = $state('')
   let newTrigger = $state<TriggerType>('render')
-  let newSource = $state('')
   let creating = $state(false)
 
-  // a webhook function's token is shown EXACTLY ONCE on create (D24.13); hold it in a dismissible banner
-  // the operator copies — it is never recoverable (rotate to replace).
+  // webhook token shown ONCE on create/rotate (D24.13).
   let mintedToken = $state<{ name: string; token: string } | null>(null)
-
-  // busy guards so a double-click can't fire two mutations.
+  let saving = $state(false)
   let mutating = $state(false)
 
-  // server stays authoritative via requireAdmin; this is the cosmetic gate (D25.11 / D19.6).
   const affordance = $derived(mutationAffordance(session.is_admin))
-  const draft = $derived<NewFunctionDraft>({ name: newName, source: newSource, triggerType: newTrigger })
-  const createError = $derived(newFunctionError(draft))
+  const createDraft = $derived<NewFunctionDraft>({ name: newName, source: TEMPLATE, triggerType: newTrigger })
+  const createError = $derived(newFunctionError(createDraft))
+
+  const dirty = $derived(
+    baseline !== null &&
+      detail !== null &&
+      (source !== baseline.source ||
+        JSON.stringify(buildTriggerConfig(detail.function.trigger_type, trigFields)) !== baseline.trig ||
+        JSON.stringify(parseEgress(egressText)) !== baseline.egress ||
+        JSON.stringify([...boundSecrets].sort()) !== baseline.secrets),
+  )
+  const cronOk = $derived(detail?.function.trigger_type !== 'schedule' || validCron(trigFields.cron))
+  const draftScope = $derived(selectedId === null ? '' : `faas:${selectedId}`)
+
+  // ---- CM6 editor: one instance, reconciled whenever the mount node changes identity (select / deselect /
+  // remount). setDoc re-seeds it on a selection change; setReadOnly tracks a live admin demotion. ----
+  let editorEl = $state<HTMLDivElement | null>(null)
+  let handle: FaasEditorHandle | null = null
+  let mountedNode: HTMLElement | null = null
+
+  $effect(() => {
+    const el = editorEl
+    if (el === mountedNode) return
+    handle?.destroy()
+    handle = null
+    mountedNode = el
+    if (el) {
+      handle = createFaasEditor({
+        parent: el,
+        doc: source,
+        getBound: () => boundSecrets,
+        readOnly: !session.is_admin,
+        onChange: (d) => {
+          source = d
+          if (selectedId !== null) saveDraft(`faas:${selectedId}`, d)
+        },
+      })
+    }
+  })
+  // live admin demotion → the editor goes read-only without a reload (D25.11).
+  $effect(() => {
+    handle?.setReadOnly(!session.is_admin)
+  })
+  onDestroy(() => handle?.destroy())
 
   async function loadDetail(id: number): Promise<void> {
     selectedId = id
     detailStatus = 'loading'
     detailError = null
     try {
-      detail = await apiFetch<FunctionResponse>(`/api/functions/${id}`)
+      const res = await apiFetch<FunctionResponse>(`/api/functions/${id}`)
+      detail = res
+      const fn = res.function
+      const draft = loadDraft(`faas:${id}`)
+      const initial = draft ?? fn.source
+      source = initial
+      boundSecrets = [...fn.secret_bindings]
+      trigFields = parseTriggerFields(fn.trigger_config)
+      egressText = formatEgress(fn.egress_allow)
+      baseline = snapshot(fn.trigger_type)
+      handle?.setDoc(initial)
       detailStatus = 'idle'
     } catch (e) {
       detail = null
       detailError = toApiError(e).message
       detailStatus = 'error'
+    }
+  }
+
+  // the baseline uses the SAVED source (fn.source), not a restored draft — so a restored draft reads dirty.
+  function snapshot(triggerType: TriggerType): { source: string; trig: string; egress: string; secrets: string } {
+    const fn = detail!.function
+    return {
+      source: fn.source,
+      trig: JSON.stringify(buildTriggerConfig(triggerType, parseTriggerFields(fn.trigger_config))),
+      egress: JSON.stringify([...fn.egress_allow]),
+      secrets: JSON.stringify([...fn.secret_bindings].sort()),
     }
   }
 
@@ -81,12 +174,11 @@
     try {
       const res = await apiFetch<CreateFunctionResponse>('/api/functions', {
         method: 'POST',
-        body: JSON.stringify({ name: newName.trim(), source: newSource, trigger_type: newTrigger }),
+        body: JSON.stringify({ name: newName.trim(), source: TEMPLATE, trigger_type: newTrigger }),
       })
-      notify.success(`created function “${res.name}” (disabled — enable it when ready)`)
+      notify.success(`created “${res.name}” (disabled — author it, then enable)`)
       if (res.webhook_token) mintedToken = { name: res.name, token: res.webhook_token }
       newName = ''
-      newSource = ''
       newTrigger = 'render'
       await functions.load()
       await loadDetail(res.id)
@@ -97,14 +189,41 @@
     }
   }
 
-  async function toggleEnabled(fn: FunctionDetail): Promise<void> {
-    if (mutating || !session.is_admin) return
-    mutating = true
+  async function doSave(): Promise<void> {
+    if (!detail || saving || !session.is_admin || !dirty || !cronOk) return
+    saving = true
     try {
+      const fn = detail.function
       await apiFetch(`/api/functions/${fn.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ enabled: !fn.enabled }),
+        method: 'PUT',
+        body: JSON.stringify({
+          source,
+          trigger_config: buildTriggerConfig(fn.trigger_type, trigFields),
+          secret_bindings: boundSecrets,
+          egress_allow: parseEgress(egressText),
+        }),
       })
+      clearDraft(`faas:${fn.id}`)
+      const bound = detail.bound_serials.length
+      notify.success(
+        bound > 0
+          ? `saved “${fn.name}” (version bumped) — next frame changes on ${blastRadiusLabel(bound)}`
+          : `saved “${fn.name}” (version bumped)`,
+      )
+      await reloadAll(true)
+    } catch (e) {
+      notify.error(toApiError(e))
+    } finally {
+      saving = false
+    }
+  }
+
+  async function toggleEnabled(): Promise<void> {
+    if (!detail || mutating || !session.is_admin) return
+    mutating = true
+    const fn = detail.function
+    try {
+      await apiFetch(`/api/functions/${fn.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !fn.enabled }) })
       notify.success(`${fn.name} ${fn.enabled ? 'disabled' : 'enabled'}`)
       await reloadAll(true)
     } catch (e) {
@@ -114,27 +233,44 @@
     }
   }
 
-  // delete is armed by a first click (the confirm shows the blast radius), committed by the second — no
-  // browser confirm() dialog; the cascade drops the function's device bindings + last-good rows (0009).
+  async function rotateToken(): Promise<void> {
+    if (!detail || mutating || !session.is_admin) return
+    mutating = true
+    const fn = detail.function
+    try {
+      const res = await apiFetch<{ success: true; webhook_token: string }>(`/api/functions/${fn.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ rotate_token: true }),
+      })
+      mintedToken = { name: fn.name, token: res.webhook_token }
+      notify.success(`rotated webhook token for ${fn.name}`)
+    } catch (e) {
+      notify.error(toApiError(e))
+    } finally {
+      mutating = false
+    }
+  }
+
   let deleteArmed = $state(false)
   $effect(() => {
-    // disarm whenever the selection changes.
     void selectedId
     deleteArmed = false
   })
-
-  async function doDelete(fn: FunctionDetail): Promise<void> {
-    if (mutating || !session.is_admin) return
+  async function doDelete(): Promise<void> {
+    if (!detail || mutating || !session.is_admin) return
     if (!deleteArmed) {
       deleteArmed = true
       return
     }
     mutating = true
+    const fn = detail.function
     try {
       await apiFetch(`/api/functions/${fn.id}`, { method: 'DELETE' })
-      notify.success(`deleted function “${fn.name}”`)
+      clearDraft(`faas:${fn.id}`)
+      notify.success(`deleted “${fn.name}”`)
       selectedId = null
       detail = null
+      baseline = null
       await functions.load()
     } catch (e) {
       notify.error(toApiError(e))
@@ -144,18 +280,22 @@
     }
   }
 
-  function configText(cfg: Record<string, unknown>): string {
-    return Object.keys(cfg).length === 0 ? '' : JSON.stringify(cfg, null, 2)
+  function toggleSecret(name: string): void {
+    boundSecrets = boundSecrets.includes(name)
+      ? boundSecrets.filter((n) => n !== name)
+      : [...boundSecrets, name]
   }
+
+  const hookURL = $derived(detail ? webhookURL(webhookBase, detail.function.name) : null)
 </script>
 
 <section class="functions">
   <header>
     <h1>Functions</h1>
     <p class="muted">
-      Author render/schedule/webhook functions for the FaaS engine. This wave ships the function list,
-      create/enable/delete, and a read-only view — the code editor, test-run and preview arrive in later
-      waves. A new function is created <strong>disabled</strong>; enable it when it is ready to serve.
+      Author render / schedule / webhook functions for the FaaS engine. Edit the source, configure the
+      trigger / egress / secret bindings / dither, and enable when ready. Test-run + frame preview arrive
+      in the next wave — this surface authors, it does not execute.
     </p>
   </header>
 
@@ -203,31 +343,17 @@
             <h3>create function</h3>
             <label>
               name
-              <input
-                type="text"
-                bind:value={newName}
-                placeholder="lowercase-slug"
-                autocomplete="off"
-                spellcheck="false"
-              />
+              <input type="text" bind:value={newName} placeholder="lowercase-slug" autocomplete="off" spellcheck="false" />
             </label>
             <label>
               trigger
               <select bind:value={newTrigger}>
-                {#each TRIGGER_TYPES as t (t)}
-                  <option value={t}>{t}</option>
+                {#each TRIGGER_TYPES as tt (tt)}
+                  <option value={tt}>{tt}</option>
                 {/each}
               </select>
             </label>
-            <label class="src-label">
-              source
-              <textarea
-                bind:value={newSource}
-                rows="4"
-                placeholder={SOURCE_PLACEHOLDER}
-                spellcheck="false"
-              ></textarea>
-            </label>
+            <p class="muted small">Created with a starter template — author the source in the editor.</p>
             {#if newName !== '' && createError !== null}
               <p class="inline-err" role="status">{createError}</p>
             {/if}
@@ -243,7 +369,7 @@
                 {creating ? 'creating…' : 'Create'}
               </button>
               {#if newTrigger === 'webhook'}
-                <span class="muted hint">a token is minted + shown once on create</span>
+                <span class="muted hint">a token is minted + shown once</span>
               {/if}
             </div>
           </div>
@@ -261,99 +387,198 @@
             </div>
           {:else if detail}
             {@const fn = detail.function}
-            {@const cfg = configText(fn.trigger_config)}
             <div class="detail">
               <div class="detail-head">
                 <h2>{fn.name}</h2>
                 <span class="badge">{fn.trigger_type}</span>
                 <span class="badge" class:on={fn.enabled}>{fn.enabled ? 'enabled' : 'disabled'}</span>
                 <span class="muted">v{fn.version}</span>
+                {#if dirty}<span class="badge dirty">unsaved</span>{/if}
               </div>
 
-              <div class="detail-actions">
-                <button
-                  type="button"
-                  disabled={affordance.disabled || mutating}
-                  title={affordance.disabled ? affordance.title : ''}
-                  aria-disabled={affordance['aria-disabled']}
-                  onclick={() => toggleEnabled(fn)}
-                >
-                  {fn.enabled ? 'Disable' : 'Enable'}
-                </button>
-                <button
-                  type="button"
-                  class="danger"
-                  disabled={affordance.disabled || mutating}
-                  title={affordance.disabled ? affordance.title : ''}
-                  aria-disabled={affordance['aria-disabled']}
-                  onclick={() => doDelete(fn)}
-                >
-                  {deleteArmed
-                    ? `confirm delete (${blastRadiusLabel(detail.bound_serials.length)})`
-                    : 'Delete'}
-                </button>
-                {#if deleteArmed}
-                  <button type="button" class="link" onclick={() => (deleteArmed = false)}>cancel</button>
-                {/if}
+              {#if !session.is_admin}
+                <p class="muted small">Read-only — sign in with an admin key to edit, enable or delete.</p>
+              {/if}
+
+              <div class="editor-wrap">
+                <div class="editor" bind:this={editorEl}></div>
               </div>
 
-              <div class="field">
-                <span class="flabel">bound devices ({blastRadiusLabel(detail.bound_serials.length)})</span>
-                {#if detail.bound_serials.length > 0}
-                  <ul class="chips">
-                    {#each detail.bound_serials as s (s)}
-                      <li class="chip mono">{s}</li>
-                    {/each}
-                  </ul>
-                  <p class="muted small">Editing this function's source will change the next frame on every bound device.</p>
+              <div class="config">
+                <h3>trigger · {fn.trigger_type}</h3>
+                {#if fn.trigger_type === 'render'}
+                  <div class="row">
+                    <label>
+                      mode
+                      <select bind:value={trigFields.mode} disabled={affordance.disabled}>
+                        <option value="">sync (default)</option>
+                        {#each RENDER_MODES as m (m)}<option value={m}>{m}</option>{/each}
+                      </select>
+                    </label>
+                    <label>
+                      ttl_s
+                      <input type="number" min="0" bind:value={trigFields.ttlS} disabled={affordance.disabled} />
+                    </label>
+                    <label>
+                      interval_s
+                      <input type="number" min="0" bind:value={trigFields.intervalS} disabled={affordance.disabled} />
+                    </label>
+                  </div>
+                {:else if fn.trigger_type === 'schedule'}
+                  <div class="row">
+                    <label class="grow">
+                      cron
+                      <input
+                        type="text"
+                        bind:value={trigFields.cron}
+                        placeholder="m h dom mon dow"
+                        disabled={affordance.disabled}
+                        spellcheck="false"
+                      />
+                    </label>
+                    <label>
+                      interval_s
+                      <input type="number" min="0" bind:value={trigFields.intervalS} disabled={affordance.disabled} />
+                    </label>
+                  </div>
+                  {#if !cronOk}<p class="inline-err">cron must be 5 whitespace-separated fields</p>{/if}
+                  <p class="muted small">Cron drives the schedule; interval_s is the M1 fallback.</p>
                 {:else}
-                  <p class="muted small">Not bound to any device — nothing renders it yet.</p>
+                  <div class="webhook">
+                    {#if hookURL}
+                      <label class="grow">
+                        inbound URL
+                        <input type="text" class="mono" readonly value={hookURL} />
+                      </label>
+                    {:else}
+                      <p class="muted small">Webhook base URL not configured (ADMIN_WEBHOOK_BASE_URL) — the URL is hidden.</p>
+                    {/if}
+                    <button
+                      type="button"
+                      disabled={affordance.disabled || mutating}
+                      title={affordance.disabled ? affordance.title : ''}
+                      onclick={rotateToken}
+                    >
+                      rotate token
+                    </button>
+                  </div>
                 {/if}
-              </div>
 
-              <div class="field">
-                <span class="flabel">source</span>
-                <pre class="code">{fn.source}</pre>
-              </div>
+                <div class="row wrap">
+                  <label>
+                    dither
+                    <select bind:value={trigFields.dither} disabled={affordance.disabled}>
+                      {#each DITHER_OPTIONS as d (d.value)}<option value={d.value}>{d.label}</option>{/each}
+                    </select>
+                  </label>
+                  <div class="enabled-toggle">
+                    <span class="flabel">enabled</span>
+                    <button
+                      type="button"
+                      class:on={fn.enabled}
+                      disabled={affordance.disabled || mutating}
+                      title={affordance.disabled ? affordance.title : ''}
+                      onclick={toggleEnabled}
+                    >
+                      {fn.enabled ? 'on' : 'off'}
+                    </button>
+                  </div>
+                </div>
 
-              <div class="field">
-                <span class="flabel">trigger config</span>
-                {#if cfg === ''}
-                  <p class="muted small">(defaults)</p>
-                {:else}
-                  <pre class="code">{cfg}</pre>
-                {/if}
-              </div>
+                <div class="field">
+                  <span class="flabel">egress allow (one host[:port] per line — empty = no outbound network)</span>
+                  <textarea
+                    bind:value={egressText}
+                    rows="2"
+                    placeholder="host.example:8123"
+                    disabled={affordance.disabled}
+                    spellcheck="false"
+                  ></textarea>
+                </div>
 
-              <div class="field two">
-                <div>
-                  <span class="flabel">secret bindings</span>
-                  {#if fn.secret_bindings.length > 0}
+                <div class="field">
+                  <span class="flabel">secret bindings (names only — least privilege; a value is never shown)</span>
+                  {#if session.is_admin}
+                    {#if secretNames.length === 0}
+                      <p class="muted small">No secrets defined — add them in Settings (Doc 18).</p>
+                    {:else}
+                      <ul class="secret-picker">
+                        {#each secretNames as name (name)}
+                          <li>
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={boundSecrets.includes(name)}
+                                onchange={() => toggleSecret(name)}
+                              />
+                              <span class="mono">{name}</span>
+                            </label>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  {:else if boundSecrets.length > 0}
                     <ul class="chips">
-                      {#each fn.secret_bindings as name (name)}
-                        <li class="chip mono">{name}</li>
-                      {/each}
+                      {#each boundSecrets as name (name)}<li class="chip mono">{name}</li>{/each}
                     </ul>
                   {:else}
                     <p class="muted small">none</p>
                   {/if}
                 </div>
-                <div>
-                  <span class="flabel">egress allow</span>
-                  {#if fn.egress_allow.length > 0}
-                    <ul class="chips">
-                      {#each fn.egress_allow as host (host)}
-                        <li class="chip mono">{host}</li>
-                      {/each}
-                    </ul>
-                  {:else}
-                    <p class="muted small">none (no outbound network)</p>
-                  {/if}
+
+                <div class="save-row">
+                  <button
+                    type="button"
+                    class="primary"
+                    disabled={affordance.disabled || saving || !dirty || !cronOk}
+                    title={affordance.disabled ? affordance.title : ''}
+                    aria-disabled={affordance['aria-disabled'] || !dirty}
+                    onclick={doSave}
+                  >
+                    {saving ? 'saving…' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    class="danger"
+                    disabled={affordance.disabled || mutating}
+                    title={affordance.disabled ? affordance.title : ''}
+                    onclick={doDelete}
+                  >
+                    {deleteArmed ? `confirm delete (${blastRadiusLabel(detail.bound_serials.length)})` : 'Delete'}
+                  </button>
+                  {#if deleteArmed}<button type="button" class="link" onclick={() => (deleteArmed = false)}>cancel</button>{/if}
+                  <span class="muted small blast">bound: {blastRadiusLabel(detail.bound_serials.length)}</span>
                 </div>
               </div>
+
+              <details class="caps">
+                <summary>capability reference</summary>
+                <p class="muted small">
+                  The curated worker scope — autocomplete offers exactly these (and this function's bound
+                  secrets). Documentation, not a firmware-parity manifest.
+                </p>
+                <h4>cap.* (capabilities)</h4>
+                <ul class="caplist">
+                  {#each CAP_ENTRIES as c (c.label)}
+                    <li><code>{c.detail}</code><span class="doc">{c.info}</span></li>
+                  {/each}
+                </ul>
+                <h4>ctx.* (context)</h4>
+                <ul class="caplist">
+                  {#each CTX_ENTRIES as c (c.label)}
+                    <li><code>{c.detail}</code><span class="doc">{c.info}</span></li>
+                  {/each}
+                </ul>
+                <h4>return</h4>
+                <ul class="caplist">
+                  {#each RETURN_ENTRIES as c (c.label)}
+                    <li><code>{c.detail}</code><span class="doc">{c.info}</span></li>
+                  {/each}
+                </ul>
+              </details>
             </div>
           {:else}
-            <p class="muted select-hint">Select a function to view its source, config and bindings.</p>
+            <p class="muted select-hint">Select a function to author it, or create one.</p>
           {/if}
         </div>
       </div>
@@ -382,7 +607,7 @@
   }
   .grid {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.9fr);
     gap: 1rem;
     align-items: start;
   }
@@ -404,13 +629,20 @@
     letter-spacing: 0.04em;
     color: var(--fg-muted);
   }
+  h4 {
+    margin: 0.6rem 0 0.2rem;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-muted);
+  }
   .fn-list {
     list-style: none;
     margin: 0;
     padding: 0;
     border: 1px solid var(--border);
     border-radius: 6px;
-    max-height: 22rem;
+    max-height: 20rem;
     overflow-y: auto;
   }
   .fn-opt {
@@ -448,14 +680,13 @@
     flex: 1;
     font-weight: 600;
   }
-  .fn-trigger {
+  .fn-trigger,
+  .fn-ver {
     color: var(--fg-muted);
     font-size: 0.78rem;
   }
   .fn-ver {
-    color: var(--fg-muted);
     font-variant-numeric: tabular-nums;
-    font-size: 0.78rem;
   }
   .create {
     border: 1px solid var(--border);
@@ -466,16 +697,16 @@
     gap: 0.5rem;
   }
   .create label,
-  .src-label {
+  .config label {
     display: flex;
     flex-direction: column;
     gap: 0.2rem;
     font-size: 0.8rem;
     color: var(--fg-muted);
   }
-  .create input,
-  .create select,
-  .create textarea {
+  input,
+  select,
+  textarea {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -483,9 +714,15 @@
     padding: 0.35rem 0.5rem;
     font-size: 0.88rem;
   }
-  .create textarea {
+  textarea {
     font-family: var(--mono, monospace);
     resize: vertical;
+  }
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
   .inline-err {
     margin: 0;
@@ -493,7 +730,7 @@
     font-size: 0.8rem;
   }
   .actions,
-  .detail-actions {
+  .save-row {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -567,15 +804,53 @@
     color: var(--ok, #4caf50);
     border-color: var(--ok, #4caf50);
   }
+  .badge.dirty {
+    color: var(--warn, #d08770);
+    border-color: var(--warn, #d08770);
+  }
+  .editor {
+    min-height: 8rem;
+  }
+  .config {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .row {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  .row.wrap {
+    align-items: center;
+  }
+  .row .grow,
+  .webhook .grow {
+    flex: 1;
+  }
+  .row input[type='number'] {
+    width: 6rem;
+  }
+  .webhook {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  .enabled-toggle {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .enabled-toggle button.on {
+    border-color: var(--ok, #4caf50);
+    color: var(--ok, #4caf50);
+  }
   .field {
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
-  }
-  .field.two {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
   }
   .flabel {
     text-transform: uppercase;
@@ -583,22 +858,23 @@
     letter-spacing: 0.04em;
     color: var(--fg-muted);
   }
-  .code {
+  .secret-picker {
+    list-style: none;
     margin: 0;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.5rem 0.6rem;
-    font-family: var(--mono, monospace);
-    font-size: 0.82rem;
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 22rem;
-    overflow: auto;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
+  }
+  .secret-picker label {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.3rem;
+    color: var(--fg);
   }
   .chips {
     list-style: none;
-    margin: 0.2rem 0 0;
+    margin: 0;
     padding: 0;
     display: flex;
     flex-wrap: wrap;
@@ -609,6 +885,40 @@
     padding: 0.05rem 0.5rem;
     border-radius: 4px;
     border: 1px solid var(--border);
+  }
+  .save-row .blast {
+    margin-left: auto;
+  }
+  .caps {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+  }
+  .caps summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .caplist {
+    list-style: none;
+    margin: 0.3rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .caplist li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+  .caplist code {
+    font-family: var(--mono, monospace);
+    font-size: 0.8rem;
+  }
+  .doc {
+    color: var(--fg-muted);
+    font-size: 0.78rem;
   }
   .detail-error {
     border: 1px solid var(--danger);
