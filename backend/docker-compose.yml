@@ -20,7 +20,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-    networks: [internal]
+    networks: [dbnet]
 
   # one-shot: applies all forward migrations in order against the healthy DB, then exits 0. Each
   # migration is idempotent (IF NOT EXISTS) -> safe to re-run; psql applies the -f files in order.
@@ -65,7 +65,7 @@ services:
       - /migrations/0010_device_log_cursor_last_seq.up.sql
     volumes:
       - ./migrations:/migrations:ro
-    networks: [internal]
+    networks: [dbnet]
     restart: "no"
 
   # one-shot: a fresh named volume is created root-owned (0:0, 0755), but ingest/admin run as 65534
@@ -76,7 +76,7 @@ services:
     command: ["chown", "-R", "65534:65534", "/fwblobs"]
     volumes:
       - fwblobs:/fwblobs
-    networks: [internal]
+    networks: [dbnet]
     restart: "no"
 
   grafana:
@@ -96,7 +96,7 @@ services:
       - grafanadata:/var/lib/grafana
     ports:
       - "127.0.0.1:3000:3000"                  # localhost only (dev); prod: internal/VPN
-    networks: [internal]
+    networks: [dbnet]
 
   # Wave S5b1: public telemetry/OTA ingest (legacy token route; HOTP auth + OTA-signal headers land in S5c/S5d).
   ingest:
@@ -123,13 +123,18 @@ services:
       OTA_SERVE_ENABLED: ${OTA_SERVE_ENABLED:-false}
       OTA_TICKET_KEY: ${OTA_TICKET_KEY:-}
       OTA_TICKET_TTL: ${OTA_TICKET_TTL:-120s}
+      # A24: arms the /frame + /faas/hook path — ingest dials the faas-supervisor over this UDS. Unset
+      # ⇒ the arms 404 (pausability-safe). No secret/DB-render logic here (D24.1); ingest only proxies
+      # the packed frame the supervisor returns and serves the embedded unavailable frame on outage (T13).
+      RENDER_SOCK: /run/render/render.sock
     volumes:
       - fwblobs:/fwblobs:ro
+      - faas-render-sock:/run/render          # render-request UDS to faas-supervisor (ingest connects)
     ports:
       # Host bind address via INGEST_BIND (.env, gitignored) so a real IP never lands in the repo.
       # Default localhost (dev); set INGEST_BIND to a specific public IP to expose, or front with TLS.
       - "${INGEST_BIND:-127.0.0.1}:8080:8080"
-    networks: [internal]
+    networks: [dbnet]
     restart: unless-stopped
 
   # A17: operator control plane (bearer-authenticated CRUD + RCE-capable command enqueue). Runs in a
@@ -161,13 +166,107 @@ services:
       # loopback ONLY — the operator plane is privileged (RCE-capable enqueue). NEVER INGEST_BIND,
       # never a public IP. Reach it over the host loopback or a VPN; TLS terminates at the proxy.
       - "127.0.0.1:8081:8081"
-    networks: [internal]
+    networks: [dbnet]
+    restart: unless-stopped
+
+  # A24 FaaS zone. The M5 process/network split, concretely (design §4.1): the TRUSTED supervisor holds
+  # SECRETS_KEY + the DB and sits on dbnet; the UNTRUSTED Bun worker sits on faasnet-ONLY (no DB route,
+  # no default route, no key) and reaches the outside solely through faas-egress (faasnet + extnet, the
+  # IP-pinning policy proxy — never dbnet). The three UDS seams (ingest↔supervisor render.sock,
+  # supervisor↔worker m4.sock, supervisor↔egress egress-ctl.sock) ride shared volumes, one per seam so
+  # the untrusted worker only ever shares a volume with the supervisor (m4.sock) — never render/egress-ctl.
+
+  # one-shot: prep the three socket volumes' ownership. render/egress-ctl are created by 65534
+  # (supervisor/egress) → chown 65534; m4 is created by the worker's `bun` user (cross-UID with the
+  # supervisor connector) → 0777 so both can create/connect (daemon.ts also chmods the socket file).
+  faas-sock-init:
+    image: alpine:3
+    command: ["sh", "-c", "chown 65534:65534 /render /egress && chmod 0777 /m4"]
+    volumes:
+      - faas-render-sock:/render
+      - faas-m4-sock:/m4
+      - faas-egress-sock:/egress
+    networks: [dbnet]
+    restart: "no"
+
+  faas-supervisor:
+    build:
+      context: .
+      args:
+        CMD: faas-supervisor
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      faas-sock-init:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-picpak}
+      POSTGRES_USER: ${POSTGRES_USER:-picpak}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGHOST: timescaledb:5432
+      # SECRETS_KEY: the SAME master key admin uses — admin seals, the supervisor opens (Doc 18 §4.4).
+      # NEVER the worker/egress/ingest env. Boot-fails closed without it (sealbox.FromEnv).
+      SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY in .env}
+      SECRETS_KEY_PREV: ${SECRETS_KEY_PREV:-}
+      RENDER_SOCK: /run/render/render.sock         # ingest→supervisor (this process listens)
+      FAAS_M4_SOCK: /run/m4/m4.sock                # supervisor→worker M4 (this process connects)
+      EGRESS_CONTROL_SOCK: /run/egress/egress-ctl.sock  # supervisor→egress per-call cred provisioning
+    volumes:
+      - faas-render-sock:/run/render
+      - faas-m4-sock:/run/m4
+      - faas-egress-sock:/run/egress
+    networks: [dbnet]                              # the ONLY FaaS-zone process on dbnet; worker/egress talk to it by UDS
+    restart: unless-stopped
+
+  # UNTRUSTED foreign-code evaluator. faasnet-ONLY: no DB route (timescaledb is on dbnet → T11), no
+  # default route / internet (faasnet is internal → T5), NO SECRETS_KEY in env (T10). Reaches the
+  # supervisor by UDS (m4.sock) and the egress proxy by TCP (faasnet); nothing else.
+  faas-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    depends_on:
+      faas-sock-init:
+        condition: service_completed_successfully
+    environment:
+      FAAS_M4_SOCK: /run/m4/m4.sock                # this process LISTENS; the supervisor connects
+      EGRESS_PROXY_URL: http://faas-egress:8888    # the only next-hop off faasnet (D24.8/F24.4)
+    volumes:
+      - faas-m4-sock:/run/m4                        # ONLY the m4 seam — never render/egress-ctl (isolation)
+    networks: [faasnet]
+    restart: unless-stopped
+
+  # policy egress proxy: resolve-then-connect, IP-pin the post-resolve connect IP, per-call allowlist ∪
+  # deny-set (D24.8/F24.4). faasnet (receive the worker's fetch) + extnet (reach the internet); NEVER
+  # dbnet — it can reach the internet but never the DB/metadata. Holds NO SECRETS_KEY.
+  faas-egress:
+    build:
+      context: .
+      args:
+        CMD: faas-egress
+    depends_on:
+      faas-sock-init:
+        condition: service_completed_successfully
+    environment:
+      EGRESS_PROXY_ADDR: ":8888"                   # the worker connects here over faasnet
+      EGRESS_CONTROL_SOCK: /run/egress/egress-ctl.sock  # this process LISTENS; the supervisor provisions
+    volumes:
+      - faas-egress-sock:/run/egress
+    networks: [faasnet, extnet]
     restart: unless-stopped
 
 volumes:
   tsdata:
   grafanadata:
   fwblobs:                                      # firmware blobs: admin writes (:rw), ingest serves (:ro)
+  faas-render-sock:                             # ingest↔supervisor render-request UDS
+  faas-m4-sock:                                 # supervisor↔worker M4 UDS (the ONLY worker-shared volume)
+  faas-egress-sock:                             # supervisor↔egress control UDS
 
 networks:
-  internal:
+  dbnet:                                        # design's dbnet: DB + ingest + admin + faas-supervisor
+  faasnet:
+    internal: true                              # no internet, no DB — the worker's containment (T5/T11)
+  extnet:                                       # the ONLY internet egress in the zone (faas-egress only)

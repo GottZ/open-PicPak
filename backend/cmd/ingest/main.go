@@ -41,6 +41,12 @@ type server struct {
 
 	// Log reassembly (A21). logFrameMax is the frame plausibility cap (D21.6) — policy=data, env only.
 	logFrameMax int64
+
+	// FaaS frame path (A24 §4.3). faasClient (nil ⇒ arms disabled, default) dials the faas-supervisor
+	// render-request seam over RENDER_SOCK (HTTP-over-UDS); faasRetryWake is the wake ingest sets when
+	// it serves the unavailable frame (supervisor outage). No secret/DB-render logic lives here (D24.1).
+	faasClient    *http.Client
+	faasRetryWake int
 }
 
 func main() {
@@ -62,6 +68,12 @@ func main() {
 	fwBlobDir := env("FW_BLOB_DIR", "/fwblobs")
 	logFrameMax := logFrameMaxFromEnv() // A21 frame plausibility cap (D21.6)
 
+	// FaaS frame path (A24 §4.3) — policy=data, env only. RENDER_SOCK unset ⇒ arms disabled (default,
+	// pausability-safe): /frame + /faas/hook read as absent (404). FAAS_RETRY_WAKE is the wake ingest
+	// sets on the unavailable frame (supervisor outage) — a short retry so the panel recovers fast.
+	faasClient := newFaasClient(os.Getenv("RENDER_SOCK"))
+	faasRetryWake := faasRetryWakeFromEnv()
+
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -75,7 +87,7 @@ func main() {
 
 	s := &server{pool: pool, token: token, notifier: newC2Notifier(),
 		otaServeEnabled: otaServeEnabled, otaKey: otaKey, otaTTL: otaTTL, fwBlobDir: fwBlobDir,
-		logFrameMax: logFrameMax}
+		logFrameMax: logFrameMax, faasClient: faasClient, faasRetryWake: faasRetryWake}
 	// One LISTEN connection feeds the C2 long-poll wakeup hub for the whole fleet (Design 16).
 	go s.notifier.listenLoop(ctx, pool)
 
@@ -83,8 +95,8 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/", s.handle)
 
-	log.Printf("ingest listening on %s (legacy token route %s, OTA serve %s)",
-		addr, routeState(token), otaServeState(otaServeEnabled, otaKey))
+	log.Printf("ingest listening on %s (legacy token route %s, OTA serve %s, FaaS frame path %s)",
+		addr, routeState(token), otaServeState(otaServeEnabled, otaKey), faasState(faasClient))
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	log.Fatal(srv.ListenAndServe())
 }
@@ -112,6 +124,14 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		s.handleC2Rekey(w, r)
 	case parts[1] == "firmware.bin" && sub == "" && r.Method == http.MethodGet:
 		s.handleFirmware(w, r) // A20 OTA binary serve — gated default-off + ticket (D20.11/D20.9/D20.8)
+	case s.faasArmed() && parts[1] == "frame" && sub == "" && r.Method == http.MethodGet:
+		s.handleFrame(w, r) // A24 device frame path (§4.3) — proxies the supervisor, layers the OTA signal
+	case s.faasArmed() && parts[1] == "faas" && sub == "hook" && r.Method == http.MethodPost:
+		name := "" // /<token>/faas/hook/<name>: the per-function webhook token gates it (§4.3/D24.13)
+		if len(parts) >= 4 {
+			name = parts[3]
+		}
+		s.handleWebhook(w, r, name)
 	default:
 		http.NotFound(w, r)
 	}

@@ -139,6 +139,12 @@ func runServer() {
 	// key — a read-only operator may author/lint a draft; only enqueue is admin-gated). No write path here.
 	registerBerryRoutes(mux, pool)
 
+	// FaaS function store (A24 W5): the 7-route function CRUD + the per-device render binding (§4.8).
+	// Reads auth-gated (any valid key inspects source/config/bindings); mutations requireAdmin. The
+	// webhook token is generated + shown ONCE on create/rotate, its sha256 stored, never echoed (D24.13/K8).
+	// The source is foreign code at rest — never eval'd here, only the worker evaluates it (D24.7).
+	registerFaasRoutes(mux, pool)
+
 	// SSE scaffold (D19.7): live roster/telemetry/log stream. auth-gated (any valid
 	// key, O1) — the generic events mirror the GET read routes. A feature channel
 	// that pushes admin-only data must additionally re-auth on is_admin (§4.5 hook).

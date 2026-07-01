@@ -100,6 +100,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("POST /render", s.handleRender)
+	mux.HandleFunc("POST /webhook", s.handleWebhookFanout)
 
 	log.Printf("faas-supervisor: render-request seam on %s, M4 %s", renderSock, s.m4Sock)
 	log.Fatalf("faas-supervisor: serve: %v", (&http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}).Serve(l))
@@ -176,6 +177,38 @@ func (s *supervisor) handleRender(w http.ResponseWriter, r *http.Request) {
 		packed, status, stale, wake = s.serveLastGood(ctx, fn, rctx)
 	}
 	s.writeFrame(w, packed, status, stale, wake)
+}
+
+// handleWebhookFanout is the ingest→supervisor webhook seam (§4.3). ingest has ALREADY validated the
+// per-function token (sha256 + crypto/subtle.ConstantTimeCompare, D24.13) — this internal UDS endpoint
+// fans the named function out over EVERY bound serial (D24.12), the POST body carried verbatim as
+// ctx.trigger.payload. RENDER_SOCK is reachable ONLY by ingest (shared-volume UDS), so the caller is
+// trusted; the trigger_type/enabled re-check is cheap defense-in-depth, NOT the auth gate. Fan-out is
+// ASYNC: a webhook must not block on N renders (nor couple to ingest's client timeout) — the device
+// picks up the new last-good on its next /frame, so 202 the moment the function is verified and the
+// fan-out is launched. The goroutine uses context.Background() to outlive this request; a process
+// restart drops an in-flight fan-out (best-effort — the next webhook or device poll recovers).
+func (s *supervisor) handleWebhookFanout(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name    string          `json:"name"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil || body.Name == "" {
+		http.Error(w, "bad webhook request", http.StatusBadRequest)
+		return
+	}
+	fn, err := faasstore.LoadFunctionByName(r.Context(), s.pool, body.Name)
+	if err != nil {
+		// ingest looked it up moments ago, so a miss here is a delete race/misconfig — 404, no fan-out.
+		http.Error(w, "no such function", http.StatusNotFound)
+		return
+	}
+	if fn.TriggerType != faasstore.TriggerWebhook || !fn.Enabled {
+		http.Error(w, "not an enabled webhook function", http.StatusConflict)
+		return
+	}
+	go s.fanOut(context.Background(), fn, faasproto.Trigger{Type: "webhook", Payload: body.Payload})
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // runScheduler periodically fans out the enabled prerender/schedule functions whose interval has

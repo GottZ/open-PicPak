@@ -12,7 +12,7 @@ import {
   type ResponseMeta,
 } from "./frame";
 import { runSlot } from "./slot";
-import { unlinkSync } from "node:fs";
+import { chmodSync, unlinkSync } from "node:fs";
 
 export interface DaemonOpts {
   sockPath: string;
@@ -110,6 +110,16 @@ export function startDaemon(opts: DaemonOpts): DaemonHandle {
       },
     },
   });
+
+  // The M4 socket is cross-UID in the deployed posture: the worker runs as `bun` (untrusted image), the
+  // supervisor connects as 65534. Connecting to a UNIX socket needs write permission on the socket file,
+  // so make it world-connectable (A24 W5 deploy quirk). This exposes nothing beyond the two containers —
+  // the socket lives on a volume mounted ONLY in worker + supervisor (never the DB/egress zones).
+  try {
+    chmodSync(opts.sockPath, 0o777);
+  } catch {
+    /* best-effort: same-UID dev runs (tests) connect fine without it */
+  }
 
   return {
     close() {

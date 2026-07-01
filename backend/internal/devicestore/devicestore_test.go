@@ -78,6 +78,7 @@ func dbPool(t *testing.T) *pgxpool.Pool {
 		`TRUNCATE telemetry`,
 		`TRUNCATE logs`,
 		`UPDATE channels SET default_version = NULL`,
+		`DELETE FROM faas_functions`, // FK CASCADE drops device_render_binding + faas_frame_lastgood
 		`DELETE FROM devices`,
 		`DELETE FROM firmware_versions`,
 	} {
@@ -180,5 +181,60 @@ func TestDelete_TelemetryPurge_FlagGated_T11(t *testing.T) {
 	}
 	if got := count("logs", "dev-purge"); got != 0 {
 		t.Errorf("flag-on: logs must be purged; got %d, want 0", got)
+	}
+}
+
+// T11-del (A24 K2) — deleting a device clears its FaaS render binding AND per-(serial,fn) last-good IN THE
+// SAME control-plane tx, ALWAYS (not flag-gated: a binding is control-plane state, not retention time-
+// series). Red: the binding/last-good survive → a re-onboarded same serial silently inherits the old
+// device's bound function and stale frame (the D17.4 re-bond bleed, FaaS half). The bound function itself
+// and OTHER devices' bindings must survive — the delete is serial-scoped, not a function purge.
+func TestDelete_CascadesFaasBindings_T11del(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	blank := make([]byte, 30000) // faas_lastgood_len CHECK = exactly 30000 bytes
+
+	var fnID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO faas_functions (name, source) VALUES ('fn-del','//src') RETURNING id`).Scan(&fnID); err != nil {
+		t.Fatalf("insert function: %v", err)
+	}
+	for _, serial := range []string{"dev-gone", "dev-stay"} {
+		mustExec(t, pool, `INSERT INTO devices (serial, channel) VALUES ($1,'stable')`, serial)
+		mustExec(t, pool, `INSERT INTO device_render_binding (serial, function_id) VALUES ($1,$2)`, serial, fnID)
+		mustExec(t, pool, `INSERT INTO faas_frame_lastgood (serial, function_id, packed, status) VALUES ($1,$2,$3,'ok')`, serial, fnID, blank)
+	}
+
+	found, err := Delete(ctx, pool, "dev-gone", false)
+	if err != nil || !found {
+		t.Fatalf("delete dev-gone: found=%v err=%v", found, err)
+	}
+
+	count := func(table, serial string) int {
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE serial=$1`, serial).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		return n
+	}
+	if n := count("device_render_binding", "dev-gone"); n != 0 {
+		t.Errorf("deleted device's render binding survived (%d rows)", n)
+	}
+	if n := count("faas_frame_lastgood", "dev-gone"); n != 0 {
+		t.Errorf("deleted device's last-good survived (%d rows)", n)
+	}
+	// serial-scoped: the other device's binding + last-good AND the function itself all survive.
+	if n := count("device_render_binding", "dev-stay"); n != 1 {
+		t.Errorf("bystander device's binding was wrongly cleared (%d rows, want 1)", n)
+	}
+	if n := count("faas_frame_lastgood", "dev-stay"); n != 1 {
+		t.Errorf("bystander device's last-good was wrongly cleared (%d rows, want 1)", n)
+	}
+	var fnStill int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM faas_functions WHERE id=$1`, fnID).Scan(&fnStill); err != nil {
+		t.Fatal(err)
+	}
+	if fnStill != 1 {
+		t.Errorf("the bound function was wrongly deleted (%d rows, want 1)", fnStill)
 	}
 }

@@ -13,6 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/open-picpak/backend/internal/faasstore"
 )
 
 var serialRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,31}$`)
@@ -191,7 +193,13 @@ func Patch(ctx context.Context, pool *pgxpool.Pool, serial string, label, channe
 // up to a year and BLEED into a re-registered same serial (D17.4 re-bond). Default-off because
 // immediate-purge-vs-retention is an operator data-lifecycle choice; opt-in for right-to-erasure. The
 // purge is plain SQL here in Doc 17's tx, NOT routed through Doc 22's read-only internal/telemetry — so
-// the 22→17 seam (Doc 17 telemetry-read-free) holds. Later waves extend this tx (FaaS render tables, K2).
+// the 22→17 seam (Doc 17 telemetry-read-free) holds.
+//
+// A24 K2/T11-del: the FaaS render binding + per-(serial,fn) last-good rows also key off serial with NO FK
+// to devices (parity with rollout_targets — a binding may name a to-be-re-onboarded serial, 0009 §26). They
+// are cleared IN THIS SAME TX via faasstore.DeleteDeviceBindings (the tx satisfies faasstore.Querier), so a
+// re-registered serial never inherits the old device's bound function or a stale frame. Always-on (not flag-
+// gated): a render binding is control-plane state, not retention-managed time-series like telemetry.
 func Delete(ctx context.Context, pool *pgxpool.Pool, serial string, purgeTimeSeries bool) (bool, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -202,6 +210,9 @@ func Delete(ctx context.Context, pool *pgxpool.Pool, serial string, purgeTimeSer
 		return false, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM rollout_targets WHERE serial = $1`, serial); err != nil {
+		return false, err
+	}
+	if err := faasstore.DeleteDeviceBindings(ctx, tx, serial); err != nil {
 		return false, err
 	}
 	if purgeTimeSeries {

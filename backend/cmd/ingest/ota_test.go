@@ -39,6 +39,7 @@ func dbPool(t *testing.T) *pgxpool.Pool {
 		`TRUNCATE logs`,
 		`TRUNCATE rollout_targets`,
 		`UPDATE channels SET default_version = NULL`,
+		`DELETE FROM faas_functions`, // FK CASCADE drops device_render_binding + faas_frame_lastgood
 		`DELETE FROM devices`,
 		`DELETE FROM firmware_versions`,
 	} {
