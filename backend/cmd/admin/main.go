@@ -147,8 +147,9 @@ func runServer() {
 
 	// FaaS editor support (A25 W1): the binding READS A24 left to the editor wave — forward
 	// (which function a device renders) + reverse (a function's blast radius, D25.9) + the unbind.
-	// Reads auth-gated; the unbind requireAdmin. The test-run execution route lands in a later wave.
-	registerFaasUIRoutes(mux, pool)
+	// Reads auth-gated; the unbind + test-run requireAdmin. test-run forwards to the supervisor's
+	// test-render arm over FAAS_TEST_SOCK (unset ⇒ the route 503s — pausability-safe, arm dark).
+	registerFaasUIRoutes(mux, pool, env("FAAS_TEST_SOCK", ""))
 
 	// SSE scaffold (D19.7): live roster/telemetry/log stream. auth-gated (any valid
 	// key, O1) — the generic events mirror the GET read routes. A feature channel

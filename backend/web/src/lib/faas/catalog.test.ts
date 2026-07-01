@@ -34,7 +34,7 @@ describe('completionOptions — bound-secret gating (T7)', () => {
 describe('completionOptions — static curated scope', () => {
   it('always offers the cap.* capabilities and ctx roots', () => {
     const l = labels([])
-    for (const req of ['cap', 'ctx', 'cap.fetch', 'cap.sharp', 'cap.log', 'ctx.serial', 'ctx.payload']) {
+    for (const req of ['cap', 'ctx', 'cap.fetch', 'cap.sharp', 'cap.log', 'ctx.serial', 'ctx.trigger.payload']) {
       expect(l, req).toContain(req)
     }
   })

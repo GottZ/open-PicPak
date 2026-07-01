@@ -39,13 +39,16 @@ export const CAP_ENTRIES: readonly CapEntry[] = [
   },
 ]
 
-/** The server-resolved call context (ctx.*). payload is present only on the webhook trigger. */
+// The server-resolved call context (ctx.*). NOTE the trigger + payload live under `ctx.trigger` — the
+// worker exposes `ctx.trigger = { type, payload? }` (runtime.ts), NOT a top-level `ctx.payload` (correcting
+// the design doc's stated shape; the running worker is the truth).
 export const CTX_ENTRIES: readonly CapEntry[] = [
   { label: 'ctx.serial', detail: 'ctx.serial → string', info: 'The device this render is for.' },
   { label: 'ctx.channel', detail: 'ctx.channel → string', info: 'The device’s channel, resolved server-side (never a client value).' },
-  { label: 'ctx.trigger', detail: 'ctx.trigger → "render"|"schedule"|"webhook"', info: 'Which trigger fired this run.' },
-  { label: 'ctx.now', detail: 'ctx.now → number', info: 'Server clock (epoch seconds) — drives day/night wake selection.' },
-  { label: 'ctx.payload', detail: 'ctx.payload → unknown', info: 'The webhook JSON body (webhook trigger only; null otherwise).' },
+  { label: 'ctx.trigger', detail: 'ctx.trigger → { type, payload? }', info: 'The trigger object — { type, payload }.' },
+  { label: 'ctx.trigger.type', detail: 'ctx.trigger.type → "render"|"schedule"|"webhook"', info: 'Which trigger fired this run.' },
+  { label: 'ctx.trigger.payload', detail: 'ctx.trigger.payload → unknown', info: 'The webhook JSON body (webhook trigger only; undefined otherwise).' },
+  { label: 'ctx.now', detail: 'ctx.now → string', info: 'Server clock (RFC3339) — drives day/night wake selection.' },
 ]
 
 /** The one return contract (D25.14). image is required; dither/next_wake_hint are optional. */

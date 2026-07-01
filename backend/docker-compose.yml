@@ -153,6 +153,8 @@ services:
         condition: service_completed_successfully
       fwblobs-init:
         condition: service_completed_successfully
+      faas-sock-init:                           # A25: prep the test-sock volume ownership before admin dials
+        condition: service_completed_successfully
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-picpak}
       POSTGRES_USER: ${POSTGRES_USER:-picpak}
@@ -160,8 +162,10 @@ services:
       PGHOST: timescaledb:5432
       ADMIN_ADDR: ":8081"                       # listen on all container interfaces; host publishes loopback only
       FW_BLOB_DIR: /fwblobs                     # A20: firmware register writes the blob here (:ro in ingest)
+      FAAS_TEST_SOCK: /run/test/test.sock       # A25: admin→supervisor test-render seam (this process connects)
     volumes:
       - fwblobs:/fwblobs:rw
+      - faas-test-sock:/run/test                # A25 test-render UDS (admin↔supervisor; dbnet, co-trusted)
     ports:
       # loopback ONLY — the operator plane is privileged (RCE-capable enqueue). NEVER INGEST_BIND,
       # never a public IP. Reach it over the host loopback or a VPN; TLS terminates at the proxy.
@@ -181,11 +185,12 @@ services:
   # supervisor connector) → 0777 so both can create/connect (daemon.ts also chmods the socket file).
   faas-sock-init:
     image: alpine:3
-    command: ["sh", "-c", "chown 65534:65534 /render /egress && chmod 0777 /m4"]
+    command: ["sh", "-c", "chown 65534:65534 /render /egress && chmod 0777 /m4 /test"]
     volumes:
       - faas-render-sock:/render
       - faas-m4-sock:/m4
       - faas-egress-sock:/egress
+      - faas-test-sock:/test                     # A25: admin↔supervisor test-render seam (cross-UID → 0777)
     networks: [dbnet]
     restart: "no"
 
@@ -213,10 +218,12 @@ services:
       RENDER_SOCK: /run/render/render.sock         # ingest→supervisor (this process listens)
       FAAS_M4_SOCK: /run/m4/m4.sock                # supervisor→worker M4 (this process connects)
       EGRESS_CONTROL_SOCK: /run/egress/egress-ctl.sock  # supervisor→egress per-call cred provisioning
+      FAAS_TEST_SOCK: /run/test/test.sock          # A25: admin→supervisor test-render (this process listens)
     volumes:
       - faas-render-sock:/run/render
       - faas-m4-sock:/run/m4
       - faas-egress-sock:/run/egress
+      - faas-test-sock:/run/test                    # A25 test-render UDS (admin connects; dbnet, co-trusted)
     networks: [dbnet]                              # the ONLY FaaS-zone process on dbnet; worker/egress talk to it by UDS
     restart: unless-stopped
 
@@ -264,6 +271,7 @@ volumes:
   faas-render-sock:                             # ingest↔supervisor render-request UDS
   faas-m4-sock:                                 # supervisor↔worker M4 UDS (the ONLY worker-shared volume)
   faas-egress-sock:                             # supervisor↔egress control UDS
+  faas-test-sock:                               # admin↔supervisor test-render UDS (A25; dbnet, co-trusted)
 
 networks:
   dbnet:                                        # design's dbnet: DB + ingest + admin + faas-supervisor

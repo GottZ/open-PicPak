@@ -102,6 +102,28 @@ func main() {
 	mux.HandleFunc("POST /render", s.handleRender)
 	mux.HandleFunc("POST /webhook", s.handleWebhookFanout)
 
+	// admin→supervisor test-render seam (Doc 25) — a SEPARATE UDS (dbnet, admin↔supervisor) from the
+	// ingest render seam, so ingest can never reach test-render and admin can never reach /render. Opt-in
+	// via FAAS_TEST_SOCK (unset → no test-render arm, pausability-safe; cmd/admin then 503s the route).
+	if testSock := env("FAAS_TEST_SOCK", ""); testSock != "" {
+		_ = os.Remove(testSock)
+		tl, terr := net.Listen("unix", testSock)
+		if terr != nil {
+			log.Fatalf("faas-supervisor: test-render listen %s: %v", testSock, terr)
+		}
+		// cross-UID: admin (a different user) connects to this socket the supervisor (65534) created —
+		// chmod 0777 so the connect is permitted, mirroring the worker's m4.sock (compose faas-sock-init).
+		_ = os.Chmod(testSock, 0o777)
+		tmux := http.NewServeMux()
+		tmux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+		tmux.HandleFunc("POST /test-render", s.handleTestRender)
+		go func() {
+			log.Printf("faas-supervisor: test-render seam on %s", testSock)
+			log.Fatalf("faas-supervisor: test-render serve: %v",
+				(&http.Server{Handler: tmux, ReadHeaderTimeout: 10 * time.Second}).Serve(tl))
+		}()
+	}
+
 	log.Printf("faas-supervisor: render-request seam on %s, M4 %s", renderSock, s.m4Sock)
 	log.Fatalf("faas-supervisor: serve: %v", (&http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}).Serve(l))
 }

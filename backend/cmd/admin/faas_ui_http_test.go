@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -10,13 +11,27 @@ import (
 	"github.com/open-picpak/backend/internal/adminhttp"
 )
 
+// reader/ct build the (body, content-type) pair for `do`: nil + "" for an empty body, else a JSON reader.
+func reader(s string) io.Reader {
+	if s == "" {
+		return nil
+	}
+	return strings.NewReader(s)
+}
+func ct(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "application/json"
+}
+
 // testFaasUIHandler mounts BOTH the A24 store CRUD (create + bind, used to set up state) and the A25
 // editor-support routes under test — the SAME wiring main.go mounts. The GET/DELETE on
 // /api/devices/{serial}/render coexist with A24's PUT (distinct method patterns).
 func testFaasUIHandler(pool *pgxpool.Pool) http.Handler {
 	mux := http.NewServeMux()
 	registerFaasRoutes(mux, pool)
-	registerFaasUIRoutes(mux, pool)
+	registerFaasUIRoutes(mux, pool, "") // no test-render seam in the unit test (the route 503s)
 	return adminhttp.WithRequestID(mux)
 }
 
@@ -29,16 +44,23 @@ func TestFaasUIGating_DB(t *testing.T) {
 	seedOperator(t, pool, "ro-tok", false)
 	h := testFaasUIHandler(pool)
 
-	// unbind is admin-only.
-	unbind := struct{ method, path string }{"DELETE", "/api/devices/testsn/render"}
-	if w := do(h, unbind.method, unbind.path, "", nil, ""); w.Code != http.StatusUnauthorized {
-		t.Errorf("%s %s no bearer = %d, want 401", unbind.method, unbind.path, w.Code)
+	// unbind + test-run are admin-only mutations/execution (test-run is RCE-equivalent, D25.3/T4).
+	mutations := []struct{ method, path, body string }{
+		{"DELETE", "/api/devices/testsn/render", ""},
+		{"POST", "/api/functions/test-run", `{"fn":{"source":"x"},"ctx":{"serial":"testsn"}}`},
 	}
-	if w := do(h, unbind.method, unbind.path, "ro-tok", nil, ""); w.Code != http.StatusForbidden {
-		t.Errorf("%s %s readonly = %d, want 403", unbind.method, unbind.path, w.Code)
-	}
-	if w := do(h, unbind.method, unbind.path, "admin-tok", nil, ""); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
-		t.Errorf("%s %s admin = %d, want past-the-gate", unbind.method, unbind.path, w.Code)
+	for _, m := range mutations {
+		if w := do(h, m.method, m.path, "", reader(m.body), ct(m.body)); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s no bearer = %d, want 401", m.method, m.path, w.Code)
+		}
+		if w := do(h, m.method, m.path, "ro-tok", reader(m.body), ct(m.body)); w.Code != http.StatusForbidden {
+			t.Errorf("%s %s readonly = %d, want 403", m.method, m.path, w.Code)
+		}
+		// admin clears the gate. test-run then 503s (no FAAS_TEST_SOCK in this handler) — that IS
+		// past-the-gate; the point is it is neither 401 nor 403 for an admin.
+		if w := do(h, m.method, m.path, "admin-tok", reader(m.body), ct(m.body)); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+			t.Errorf("%s %s admin = %d, want past-the-gate", m.method, m.path, w.Code)
+		}
 	}
 
 	// reads: 401 without a bearer, but a read-only key clears (not 403).

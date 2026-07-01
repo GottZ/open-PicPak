@@ -22,6 +22,8 @@
     type TriggerFields,
   } from '../../lib/faas/config'
   import { TRIGGER_TYPES, newFunctionError, blastRadiusLabel, type NewFunctionDraft } from '../../lib/faas/functions'
+  import { decodePacked, rawRGBToRGBA, W as PANEL_W, H as PANEL_H } from '../../lib/faas/bwrydecode'
+  import { parseTestFrame, buildTestRunBody, type TestRunResult } from '../../lib/faas/testrun'
   import type {
     TriggerType,
     FunctionsResponse,
@@ -144,6 +146,11 @@
       egressText = formatEgress(fn.egress_allow)
       baseline = snapshot(fn.trigger_type)
       handle?.setDoc(initial)
+      // reset the test-run surface for the new selection; default the context serial to a bound device.
+      testResult = null
+      testError = null
+      testSerial = res.bound_serials[0] ?? ''
+      testPayload = ''
       detailStatus = 'idle'
     } catch (e) {
       detail = null
@@ -287,6 +294,103 @@
   }
 
   const hookURL = $derived(detail ? webhookURL(webhookBase, detail.function.name) : null)
+
+  // ---- test-run (W3): the first execution surface — admin-only (RCE-equivalent, D25.3/D25.11). It runs
+  // the CURRENT editor draft (source + config, the fast loop) against an operator-chosen device context;
+  // the supervisor executes it in the prod worker sandbox, secrets STUBBED, side-effect-free (D25.4). The
+  // response is a framed binary (meta + packed + raw) parsed client-side and painted onto two canvases.
+  let testSerial = $state('')
+  let testNow = $state('')
+  let testPayload = $state('') // webhook: an operator JSON body → ctx.trigger.payload
+  let testing = $state(false)
+  let testResult = $state<TestRunResult | null>(null)
+  let testError = $state<string | null>(null)
+  let panelCanvas = $state<HTMLCanvasElement | null>(null)
+  let rawCanvas = $state<HTMLCanvasElement | null>(null)
+
+  // Build a 400×300 ImageData from an RGBA buffer via .data.set — avoids the ImageData(data,…) constructor
+  // overload whose lib type rejects a Uint8ClampedArray<ArrayBufferLike> (SharedArrayBuffer union).
+  function toImageData(rgba: Uint8ClampedArray): ImageData {
+    const img = new ImageData(PANEL_W, PANEL_H)
+    img.data.set(rgba)
+    return img
+  }
+
+  function payloadValue(): unknown {
+    if (!detail || detail.function.trigger_type !== 'webhook' || testPayload.trim() === '') return undefined
+    return JSON.parse(testPayload) // caller guards with a try/catch → a parse error is surfaced, no run
+  }
+
+  async function runTest(): Promise<void> {
+    if (!detail || !session.is_admin || testing) return
+    if (testSerial.trim() === '') {
+      testError = 'a device serial is required for the test context'
+      return
+    }
+    let payload: unknown
+    try {
+      payload = payloadValue()
+    } catch {
+      testError = 'payload must be valid JSON'
+      return
+    }
+    testing = true
+    testError = null
+    testResult = null
+    try {
+      const fn = detail.function
+      const bodyText = buildTestRunBody(
+        {
+          source,
+          dither: trigFields.dither,
+          secret_bindings: boundSecrets,
+          egress_allow: parseEgress(egressText),
+        },
+        { serial: testSerial.trim(), trigger: fn.trigger_type, now: testNow.trim() || undefined, payload },
+      )
+      const res = await fetch('/api/functions/test-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.key ?? ''}` },
+        body: bodyText,
+      })
+      if (!res.ok) {
+        let msg = `test-run failed (HTTP ${res.status})`
+        try {
+          const j = (await res.json()) as { error?: string }
+          if (j?.error) msg = j.error
+        } catch {
+          /* non-JSON error body */
+        }
+        testError = msg
+        notify.error(msg)
+        return
+      }
+      testResult = parseTestFrame(await res.arrayBuffer())
+      if (!testResult.meta.ok && testResult.meta.err) {
+        notify.warn(`test-run: ${testResult.meta.err.kind} — see the log below`)
+      }
+    } catch (e) {
+      testError = toApiError(e).message
+      notify.error(toApiError(e))
+    } finally {
+      testing = false
+    }
+  }
+
+  // paint the framed result onto the panel (BWRY decode) + raw (pre-pack RGB) canvases when both the
+  // result and the canvas nodes exist. ImageData/putImageData are browser-only (never runs in vitest).
+  $effect(() => {
+    const r = testResult
+    if (!r) return
+    if (panelCanvas) {
+      const c = panelCanvas.getContext('2d')
+      if (c) c.putImageData(toImageData(decodePacked(r.packed)), 0, 0)
+    }
+    if (rawCanvas && r.raw) {
+      const c = rawCanvas.getContext('2d')
+      if (c) c.putImageData(toImageData(rawRGBToRGBA(r.raw)), 0, 0)
+    }
+  })
 </script>
 
 <section class="functions">
@@ -550,6 +654,74 @@
                   <span class="muted small blast">bound: {blastRadiusLabel(detail.bound_serials.length)}</span>
                 </div>
               </div>
+
+              {#if session.is_admin}
+                <div class="testrun">
+                  <h3>test run</h3>
+                  <p class="muted small">
+                    Runs the current editor draft against a device context in the production worker sandbox —
+                    secrets are stubbed (a <code>&lt;secret:name&gt;</code> marker, never a value) and it
+                    writes NO fleet state (side-effect-free).
+                  </p>
+                  <div class="row wrap">
+                    <label class="grow">
+                      device serial (context)
+                      <input type="text" bind:value={testSerial} placeholder="a device serial" spellcheck="false" />
+                    </label>
+                    <label>
+                      now (optional)
+                      <input type="text" bind:value={testNow} placeholder="RFC3339" spellcheck="false" />
+                    </label>
+                  </div>
+                  {#if fn.trigger_type === 'webhook'}
+                    <label class="field">
+                      payload (JSON → ctx.trigger.payload)
+                      <textarea bind:value={testPayload} rows="2" placeholder={'{ "key": "value" }'} spellcheck="false"></textarea>
+                    </label>
+                  {/if}
+                  <div class="actions">
+                    <button type="button" class="primary" disabled={testing} onclick={runTest}>
+                      {testing ? 'running…' : 'Run test'}
+                    </button>
+                    {#if testError}<span class="inline-err">{testError}</span>{/if}
+                  </div>
+
+                  {#if testResult}
+                    {@const m = testResult.meta}
+                    <div class="result">
+                      <div class="result-head">
+                        <span class="badge" class:on={m.ok} class:err={!m.ok}>{m.status}</span>
+                        <span class="muted small">wake {m.wake}s · dither {m.dither}</span>
+                      </div>
+                      {#if m.err}
+                        <p class="inline-err">error [{m.err.kind}]: {m.err.msg}</p>
+                      {/if}
+                      <div class="previews">
+                        <figure>
+                          <figcaption>panel (400×300 BWRY)</figcaption>
+                          <canvas bind:this={panelCanvas} width={PANEL_W} height={PANEL_H}></canvas>
+                        </figure>
+                        {#if m.raw_fmt === 'rgb'}
+                          <figure>
+                            <figcaption>raw render (what you drew)</figcaption>
+                            <canvas bind:this={rawCanvas} width={PANEL_W} height={PANEL_H}></canvas>
+                          </figure>
+                        {/if}
+                      </div>
+                      {#if m.log.length > 0}
+                        <div class="log">
+                          <span class="flabel">worker log</span>
+                          <ul>
+                            {#each m.log as l, i (i)}
+                              <li class="log-{l.lvl}"><span class="lvl">{l.lvl}</span> {l.msg}</li>
+                            {/each}
+                          </ul>
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
 
               <details class="caps">
                 <summary>capability reference</summary>
@@ -919,6 +1091,82 @@
   .doc {
     color: var(--fg-muted);
     font-size: 0.78rem;
+  }
+  .testrun {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .testrun code {
+    font-family: var(--mono, monospace);
+    font-size: 0.8rem;
+  }
+  .result {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    border-top: 1px solid var(--border);
+    padding-top: 0.5rem;
+  }
+  .result-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .badge.err {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
+  .previews {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+  .previews figure {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .previews figcaption {
+    font-size: 0.72rem;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .previews canvas {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    width: 400px;
+    max-width: 100%;
+    height: auto;
+    image-rendering: pixelated;
+  }
+  .log ul {
+    list-style: none;
+    margin: 0.2rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    font-family: var(--mono, monospace);
+    font-size: 0.8rem;
+  }
+  .log .lvl {
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    margin-right: 0.4rem;
+  }
+  .log li.log-error .lvl,
+  .log li.log-error {
+    color: var(--danger);
+  }
+  .log li.log-warn .lvl {
+    color: var(--warn, #d08770);
   }
   .detail-error {
     border: 1px solid var(--danger);
