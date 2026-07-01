@@ -16,5 +16,9 @@
     "checkJs": true,
     "moduleDetection": "force"
   },
-  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte"]
+  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte"],
+  // Vendored esptool-js (Apache-2.0, Design 26 D26.3): untyped minified ESM, typed by its sidecar bundle.d.ts.
+  // Exclude the .js from root globbing so checkJs doesn't lint the minified source; the import resolves to the
+  // .d.ts and Vite still bundles the real .js at build.
+  "exclude": ["src/lib/webusb/vendor/**/*.js"]
 }
