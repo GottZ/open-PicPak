@@ -151,6 +151,12 @@ func runServer() {
 	// test-render arm over FAAS_TEST_SOCK (unset ⇒ the route 503s — pausability-safe, arm dark).
 	registerFaasUIRoutes(mux, pool, env("FAAS_TEST_SOCK", ""))
 
+	// Web-USB onboarding firmware artifacts (A26 W2): serve the open-picpak CFW manifest + bin parts for the
+	// /onboard page's WebSerial flash. Traversal-safe, read-only, same-origin (D26.9). Default off —
+	// ADMIN_ONBOARD_FW_DIR unset ⇒ the route 404s a "not configured" notice while flash-from-local + backup
+	// still work (pausability-safe, arm dark).
+	registerOnboardFWRoutes(mux, pool, env("ADMIN_ONBOARD_FW_DIR", ""))
+
 	// SSE scaffold (D19.7): live roster/telemetry/log stream. auth-gated (any valid
 	// key, O1) — the generic events mirror the GET read routes. A feature channel
 	// that pushes admin-only data must additionally re-auth on is_admin (§4.5 hook).

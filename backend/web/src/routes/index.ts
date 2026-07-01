@@ -47,7 +47,7 @@ export const areaRoutes = {
   '/logs': () => import('./logs/LogViewer.svelte'),
   '/berry': () => import('./berry/BerryEditor.svelte'),
   '/functions': () => import('./functions/FunctionsEditor.svelte'),
-  '/onboard': () => import('./AreaPlaceholder.svelte'),
+  '/onboard': () => import('./onboard/Onboard.svelte'),
   '/settings': () => import('./AreaPlaceholder.svelte'),
   '*': () => import('./NotFound.svelte'),
 } satisfies Routes
