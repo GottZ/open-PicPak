@@ -3,6 +3,7 @@
   import { Resource } from '../../lib/resource.svelte'
   import { apiFetch, toApiError } from '../../lib/api'
   import StateView from '../../lib/StateView.svelte'
+  import DevicePicker from '../../lib/DevicePicker.svelte'
   import { session } from '../../lib/auth.svelte'
   import { notify } from '../../lib/toasts.svelte'
   import { mutationAffordance } from '../../lib/readonly'
@@ -32,6 +33,7 @@
     SecretsResponse,
     ConfigResponse,
   } from '../../lib/faas/types'
+  import type { Device, DevicesResponse } from '../../lib/api/types'
 
   // FaaS function editor (Design 25, W2) — the CM6 code editor + capability completion + the config forms
   // (trigger / egress / secrets / dither / enabled, Policy=Data over the faas_functions row) + the
@@ -59,6 +61,13 @@
       .then((r) => (secretNames = r.secrets.map((s) => s.name)))
       .catch(() => {})
   }
+
+  // device list for the binding picker (D19.12/K13). Loaded once, best-effort; a read-only operator can
+  // still see the roster (GET /api/devices is auth-gated), but the bind/unbind affordances are admin-only.
+  let deviceList = $state<Device[]>([])
+  void apiFetch<DevicesResponse>('/api/devices')
+    .then((r) => (deviceList = r.devices))
+    .catch(() => {})
 
   // ---- selection + loaded detail ----
   let selectedId = $state<number | null>(null)
@@ -286,6 +295,48 @@
       deleteArmed = false
     }
   }
+
+  // ---- device binding (W4, D25.9): which devices render this function. bind = A24 PUT; unbind = W1 DELETE.
+  // Binding is a fleet-affecting mutation (the device's next frame changes) → admin-only. ----
+  let bindTarget = $state<string | null>(null)
+
+  async function bindDevice(): Promise<void> {
+    if (!detail || mutating || !session.is_admin || !bindTarget) return
+    mutating = true
+    const fn = detail.function
+    try {
+      await apiFetch(`/api/devices/${bindTarget}/render`, {
+        method: 'PUT',
+        body: JSON.stringify({ function_id: fn.id }),
+      })
+      notify.success(`bound ${bindTarget} → ${fn.name} (renders on its next poll)`)
+      bindTarget = null
+      await reloadAll(true)
+    } catch (e) {
+      notify.error(toApiError(e))
+    } finally {
+      mutating = false
+    }
+  }
+
+  async function unbindDevice(serial: string): Promise<void> {
+    if (!detail || mutating || !session.is_admin) return
+    mutating = true
+    try {
+      await apiFetch(`/api/devices/${serial}/render`, { method: 'DELETE' })
+      notify.success(`unbound ${serial} (falls back to no function)`)
+      await reloadAll(true)
+    } catch (e) {
+      notify.error(toApiError(e))
+    } finally {
+      mutating = false
+    }
+  }
+
+  // devices available to bind: not already bound to THIS function (avoid a no-op re-bind in the picker).
+  const bindableDevices = $derived(
+    detail ? deviceList.filter((d) => !detail!.bound_serials.includes(d.serial)) : [],
+  )
 
   function toggleSecret(name: string): void {
     boundSecrets = boundSecrets.includes(name)
@@ -630,6 +681,11 @@
                   {/if}
                 </div>
 
+                {#if dirty && detail.bound_serials.length > 0}
+                  <p class="blast-warn" role="status">
+                    ⚠ saving changes the next frame on {blastRadiusLabel(detail.bound_serials.length)}.
+                  </p>
+                {/if}
                 <div class="save-row">
                   <button
                     type="button"
@@ -653,6 +709,31 @@
                   {#if deleteArmed}<button type="button" class="link" onclick={() => (deleteArmed = false)}>cancel</button>{/if}
                   <span class="muted small blast">bound: {blastRadiusLabel(detail.bound_serials.length)}</span>
                 </div>
+              </div>
+
+              <div class="bindings">
+                <h3>device bindings — blast radius: {blastRadiusLabel(detail.bound_serials.length)}</h3>
+                {#if detail.bound_serials.length > 0}
+                  <ul class="chips">
+                    {#each detail.bound_serials as s (s)}
+                      <li class="chip mono bind-chip">
+                        <span>{s}</span>
+                        {#if session.is_admin}
+                          <button type="button" class="chip-x" title="unbind {s}" disabled={mutating} onclick={() => unbindDevice(s)}>✕</button>
+                        {/if}
+                      </li>
+                    {/each}
+                  </ul>
+                  <p class="muted small">Editing this function's source changes the next frame on every bound device.</p>
+                {:else}
+                  <p class="muted small">Not bound to any device — nothing renders it yet.</p>
+                {/if}
+                {#if session.is_admin}
+                  <div class="bind-row">
+                    <DevicePicker devices={bindableDevices} bind:value={bindTarget} placeholder="bind a device to this function…" />
+                    <button type="button" disabled={mutating || !bindTarget} onclick={bindDevice}>Bind</button>
+                  </div>
+                {/if}
               </div>
 
               {#if session.is_admin}
@@ -1091,6 +1172,38 @@
   .doc {
     color: var(--fg-muted);
     font-size: 0.78rem;
+  }
+  .bindings {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .bind-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  .chip-x {
+    border: none;
+    background: transparent;
+    color: var(--fg-muted);
+    padding: 0 0.1rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .chip-x:hover:not(:disabled) {
+    color: var(--danger);
+  }
+  .bind-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .blast-warn {
+    margin: 0;
+    color: var(--warn, #d08770);
+    font-size: 0.82rem;
   }
   .testrun {
     border: 1px solid var(--border);
