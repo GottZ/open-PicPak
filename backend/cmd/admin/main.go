@@ -145,6 +145,11 @@ func runServer() {
 	// The source is foreign code at rest — never eval'd here, only the worker evaluates it (D24.7).
 	registerFaasRoutes(mux, pool)
 
+	// FaaS editor support (A25 W1): the binding READS A24 left to the editor wave — forward
+	// (which function a device renders) + reverse (a function's blast radius, D25.9) + the unbind.
+	// Reads auth-gated; the unbind requireAdmin. The test-run execution route lands in a later wave.
+	registerFaasUIRoutes(mux, pool)
+
 	// SSE scaffold (D19.7): live roster/telemetry/log stream. auth-gated (any valid
 	// key, O1) — the generic events mirror the GET read routes. A feature channel
 	// that pushes admin-only data must additionally re-auth on is_admin (§4.5 hook).

@@ -191,6 +191,36 @@ func BoundFunctionID(ctx context.Context, q Querier, serial string) (int64, bool
 	return id, true, nil
 }
 
+// BoundFunction returns the id+name of the function a device renders (the forward binding read, Doc 25
+// §4.4) — a single join so the editor can label the binding without loading the whole (heavy) source. The
+// binding's serial has no FK to devices (0009), so a binding may name a not-yet-onboarded device; ok=false
+// means simply "no binding row".
+func BoundFunction(ctx context.Context, q Querier, serial string) (id int64, name string, ok bool, err error) {
+	err = q.QueryRow(ctx, `
+		SELECT f.id, f.name FROM device_render_binding b
+		JOIN faas_functions f ON f.id = b.function_id
+		WHERE b.serial = $1`, serial).Scan(&id, &name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, "", false, nil
+	}
+	if err != nil {
+		return 0, "", false, err
+	}
+	return id, name, true, nil
+}
+
+// Unbind drops a device's render binding (the Doc 25 §4.4 unbind — A24 ships only the PUT). The device
+// falls back to "no function". The (serial,function) last-good is left intact — it is keyed data a
+// re-bind reuses and is never served while unbound; a full purge is the device-delete cascade
+// (DeleteDeviceBindings, K2), not an unbind. Returns whether a binding row existed.
+func Unbind(ctx context.Context, q Querier, serial string) (bool, error) {
+	tag, err := q.Exec(ctx, `DELETE FROM device_render_binding WHERE serial = $1`, serial)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // DeleteDeviceBindings removes a serial's binding + last-good rows. Their serial has no FK
 // to devices (parity with rollout_targets), so the device-delete tx must call this (K2/§9,
 // T11-del). Runs on the caller's Querier — pass the tx.
