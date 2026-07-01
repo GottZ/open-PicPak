@@ -2,7 +2,10 @@
 .env
 # local bind-mount data (named volumes are managed by docker, not committed)
 /data/
+# stray single-package `go build ./cmd/X` binaries (the images build via Dockerfile, not these)
 /ingest
+/faas-supervisor
+/faas-egress
 *.log
 
 # Frontend (A19): the bun toolchain output. Rule order matters — exclude the

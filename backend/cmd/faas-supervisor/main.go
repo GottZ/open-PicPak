@@ -51,6 +51,11 @@ type supervisor struct {
 	limits        faasproto.Limits
 	retryWake     int
 	egress        *egressClient
+	cache         *frameCache
+	render        renderFunc         // s.doRender in prod; a stub in tests
+	renderTTL     time.Duration      // sync hot-cache TTL default (RENDER_TTL)
+	schedTick     time.Duration      // scheduler scan cadence
+	lastRun       map[int64]time.Time // fn id -> last fan-out (scheduler goroutine only)
 }
 
 func main() {
@@ -77,7 +82,13 @@ func main() {
 		limits:        faasproto.Limits{TimeoutMs: envInt("FAAS_TIMEOUT_MS", 8000), MemMB: envInt("FAAS_MEM_MB", 256)},
 		retryWake:     envInt("RETRY_WAKE", 600),
 		egress:        newEgressClient(env("EGRESS_CONTROL_SOCK", "")),
+		cache:         newFrameCache(),
+		renderTTL:     time.Duration(envInt("RENDER_TTL", 120)) * time.Second,
+		schedTick:     time.Duration(envInt("FAAS_SCHED_TICK", 30)) * time.Second,
+		lastRun:       map[int64]time.Time{},
 	}
+	s.render = s.doRender // the real M4 render drive (tests inject a stub)
+	go s.runScheduler(ctx)
 
 	renderSock := env("RENDER_SOCK", "/run/faas/render.sock")
 	_ = os.Remove(renderSock)
@@ -150,22 +161,73 @@ func (s *supervisor) handleRender(w http.ResponseWriter, r *http.Request) {
 		Trigger: faasproto.Trigger{Type: triggerOrRender(body.Trigger)},
 		Now:     nowOrDefault(body.Now),
 	}
-	res := renderOnce(ctx, s.pool, s.box, fn, rctx, RenderOpts{
-		Secrets:          SecretsReal,
-		Limits:           s.limits,
-		Force:            body.Force,
-		DitherDefault:    s.ditherDefault,
-		M4Sock:           s.m4Sock,
-		Timeout:          time.Duration(s.limits.TimeoutMs)*time.Millisecond + 10*time.Second,
-		EgressRegister:   s.egress.register,
-		EgressUnregister: s.egress.unregister,
-	})
-	if res.Err != nil {
-		// W4a: no cache/last-good yet — stage-3 error frame straight away (stages 1-2 arrive in W4b).
-		s.writeFrame(w, errorFrame, "error", true, s.retryWake)
+	// Trigger routing (D24.2/D24.12): render/sync renders inline (TTL cache + fallback); every other
+	// trigger (render/prerender, schedule, webhook) serves the last-good the timer/cron wrote — the
+	// device request never drives the worker inline.
+	var (
+		packed []byte
+		status string
+		stale  bool
+		wake   int
+	)
+	if s.syncInline(fn) {
+		packed, status, stale, wake = s.buildFrame(ctx, fn, rctx, body.Force)
+	} else {
+		packed, status, stale, wake = s.serveLastGood(ctx, fn, rctx)
+	}
+	s.writeFrame(w, packed, status, stale, wake)
+}
+
+// runScheduler periodically fans out the enabled prerender/schedule functions whose interval has
+// elapsed (M1: interval-based; // TODO(cron): full 5-field cron for schedule triggers).
+func (s *supervisor) runScheduler(ctx context.Context) {
+	t := time.NewTicker(s.schedTick)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.tickSchedule(ctx)
+		}
+	}
+}
+
+func (s *supervisor) tickSchedule(ctx context.Context) {
+	sums, err := faasstore.ListFunctions(ctx, s.pool)
+	if err != nil {
+		log.Printf("faas-supervisor: scheduler list: %v", err)
 		return
 	}
-	s.writeFrame(w, res.Packed, "ok", false, s.wakeFor(res.Meta))
+	now := time.Now()
+	for _, sum := range sums {
+		if !sum.Enabled {
+			continue
+		}
+		fn, err := faasstore.LoadFunction(ctx, s.pool, sum.ID)
+		if err != nil {
+			continue
+		}
+		cfg := parseTriggerConfig(fn.TriggerConfig)
+		ttype := ""
+		switch {
+		case fn.TriggerType == faasstore.TriggerRender && cfg.Mode == "prerender":
+			ttype = "prerender"
+		case fn.TriggerType == faasstore.TriggerSchedule:
+			ttype = "schedule"
+		default:
+			continue // sync render + webhook have no timer-driven writer
+		}
+		interval := cfg.IntervalS
+		if interval <= 0 {
+			interval = 900 // sane M1 default cadence
+		}
+		if last, ok := s.lastRun[fn.ID]; ok && now.Sub(last) < time.Duration(interval)*time.Second {
+			continue
+		}
+		s.lastRun[fn.ID] = now
+		s.fanOut(ctx, fn, faasproto.Trigger{Type: ttype})
+	}
 }
 
 func (s *supervisor) wakeFor(meta faasproto.ResponseMeta) int {
