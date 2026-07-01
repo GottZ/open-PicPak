@@ -1,0 +1,17 @@
+# FaaS worker image (Bun) — evaluates operator functions and returns raw 400x300 RGB over the M4
+# UDS. UNTRUSTED-by-design: this container has NO SECRETS_KEY, NO DB route, and NO default route
+# (its only next-hop off faasnet is the faas-egress proxy) — those HARD walls are the compose
+# network config (A24 W5), not this image. glibc base (oven/bun:1) to match the environment where
+# sharp/libvips is verified; the per-call slot subprocess is spawned as `bun slot-runner.ts`.
+FROM oven/bun:1
+WORKDIR /worker
+
+# deps first (cache layer): bun.lock is the committed source of truth.
+COPY worker/package.json worker/bun.lock ./
+RUN bun install --frozen-lockfile
+
+# worker sources (daemon + slot runner + runtime/frame/fetchguard)
+COPY worker/*.ts ./
+
+USER bun
+ENTRYPOINT ["bun", "daemon.ts"]

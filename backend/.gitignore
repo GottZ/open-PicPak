@@ -11,3 +11,6 @@
 web/node_modules/
 web/dist/*
 !web/dist/.gitkeep
+
+# FaaS worker (A24): Bun toolchain output. bun.lock is the committed source of truth.
+worker/node_modules/
