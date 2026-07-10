@@ -182,6 +182,28 @@ func VariantPut(ctx context.Context, q Querier, imageSha, fit, dither string, pa
 	return err
 }
 
+// GCVariantCache deletes every frame_variant_cache row no longer referenced by ANY playlist_item
+// (maintenance, W6 / §6). Refcount is existence of a matching item, joined image.sha256 = fvc.image_sha
+// AND item.fit = fvc.fit AND item.dither = fvc.dither — the exact (content, policy) tuple the packed
+// bytes were rendered for. This is DELIBERATELY NOT a created_at TTL: a stable variant is packed once
+// (created_at fixed) and served forever, so a time-based sweep would evict the HOTTEST entries and
+// trigger a re-pack storm (§6 / the design's anti-TTL note). A row survives on age alone as long as one
+// item still points at it; it is collected the moment the last reference goes. The NOT EXISTS join
+// rides playlist_item_image_idx (image_id, fit, dither), so it does not scan per image. Idempotent — a
+// second run finds nothing left to reference-check false. Returns the number of rows evicted.
+func GCVariantCache(ctx context.Context, q Querier) (int64, error) {
+	tag, err := q.Exec(ctx, `
+		DELETE FROM frame_variant_cache fvc
+		WHERE NOT EXISTS (
+			SELECT 1 FROM playlist_item pi
+			JOIN image i ON i.id = pi.image_id
+			WHERE i.sha256 = fvc.image_sha AND pi.fit = fvc.fit AND pi.dither = fvc.dither)`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // RotationOrder returns the visit order of item INDICES [0..n) for one serial. `ids` are the item ids
 // in stored (position-ascending) order; the returned slice is a permutation of [0..len(ids)).
 //

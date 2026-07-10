@@ -153,7 +153,15 @@ func runServer() {
 	// image:read (RequireScope). Blobs live in the content-addressed imgblobs volume (:rw here, supervisor
 	// :ro at render, A27/§9). Single wiring source (registerImageRoutes); registered before the SPA
 	// catch-all. ADMIN_MAX_IMAGE_BYTES is the compressed-blob cap (Policy=Data, E28.3).
-	registerImageRoutes(mux, pool, env("IMG_BLOB_DIR", "/imgblobs"), int64(envIntOr("ADMIN_MAX_IMAGE_BYTES", defaultMaxImageBytes)))
+	imgBlobDir := env("IMG_BLOB_DIR", "/imgblobs")
+	registerImageRoutes(mux, pool, imgBlobDir, int64(envIntOr("ADMIN_MAX_IMAGE_BYTES", defaultMaxImageBytes)))
+
+	// A27 W6 image maintenance (design §6): the orphan-blob reconcile sweep (runs here — imgblobs is
+	// :rw on admin, :ro on the supervisor) and the refcount-driven variant-cache GC. Both are the
+	// startFragmentPrune analogue: without them the blob volume and frame_variant_cache grow
+	// monotonically at fleet scale. Neither is a created_at TTL (the anti-TTL invariant, §6).
+	startOrphanBlobSweep(ctx, pool, imgBlobDir)
+	startVariantCacheGC(ctx, pool)
 
 	// Telemetry dashboard read surface (A22): the enriched fleet list (the 22→17 seam — adds
 	// running_ver/batt/health), the per-device latest+history, and the non-secret SPA config (Grafana/

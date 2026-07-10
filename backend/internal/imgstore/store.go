@@ -10,6 +10,8 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	// Register the stdlib decoders image.DecodeConfig sniffs. png/jpeg cover the panel
 	// pipeline with ZERO new module deps (masterplan §1); webp/avif would need
@@ -172,6 +174,95 @@ func ListImages(ctx context.Context, q Querier, limit int, cursor int64) ([]Imag
 		out = append(out, img)
 	}
 	return out, rows.Err()
+}
+
+// SweepOrphanBlobs reconciles the imgblobs volume against the image table (maintenance, W6 / §6). It
+// closes the two crash windows PutImage/DeleteImage document: a blob written for a row whose insert
+// never committed (or a delete that removed the row before its blob) leaves a content-addressed file
+// with NO row → an orphan the volume would otherwise carry forever (blob-cost monotonic growth at
+// fleet scale, §6). Direction 1 (removed): every `<sha>.bin` (and every leftover atomic-write temp
+// file) with no image row AND older than grace is deleted. Direction 2 (missing): a row whose blob is
+// absent is only COUNTED for the caller to log — the bytes are gone from here, and PutImage self-heals
+// that window on the next identical upload; the sweep never fabricates bytes.
+//
+// grace protects the write→commit race: PutImage writes the blob while the caller tx may still be
+// uncommitted, so a blob younger than grace can belong to an as-yet-invisible row — deleting it would
+// destroy a live upload. This is a refcount/existence reconcile, NOT a created_at TTL (a stable, hot
+// image keeps its row and always survives regardless of blob age). blobDir absent ⇒ a no-op (0,0,nil):
+// nothing has been written yet. q must see committed rows (run on the pool, not inside a writer tx).
+func SweepOrphanBlobs(ctx context.Context, q Querier, blobDir string, grace time.Duration, now time.Time) (removed, missing int, err error) {
+	entries, err := os.ReadDir(blobDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, nil
+		}
+		return 0, 0, err
+	}
+
+	// The authoritative content-address set (committed rows only).
+	known := map[string]struct{}{}
+	rows, err := q.Query(ctx, `SELECT sha256 FROM image`)
+	if err != nil {
+		return 0, 0, err
+	}
+	for rows.Next() {
+		var sha string
+		if err := rows.Scan(&sha); err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		known[sha] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+
+	onDisk := map[string]struct{}{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		// Leftover atomic-write temp files (writeBlobAtomic pattern ".tmp-img-*") from a crashed
+		// PutImage are orphans by definition — never content-addressed, never referenced. Grace still
+		// shields one that a live write is mid-rename.
+		if strings.HasPrefix(name, ".tmp-img-") {
+			if info, ierr := e.Info(); ierr == nil && now.Sub(info.ModTime()) >= grace {
+				if rerr := os.Remove(filepath.Join(blobDir, name)); rerr != nil && !os.IsNotExist(rerr) {
+					return removed, missing, rerr
+				}
+				removed++
+			}
+			continue
+		}
+		sha, ok := strings.CutSuffix(name, ".bin")
+		if !ok {
+			continue // foreign file — never touched
+		}
+		onDisk[sha] = struct{}{}
+		if _, hasRow := known[sha]; hasRow {
+			continue // referenced blob survives at ANY age (the anti-TTL invariant)
+		}
+		info, ierr := e.Info()
+		if ierr != nil {
+			continue
+		}
+		if now.Sub(info.ModTime()) < grace {
+			continue // young orphan — protect the write→commit window
+		}
+		if rerr := os.Remove(filepath.Join(blobDir, name)); rerr != nil && !os.IsNotExist(rerr) {
+			return removed, missing, rerr
+		}
+		removed++
+	}
+
+	// Direction 2: a committed row whose blob is missing — counted, not acted on (heal is PutImage's).
+	for sha := range known {
+		if _, ok := onDisk[sha]; !ok {
+			missing++
+		}
+	}
+	return removed, missing, nil
 }
 
 // --- helpers ---

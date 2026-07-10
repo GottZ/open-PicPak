@@ -1,7 +1,11 @@
 package plrender
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"sync"
 	"testing"
@@ -10,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/open-picpak/backend/internal/faasstore"
+	"github.com/open-picpak/backend/internal/imgstore"
+	"github.com/open-picpak/backend/internal/playliststore"
 )
 
 // DB property tests — skipped unless TEST_DATABASE_URL is set (run in the e2e gate against an
@@ -384,4 +390,96 @@ func filterIDs(seq, keep []int64) []int64 {
 		}
 	}
 	return out
+}
+
+// plTinyPNG is a real, decodable 2×2 RGBA PNG so the image row + blob are seeded through the
+// production PutImage path (not hand-inserted) — the GC's refcount join reads a genuine sha256.
+func plTinyPNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.Set(0, 0, color.RGBA{G: 255, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// TestGCVariantCacheRefcount is the W6 TTL-regression gate (masterplan / §6). It builds the cache
+// through the production write path (PutImage → CreatePlaylist → AddItem → VariantPut) and proves the
+// GC is refcount-driven, NOT a created_at TTL:
+//   - a variant whose (sha, fit, dither) a playlist_item still references SURVIVES even when its
+//     created_at is backdated far past any plausible TTL — the anti-regression core: a naive
+//     created_at sweep would delete exactly this hot, referenced entry (the red state);
+//   - a variant with no referencing item (a fit the item never used) is EVICTED regardless of being
+//     freshly created;
+//   - a variant for a sha no image/item carries is EVICTED;
+//   - the run is idempotent (a second pass evicts 0).
+func TestGCVariantCacheRefcount(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	blobDir := t.TempDir()
+
+	// Real image row + blob through the production path.
+	img, err := imgstore.PutImage(ctx, pool, blobDir, nil, plTinyPNG(t))
+	if err != nil {
+		t.Fatalf("PutImage: %v", err)
+	}
+	// Real playlist + item referencing (img.sha256, cover, none) through the production path.
+	pl, err := playliststore.CreatePlaylist(ctx, pool, playliststore.CreateParams{Name: "gc-pl"})
+	if err != nil {
+		t.Fatalf("CreatePlaylist: %v", err)
+	}
+	if _, err := playliststore.AddItem(ctx, pool, pl.ID,
+		playliststore.AddItemParams{ImageID: img.ID, Fit: "cover", Dither: "none"}); err != nil {
+		t.Fatalf("AddItem: %v", err)
+	}
+
+	packed := make([]byte, 30000) // 0013 octet_length=30000 CHECK
+	// Referenced variant (matches the item's tuple) — survives.
+	if err := VariantPut(ctx, pool, img.Sha256, "cover", "none", packed); err != nil {
+		t.Fatalf("VariantPut referenced: %v", err)
+	}
+	// Unreferenced variant: same image, a fit no item uses — evicted.
+	if err := VariantPut(ctx, pool, img.Sha256, "contain", "none", packed); err != nil {
+		t.Fatalf("VariantPut unreferenced-fit: %v", err)
+	}
+	// Unreferenced variant: a sha no image/item carries — evicted.
+	danglingSha := "00000000000000000000000000000000000000000000000000000000deadbeef"
+	if err := VariantPut(ctx, pool, danglingSha, "cover", "none", packed); err != nil {
+		t.Fatalf("VariantPut dangling: %v", err)
+	}
+
+	// Backdate the REFERENCED row far into the past: age must be irrelevant to a refcount GC. A
+	// created_at TTL would evict this hottest entry — that is the regression this gate catches.
+	if _, err := pool.Exec(ctx,
+		`UPDATE frame_variant_cache SET created_at = now() - interval '400 days'
+		 WHERE image_sha = $1 AND fit = 'cover' AND dither = 'none'`, img.Sha256); err != nil {
+		t.Fatalf("backdate referenced: %v", err)
+	}
+
+	n, err := GCVariantCache(ctx, pool)
+	if err != nil {
+		t.Fatalf("GC: %v", err)
+	}
+	if n != 2 { // the unreferenced-fit + the dangling-sha rows
+		t.Fatalf("GC removed=%d, want 2", n)
+	}
+	// The aged, referenced variant must still be present (anti-TTL invariant).
+	if got := countRows(t, pool,
+		`SELECT count(*) FROM frame_variant_cache WHERE image_sha='`+img.Sha256+`' AND fit='cover' AND dither='none'`); got != 1 {
+		t.Fatalf("referenced (aged 400d) variant evicted: %d rows (TTL regression)", got)
+	}
+	if got := countRows(t, pool, `SELECT count(*) FROM frame_variant_cache`); got != 1 {
+		t.Fatalf("cache after GC has %d rows, want 1 (only the referenced one)", got)
+	}
+
+	// Idempotent: nothing left to collect.
+	n2, err := GCVariantCache(ctx, pool)
+	if err != nil {
+		t.Fatalf("GC 2: %v", err)
+	}
+	if n2 != 0 {
+		t.Fatalf("second GC removed=%d, want 0 (idempotent)", n2)
+	}
 }

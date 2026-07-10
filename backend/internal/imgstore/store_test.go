@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -208,4 +209,110 @@ func TestPutImageHealsMissingBlob(t *testing.T) {
 	if err != nil || len(got) != len(blob) {
 		t.Fatalf("healed blob unreadable: err=%v len=%d want %d", err, len(got), len(blob))
 	}
+}
+
+// TestSweepOrphanBlobs is the W6 reconcile gate (§6). It proves every arm of the orphan sweep on a
+// volume built through the production write path (PutImage) plus hand-planted crash-window artefacts:
+//   - a blob with NO row, older than grace → removed;
+//   - a referenced blob (a real row) → survives at ANY age (the anti-TTL invariant — a created_at
+//     sweep would evict it; this one keys on existence, not time);
+//   - a young orphan (younger than grace) → survives (protects the write→commit race window);
+//   - a row whose blob is missing → COUNTED (missing), never removed (PutImage heals it);
+//   - a leftover atomic-write temp file past grace → removed;
+//   - idempotence: an immediate second run removes 0.
+func TestSweepOrphanBlobs(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	blobDir := t.TempDir()
+	grace := time.Hour
+	now := time.Now()
+	old := now.Add(-2 * grace) // safely past grace
+	backdate := func(name string) {
+		p := filepath.Join(blobDir, name)
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("chtimes %s: %v", name, err)
+		}
+	}
+
+	// Referenced blob via the production path (row + blob), then backdate it hard: age must NOT matter.
+	kept, err := PutImage(ctx, pool, blobDir, nil, tinyPNG(t))
+	if err != nil {
+		t.Fatalf("PutImage kept: %v", err)
+	}
+	keptFile := kept.Sha256 + ".bin"
+	backdate(keptFile)
+
+	// Orphan blob: a 64-hex sha with no row, old enough to collect.
+	orphanSha := "0000000000000000000000000000000000000000000000000000000000000001"
+	if err := os.WriteFile(filepath.Join(blobDir, orphanSha+".bin"), []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+	backdate(orphanSha + ".bin")
+
+	// Young orphan: no row, but freshly written (mtime = now) → inside the grace window.
+	youngSha := "0000000000000000000000000000000000000000000000000000000000000002"
+	if err := os.WriteFile(filepath.Join(blobDir, youngSha+".bin"), []byte("fresh"), 0o644); err != nil {
+		t.Fatalf("write young orphan: %v", err)
+	}
+
+	// Row-without-blob: a real row through PutImage, then unlink the blob (the insert-crash window).
+	rowOnly, err := PutImage(ctx, pool, blobDir, nil, bombSafeSecondPNG(t))
+	if err != nil {
+		t.Fatalf("PutImage rowOnly: %v", err)
+	}
+	if err := os.Remove(filepath.Join(blobDir, rowOnly.Sha256+".bin")); err != nil {
+		t.Fatalf("remove rowOnly blob: %v", err)
+	}
+
+	// Leftover atomic-write temp file, past grace.
+	tmpName := ".tmp-img-crash"
+	if err := os.WriteFile(filepath.Join(blobDir, tmpName), []byte("partial"), 0o644); err != nil {
+		t.Fatalf("write tmp: %v", err)
+	}
+	backdate(tmpName)
+
+	removed, missing, err := SweepOrphanBlobs(ctx, pool, blobDir, grace, now)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if removed != 2 { // the old orphan + the stale temp file
+		t.Fatalf("removed=%d, want 2 (orphan blob + temp)", removed)
+	}
+	if missing != 1 { // rowOnly's blob is gone
+		t.Fatalf("missing=%d, want 1 (row without blob)", missing)
+	}
+	if _, err := os.Stat(filepath.Join(blobDir, keptFile)); err != nil {
+		t.Fatalf("referenced blob evicted (anti-TTL violated): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(blobDir, youngSha+".bin")); err != nil {
+		t.Fatalf("young orphan evicted inside grace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(blobDir, orphanSha+".bin")); !os.IsNotExist(err) {
+		t.Fatalf("old orphan survived: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(blobDir, tmpName)); !os.IsNotExist(err) {
+		t.Fatalf("stale temp survived: %v", err)
+	}
+
+	// Idempotent: a second run right after evicts nothing new (the young orphan is still young).
+	removed2, _, err := SweepOrphanBlobs(ctx, pool, blobDir, grace, now)
+	if err != nil {
+		t.Fatalf("sweep 2: %v", err)
+	}
+	if removed2 != 0 {
+		t.Fatalf("second sweep removed=%d, want 0 (idempotent)", removed2)
+	}
+}
+
+// bombSafeSecondPNG is a second distinct valid PNG (different pixel → different sha) so a test needs
+// two independent rows without a dedup collision.
+func bombSafeSecondPNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.Set(1, 1, color.RGBA{B: 255, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode second png: %v", err)
+	}
+	return buf.Bytes()
 }
