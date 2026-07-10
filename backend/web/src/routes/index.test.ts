@@ -15,6 +15,7 @@ const BASE_AREAS = [
   '/fleet',
   '/functions',
   '/logs',
+  '/media',
   '/onboard',
   '/ota',
   '/settings',
@@ -54,7 +55,7 @@ describe('entryRedirect', () => {
   })
 
   it('leaves every real route alone', () => {
-    for (const path of ['/fleet', '/ota', '/logs', '/berry', '/functions', '/onboard', '/settings', '/nope', '']) {
+    for (const path of ['/fleet', '/ota', '/logs', '/berry', '/functions', '/media', '/onboard', '/settings', '/nope', '']) {
       expect(entryRedirect(path)).toBeNull()
     }
   })

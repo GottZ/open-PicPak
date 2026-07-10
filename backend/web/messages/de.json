@@ -23,5 +23,9 @@
   "state.loading": "Wird geladen …",
   "state.empty": "Noch nichts vorhanden.",
   "toast.copy_id": "ID kopieren",
-  "toast.dismiss": "Schließen"
+  "toast.dismiss": "Schließen",
+  "media.title": "Medien",
+  "media.subtitle": "Bilder hochladen, als BWRY-Panel prüfen und in Playlisten ordnen.",
+  "media.library.heading": "Bibliothek",
+  "media.library.empty": "Noch keine Bilder. Lade eins hoch, um zu beginnen."
 }

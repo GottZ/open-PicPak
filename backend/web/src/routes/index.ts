@@ -34,6 +34,7 @@ export const AREAS: AreaMeta[] = [
   { path: '/functions', title: 'Functions', ships: 'Doc 25 — FaaS function editor' },
   { path: '/onboard', title: 'Onboard', ships: 'Doc 26 — Web-USB onboarding' },
   { path: '/settings', title: 'Settings', ships: 'Doc 18 — secrets KV form' },
+  { path: '/media', title: 'Media', ships: 'Doc 29 — image upload + playlist editor' },
 ]
 
 /**
@@ -49,6 +50,7 @@ export const areaRoutes = {
   '/functions': () => import('./functions/FunctionsEditor.svelte'),
   '/onboard': () => import('./onboard/Onboard.svelte'),
   '/settings': () => import('./AreaPlaceholder.svelte'),
+  '/media': () => import('./media/MediaHome.svelte'),
   '*': () => import('./NotFound.svelte'),
 } satisfies Routes
 

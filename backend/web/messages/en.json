@@ -23,5 +23,9 @@
   "state.loading": "Loading…",
   "state.empty": "Nothing here yet.",
   "toast.copy_id": "Copy ID",
-  "toast.dismiss": "Dismiss"
+  "toast.dismiss": "Dismiss",
+  "media.title": "Media",
+  "media.subtitle": "Upload images, verify them as a BWRY panel, and arrange them into playlists.",
+  "media.library.heading": "Library",
+  "media.library.empty": "No images yet. Upload one to get started."
 }
