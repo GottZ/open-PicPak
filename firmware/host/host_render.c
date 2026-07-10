@@ -2,13 +2,16 @@
  * dump the 30000-byte framebuffer -> the PNG (via host/fb2png.py) shows exactly what the
  * panel renders, no device or camera needed. The dev_* values here are stub placeholders.
  *
- * Build + run (from firmware/, needs Pillow for the PNG step and the Berry component fetched
- * by scripts/setup-berry.sh + the generated font16.h via host/gen_font16.py):
+ * Build + run (from firmware/, needs Pillow for the PNG step, the Berry component fetched by
+ * scripts/setup-berry.sh, the qrcodegen component fetched by scripts/setup-qrcodegen.sh (fb.c
+ * includes qrcodegen.h for qr()), and the generated font16.h via host/gen_font16.py):
  *
  *   python3 host/gen_font16.py
  *   gcc -O1 -w -I main -I components/berry/src -I components/berry/generate -I components/berry \
+ *       -I components/qrcodegen/src \
  *       host/host_render.c main/fb.c \
  *       components/berry/src/*.c components/berry/port/be_port.c components/berry/port/be_modtab.c \
+ *       components/qrcodegen/src/qrcodegen.c \
  *       -o build/host_render -lm
  *   ./build/host_render test/render16.be build/fb.bin
  *   python3 host/fb2png.py build/fb.bin build/fb.png      # -> build/fb.png (+ .x2)

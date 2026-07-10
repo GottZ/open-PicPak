@@ -1,0 +1,32 @@
+--- a/berry_conf.h
++++ b/berry_conf.h
+@@ -134,7 +134,7 @@
+  * will not be used.
+  * Default: 0
+  **/
+-#define BE_USE_FILE_SYSTEM              1
++#define BE_USE_FILE_SYSTEM              0
+ 
+ /* Macro: BE_USE_SCRIPT_COMPILER
+  * Enable compiler when BE_USE_SCRIPT_COMPILER is not 0, otherwise
+@@ -162,7 +162,7 @@
+  * otherwise disable the feature.
+  * Default: 1
+  **/
+-#define BE_USE_SHARED_LIB               1
++#define BE_USE_SHARED_LIB               0
+ 
+ /* Macro: BE_USE_OVERLOAD_HASH
+  * Allows instances to overload hash methods for use in the
+@@ -212,9 +212,9 @@
+ #define BE_USE_JSON_MODULE              1
+ #define BE_USE_MATH_MODULE              1
+ #define BE_USE_TIME_MODULE              1
+-#define BE_USE_OS_MODULE                1
++#define BE_USE_OS_MODULE                0
+ #define BE_USE_GLOBAL_MODULE            1
+-#define BE_USE_SYS_MODULE               1
++#define BE_USE_SYS_MODULE                0
+ #define BE_USE_DEBUG_MODULE             1
+ #define BE_USE_GC_MODULE                1
+ #define BE_USE_SOLIDIFY_MODULE          1

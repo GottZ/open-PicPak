@@ -43,11 +43,21 @@ var distFS embed.FS
 //     navigation, so this reduces — not eliminates — XSS impact; that is why
 //     {@html}-ban + sessionStorage + a frozen lockfile sit alongside it.
 //   - frame-ancestors 'none' denies framing.
+//   - script-src adds 'wasm-unsafe-eval' and worker-src 'self' for the Berry WASM
+//     simulator (A33, design/33 §4.2/S1; hosted in a Web Worker per board decision
+//     E-A33-2). 'wasm-unsafe-eval' gates the compile/instantiate OPERATION, not the
+//     byte origin (Chrome 97+/FF 102+/Safari 16+); the load-bearing containment stays
+//     script-src 'self' WITHOUT unsafe-inline/unsafe-eval — with no script-injection
+//     vector there is no one to instantiate foreign WASM. Accepted residual: a future
+//     XSS would additionally gain WASM execution, same-origin, no privilege jump. The
+//     VM has no DOM/fetch binding; worker-src 'self' (not blob:) keeps the worker to
+//     the same-origin module. No 'unsafe-eval'.
 //
-// No worker-src is granted (D19 ships tight; O3): the Web-USB onboarding (Doc
-// 26, esptool-js) and the frame preview (Doc 25) must measure whether they need
-// worker-src blob: and widen the CSP in their own doc if so — not pre-granted.
-const csp = "default-src 'self'; script-src 'self'; " +
+// worker-src is now granted at 'self' (A33/E-A33-2). The Web-USB onboarding (Doc 26,
+// esptool-js) and the frame preview (Doc 25) still must confirm 'self' covers them and
+// widen (e.g. to blob:) in their own doc if not — not pre-granted here.
+const csp = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; " +
+	"worker-src 'self'; " +
 	"style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
 	"font-src 'self' data:; connect-src 'self'; " +
 	"frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"

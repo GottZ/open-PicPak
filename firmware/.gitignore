@@ -14,3 +14,6 @@ main/render_script.h
 main/font16.h
 # generated net-phase Berry script (from main/policy.be via host/gen_policy.py)
 main/policy_script.h
+# generated sim Berry conf (from components/berry/berry_conf.h + sim/conf-overrides.patch,
+# by sim/gen-conf.sh; the base+patch shas are the committed drift gate)
+sim/berry_conf.h

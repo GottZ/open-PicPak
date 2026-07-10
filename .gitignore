@@ -14,6 +14,14 @@ picpak-ops.toml
 config.toml
 *.local.toml
 
+# A33 Berry-WASM simulator: build products of firmware/sim/build.sh (E-A33-7 —
+# build-stage output, not committed; the sources + firmware/sim/sim-manifest.json
+# ARE committed). CI must run sim/build.sh before the admin image so the frontend
+# stage embeds them via //go:embed all:dist.
+backend/web/public/picpak-berry.mjs
+backend/web/public/picpak-berry.wasm
+backend/web/public/picpak-berry.wasm.br
+
 # ESP-IDF build artifacts (sdkconfig.defaults is the tracked source of truth)
 firmware/build/
 firmware/sdkconfig
