@@ -175,3 +175,37 @@ func TestDeleteImage(t *testing.T) {
 		t.Fatalf("delete missing: want ErrNotFound, got %v", err)
 	}
 }
+
+// TestPutImageHealsMissingBlob proves the crash-window heal (review fix on W1): a crash between
+// row insert and blob write leaves a row without a blob; the next PutImage of the SAME bytes is a
+// dedup hit and must RE-WRITE the missing blob instead of assuming it exists.
+func TestPutImageHealsMissingBlob(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	blobDir := t.TempDir()
+	blob := tinyPNG(t)
+
+	img, err := PutImage(ctx, pool, blobDir, nil, blob)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	blobFile := filepath.Join(blobDir, img.Sha256+".bin")
+	// Simulate the crash window: row exists, blob gone.
+	if err := os.Remove(blobFile); err != nil {
+		t.Fatalf("remove blob: %v", err)
+	}
+	img2, err := PutImage(ctx, pool, blobDir, nil, blob)
+	if err != nil {
+		t.Fatalf("dedup put: %v", err)
+	}
+	if img2.ID != img.ID {
+		t.Fatalf("dedup id mismatch: %d != %d", img2.ID, img.ID)
+	}
+	if _, err := os.Stat(blobFile); err != nil {
+		t.Fatalf("blob not healed on dedup hit: %v", err)
+	}
+	got, _, err := LoadBlob(ctx, pool, blobDir, img.ID)
+	if err != nil || len(got) != len(blob) {
+		t.Fatalf("healed blob unreadable: err=%v len=%d want %d", err, len(got), len(blob))
+	}
+}

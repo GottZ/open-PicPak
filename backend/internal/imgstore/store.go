@@ -84,7 +84,16 @@ func PutImage(ctx context.Context, q Querier, blobDir string, operatorKeyID *int
 		RETURNING `+imageCols,
 		operatorKeyID, sha, blobPath, mime, w, h, len(blob)))
 	if errors.Is(err, ErrNotFound) {
-		return GetImageBySha(ctx, q, sha) // dedup hit: existing row, blob already on disk
+		// Dedup hit: existing row. The blob is NORMALLY on disk already — but a crash
+		// between a previous row insert and its blob write leaves a row without a blob
+		// forever (row-before-blob order). Heal that window here: we hold the exact
+		// bytes, so re-write the blob when it is missing (one cheap stat on this path).
+		if _, statErr := os.Stat(blobFSPath(blobDir, sha)); os.IsNotExist(statErr) {
+			if healErr := writeBlobAtomic(blobDir, blobPath, blob); healErr != nil {
+				return Image{}, fmt.Errorf("blob heal: %w", healErr)
+			}
+		}
+		return GetImageBySha(ctx, q, sha)
 	}
 	if err != nil {
 		return Image{}, err
