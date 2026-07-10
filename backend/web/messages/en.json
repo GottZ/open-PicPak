@@ -1,0 +1,21 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "app.language": "Language",
+  "errors.network": "The admin API is unreachable.",
+  "errors.internal": "An internal error occurred.",
+  "errors.unauthorized": "Not signed in, or the key is invalid.",
+  "errors.bad_request": "Bad request.",
+  "errors.forbidden": "Access denied.",
+  "errors.not_found": "Not found.",
+  "errors.conflict": "Conflict with the current state.",
+  "errors.validation": "The input is invalid.",
+  "errors.rate_limited": "Too many requests. Please try again later.",
+  "errors.server": "Server error. Please try again later.",
+  "errors.api_error": "The request failed.",
+  "errors.invalid_response": "Invalid response from the server.",
+  "errors.unknown": "Unknown error.",
+  "state.loading": "Loading…",
+  "state.empty": "Nothing here yet.",
+  "toast.copy_id": "Copy ID",
+  "toast.dismiss": "Dismiss"
+}

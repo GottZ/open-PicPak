@@ -4,14 +4,15 @@
   // an ambiguous blank. Feature lists (logs, functions, roster) render through it.
   import type { Snippet } from 'svelte'
   import type { Resource } from './resource.svelte'
+  import { m } from '../paraglide/messages.js'
 
   let {
     resource,
     ready,
     empty,
     isEmpty = (data: T) => Array.isArray(data) && data.length === 0,
-    loadingText = 'loading…',
-    emptyText = 'Nothing here yet.',
+    loadingText = m['state.loading'](),
+    emptyText = m['state.empty'](),
   }: {
     resource: Resource<T>
     /** Rendered with the loaded data when ready and non-empty. */

@@ -3,6 +3,7 @@
   // with auto-dismiss (store-driven), manual close, and a copy-request-id action
   // on errors (greppable in the cmd/admin logs).
   import { notify } from './toasts.svelte'
+  import { m } from '../paraglide/messages.js'
 
   function copy(text: string): void {
     void navigator.clipboard?.writeText(text)
@@ -18,12 +19,12 @@
           <p class="meta">
             {#if t.code}<span class="code">{t.code}</span>{/if}
             {#if t.requestId}
-              <button class="copy" onclick={() => copy(t.requestId ?? '')}>copy id</button>
+              <button class="copy" onclick={() => copy(t.requestId ?? '')}>{m['toast.copy_id']()}</button>
             {/if}
           </p>
         {/if}
       </div>
-      <button class="close" aria-label="dismiss" onclick={() => notify.dismiss(t.id)}>×</button>
+      <button class="close" aria-label={m['toast.dismiss']()} onclick={() => notify.dismiss(t.id)}>×</button>
     </div>
   {/each}
 </div>

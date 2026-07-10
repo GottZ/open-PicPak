@@ -5,6 +5,7 @@ import type { PluginOption } from 'vite'
 import { defineConfig } from 'vitest/config'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { compression } from 'vite-plugin-compression2'
+import { paraglideVitePlugin } from '@inlang/paraglide-js'
 
 // Dev proxy target: the local cmd/admin the dev server forwards API calls to.
 // cmd/admin binds 127.0.0.1:8081 by default (Doc 17 ADMIN_ADDR), so it is
@@ -26,6 +27,14 @@ function keepGitkeep(): PluginOption {
 
 export default defineConfig({
   plugins: [
+    // Compile-time i18n (design A34 §1): messages become tree-shakable ESM
+    // functions under src/paraglide, regenerated on dev/build from the inlang
+    // project. The generated dir is self-gitignored; runtime locale detection
+    // lives in src/lib/i18n.ts (getLocale is overwritten to read <html lang>).
+    paraglideVitePlugin({
+      project: './project.inlang',
+      outdir: './src/paraglide',
+    }),
     svelte(),
     // Pre-compress at build time; the Go handler (web/web.go) negotiates the
     // .br/.gz siblings — cmd/admin runs no on-the-fly compression middleware.

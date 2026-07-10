@@ -7,6 +7,8 @@
   import Login from './Login.svelte'
   import Toaster from './lib/Toaster.svelte'
   import ConnIndicator from './lib/ConnIndicator.svelte'
+  import { m } from './paraglide/messages.js'
+  import { locales, localeLabels, activeLocale, switchLocale, type Locale } from './lib/i18n'
 
   onMount(() => void session.restore())
 </script>
@@ -27,6 +29,16 @@
         {/each}
       </nav>
       <div class="identity">
+        <select
+          class="locale"
+          aria-label={m['app.language']()}
+          value={activeLocale()}
+          onchange={(e) => switchLocale(e.currentTarget.value as Locale)}
+        >
+          {#each locales as loc (loc)}
+            <option value={loc}>{localeLabels[loc]}</option>
+          {/each}
+        </select>
         <ConnIndicator />
         <!-- Read-only degradation (D19.6): the badge is comfort; the server's
              requireAdmin (design 17 §4.2) is the truth. -->
@@ -117,6 +129,19 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .locale {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    border-radius: 6px;
+    padding: 0.2rem 0.4rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+  }
+  .locale:hover {
+    color: var(--fg);
+    border-color: var(--accent);
   }
   .logout {
     background: transparent;
