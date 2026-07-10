@@ -9,7 +9,7 @@ import { EditorView, keymap, lineNumbers, drawSelection, highlightActiveLine, ho
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete'
 import { bracketMatching } from '@codemirror/language'
-import { linter, lintGutter, type Diagnostic } from '@codemirror/lint'
+import { linter, lintGutter, forceLinting, type Diagnostic } from '@codemirror/lint'
 import { berry } from './berryMode'
 import { berryAutocomplete } from './completion'
 import { lint, findingRange } from './lint'
@@ -127,6 +127,73 @@ export function createBerryEditor(opts: {
     setDoc: (doc: string) => {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: doc } })
     },
+    destroy: () => view.destroy(),
+  }
+}
+
+export interface SimEditorHandle {
+  getDoc(): string
+  /** Replace the whole document (a "load example", A33 §4.3). */
+  setDoc(doc: string): void
+  /** Force the VM linter to re-run — call once the WASM idle-loads so existing content gets checked. */
+  refreshLint(): void
+  destroy(): void
+}
+
+/** A VM syntax finding from sim_compile_only, or null (compiled / no simulator). Mirrors diagnostics.ts. */
+export type VmCheck = (doc: string) => Promise<{ line: number; message: string } | null>
+
+/**
+ * A render-script editor for the Berry-WASM simulator (A33 §4.3/§4.4). This is deliberately NOT the C2
+ * command surface (createBerryEditor): render scripts call fb.* drawing functions, which the C2 catalog
+ * classes as `forbidden` — the static C2 lint would flag every fb call, so it is absent here. The ONLY
+ * diagnostic is the real VM's compile check (sim_compile_only, the third linter() source of A33's editor
+ * intelligence), supplied via `vmCheck`. It returns null (⇒ no squiggle) until the WASM idle-loads and
+ * whenever the simulator is unavailable — fail-open: on-device stays authoritative (BerryEditor doctrine).
+ * Still no eval and (bar the Worker the caller owns) no CSP delta beyond E-A33-2's worker-src.
+ */
+export function createSimEditor(opts: {
+  parent: HTMLElement
+  doc: string
+  onChange: (doc: string) => void
+  vmCheck: VmCheck
+}): SimEditorHandle {
+  const vmLinter = linter(async (view): Promise<Diagnostic[]> => {
+    const doc = view.state.doc.toString()
+    const r = await opts.vmCheck(doc)
+    if (!r) return []
+    // No column from the VM message → underline the whole blamed line (findingRange's col-less fallback).
+    const { from, to } = findingRange({ severity: 'error', kind: 'string', line: r.line, message: r.message }, doc)
+    return [{ from, to, severity: 'error', message: r.message }]
+  })
+
+  const state = EditorState.create({
+    doc: opts.doc,
+    extensions: [
+      lineNumbers(),
+      history(),
+      drawSelection(),
+      highlightActiveLine(),
+      bracketMatching(),
+      closeBrackets(),
+      berry(),
+      vmLinter,
+      lintGutter(),
+      keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
+      EditorView.lineWrapping,
+      EditorView.updateListener.of((u) => {
+        if (u.docChanged) opts.onChange(u.state.doc.toString())
+      }),
+      editorTheme,
+    ],
+  })
+  const view = new EditorView({ state, parent: opts.parent })
+  return {
+    getDoc: () => view.state.doc.toString(),
+    setDoc: (doc: string) => {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: doc } })
+    },
+    refreshLint: () => forceLinting(view),
     destroy: () => view.destroy(),
   }
 }

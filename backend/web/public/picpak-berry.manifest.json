@@ -1,0 +1,8 @@
+{
+  "berry_pin": "bd9c93b65dfadddc27e3203fc04e60e986a0fa5f",
+  "berry_conf_base_sha256": "66b485a5e77fc89a9033bcc354bd4e935d768f1269689e7d67a241a6b29f4944",
+  "sim_conf_patch_sha256": "0fdf7022fff6d9197e127166b8e5929b0e75a620eca9232f59973f62eb8c1fe8",
+  "fb_c_sha256": "772b2bfc959af37b2aee80b5c9dcca34259be8d668bf7cb976ecc3a78da6a030",
+  "emsdk_version": "4.0.16",
+  "expected_wasm_br_bytes": 81478
+}

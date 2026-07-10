@@ -72,4 +72,11 @@ cat > "$MANIFEST" <<JSON
 }
 JSON
 echo "wrote $MANIFEST"
+
+# 7. surface the manifest to the web bundle so the simulator panel can fetch it at
+# /picpak-berry.manifest.json and show the pin (design/33 §3, W-A33.3). A committed copy in public/ is the
+# dev fallback (shows the last-known pin without a build); this keeps it in sync at deploy time.
+cp "$MANIFEST" "$OUT_DIR/picpak-berry.manifest.json"
+echo "copied manifest -> $OUT_DIR/picpak-berry.manifest.json"
+
 echo "BUILD GREEN"
