@@ -33,15 +33,47 @@ export interface FnResult {
 
 export class OffSizeError extends Error {}
 
-// sharpFacade wraps sharp as buffer-in/buffer-out (fix-8): a string/path input throws, and the
-// filesystem sink toFile is removed. Defense-in-depth — a determined function can re-import sharp;
-// that fs path is the M2 read-only-rootfs/seccomp job, not this facade's.
+// MAX_INPUT_PIXELS is the hard decoded-pixel ceiling the sharp facade enforces on EVERY input —
+// a decompression-bomb guard (A31.4, design §5). It mirrors the server-side blob-store ceiling
+// `imgstore.MaxImagePixels` (backend/internal/imgstore/types.go, 24_000_000 ≈ 40× the 400×300
+// panel target): a byte cap alone cannot catch a few-hundred-KB PNG that decodes to gigabytes, so
+// the wall is on width*height read from the header. Kept in lockstep with that Go constant.
+export const MAX_INPUT_PIXELS = 24_000_000;
+
+// clampInputPixels forces `limitInputPixels` to the floor regardless of what the (operator-authored,
+// untrusted) template passes: sharp's default is ~268M px and `false`/`0`/`true` disable or reset the
+// limit, so a template could otherwise widen or drop the ceiling. A caller may only make the ceiling
+// TIGHTER (a smaller positive number survives); anything larger, absent, or a limit-disabling value is
+// pinned to MAX_INPUT_PIXELS. The author cannot edit the floor away (design §4.3/§5).
+function clampInputPixels(opts?: unknown): Record<string, unknown> {
+  const o = opts && typeof opts === "object" ? { ...(opts as Record<string, unknown>) } : {};
+  const caller = o.limitInputPixels;
+  o.limitInputPixels =
+    typeof caller === "number" && caller > 0 && caller <= MAX_INPUT_PIXELS ? caller : MAX_INPUT_PIXELS;
+  return o;
+}
+
+// isBinaryInput reports whether `input` is compressed bytes to be DECODED (Buffer / ArrayBuffer /
+// typed-array view). That is the only decompression-bomb vector — a `{create}`/`{raw}`/`{text}`
+// descriptor declares its own dimensions and generates in-memory, and sharp forbids passing a
+// separate options object alongside such a descriptor, so the pixel floor is injected ONLY on the
+// binary decode path.
+function isBinaryInput(input: unknown): boolean {
+  return input instanceof Uint8Array || input instanceof ArrayBuffer || ArrayBuffer.isView(input);
+}
+
+// sharpFacade wraps sharp as buffer-in/buffer-out (fix-8): a string/path input throws, the
+// filesystem sink toFile is removed, and on the binary-decode path `limitInputPixels` is pinned to
+// MAX_INPUT_PIXELS (decompression-bomb floor, A31.4). Defense-in-depth — a determined function can
+// re-import sharp; that fs path is the M2 read-only-rootfs/seccomp job, not this facade's.
 export function sharpFacade(real: typeof sharp = sharp): Cap["sharp"] {
   return (input?: unknown, opts?: unknown): Sharp => {
     if (typeof input === "string") {
       throw new Error("sharp: path/string input is not allowed (buffer or {create} only)");
     }
-    const inst = real(input as never, opts as never);
+    const inst = isBinaryInput(input)
+      ? real(input as never, clampInputPixels(opts) as never)
+      : real(input as never, opts as never);
     (inst as unknown as { toFile: () => never }).toFile = () => {
       throw new Error("sharp: toFile is not allowed (no filesystem sink)");
     };

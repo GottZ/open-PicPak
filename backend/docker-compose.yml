@@ -249,6 +249,12 @@ services:
     volumes:
       - faas-m4-sock:/run/m4                        # ONLY the m4 seam — never render/egress-ctl (isolation)
     networks: [faasnet]
+    # A31.4 containment belt: cap the worker container's RAM so a render that slips the in-worker
+    # walls (limitInputPixels floor + fetch response cap) is OOM-killed instead of exhausting the
+    # host. memswap_limit == mem_limit disables swap, so the ceiling is real RAM (a runaway cannot
+    # bleed into swap). 512m holds the daemon + up to 4 concurrent slots for legitimate renders.
+    mem_limit: 512m
+    memswap_limit: 512m
     restart: unless-stopped
 
   # policy egress proxy: resolve-then-connect, IP-pin the post-resolve connect IP, per-call allowlist ∪
