@@ -39,6 +39,10 @@ type RenderOpts struct {
 	Timeout          time.Duration
 	EgressRegister   func(cred string, allow []string) error
 	EgressUnregister func(cred string)
+	// Input is the source-image bytes for the built-in __playlist source (A27 W3). It rides the M4
+	// request's additive `input` field (proto v2); empty for every operator render, so those marshal
+	// unchanged. The request-direction MaxRequestFrame ceiling (not MaxFrame) bounds it (K7).
+	Input []byte
 }
 
 // RenderResult is the persistence-free render output: packed BWRY (nil on err), the pre-pack raw RGB
@@ -105,6 +109,7 @@ func renderOnce(ctx context.Context, q secrets.Querier, box *sealbox.Box, fn *fa
 		EgressAllow:   fn.EgressAllow,
 		EgressCred:    cred,
 		Limits:        opts.Limits,
+		Input:         opts.Input,
 	}
 
 	meta, raw, err := driveWorker(opts.M4Sock, req, opts.Timeout)

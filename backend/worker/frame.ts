@@ -10,7 +10,13 @@ export const KIND_READY = 0x04;
 
 export const RAW_FRAME_SIZE = 400 * 300 * 3; // 360000
 export const META_MAX = 16 << 10; // 16384
+// Proto v2 / K7 direction-split ceilings (mirror internal/faasproto/frame.go). MAX_FRAME bounds the
+// worker→sup RESPONSE (encodeFrame writes it, tight — the raw image). MAX_REQUEST_FRAME bounds the
+// sup→worker REQUEST (FrameReader reads it here in the untrusted worker); it is larger because the
+// request may carry a multi-MB base64 source image for the built-in __playlist source.
 export const MAX_FRAME = 1 + 4 + META_MAX + RAW_FRAME_SIZE;
+export const MAX_REQUEST_IMAGE_BYTES = 12 << 20; // 12 MiB (imgstore ingest ceiling parity)
+export const MAX_REQUEST_FRAME = 1 + META_MAX + (Math.floor(MAX_REQUEST_IMAGE_BYTES / 3) + 1) * 4;
 
 function beU32(b: Uint8Array, off: number): number {
   // multiply the high byte to stay positive (lengths here are far below 2^31 anyway)
@@ -24,7 +30,8 @@ function putU32(b: Uint8Array, off: number, v: number): void {
   b[off + 3] = v & 0xff;
 }
 
-// encodeFrame builds one length-prefixed message: u32be(1+payload) | kind | payload.
+// encodeFrame builds one length-prefixed message: u32be(1+payload) | kind | payload. On the worker
+// this writes the RESPONSE direction (worker→sup), so it stays bounded by the tight MAX_FRAME.
 export function encodeFrame(kind: number, payload: Uint8Array): Uint8Array {
   const total = 1 + payload.length;
   if (total > MAX_FRAME) throw new Error(`faasproto: frame len ${total} > max ${MAX_FRAME}`);
@@ -40,8 +47,9 @@ export interface Frame {
   payload: Uint8Array;
 }
 
-// FrameReader accumulates stream chunks and yields complete frames. It rejects a declared
-// length > MAX_FRAME (or < 1) — the same ceiling faasproto.ReadFrame enforces.
+// FrameReader accumulates stream chunks and yields complete frames. On the worker it reads the
+// sup→worker REQUEST direction, so it rejects a declared length > MAX_REQUEST_FRAME (or < 1) — the
+// larger request ceiling that admits a multi-MB source image (K7).
 export class FrameReader {
   private buf = new Uint8Array(0);
 
@@ -56,7 +64,7 @@ export class FrameReader {
       if (this.buf.length < 4) break;
       const total = beU32(this.buf, 0);
       if (total < 1) throw new Error(`faasproto: frame len ${total} < 1`);
-      if (total > MAX_FRAME) throw new Error(`faasproto: frame len ${total} > max ${MAX_FRAME}`);
+      if (total > MAX_REQUEST_FRAME) throw new Error(`faasproto: frame len ${total} > max ${MAX_REQUEST_FRAME}`);
       if (this.buf.length < 4 + total) break;
       out.push({ kind: this.buf[4], payload: this.buf.slice(5, 4 + total) });
       this.buf = this.buf.slice(4 + total);
@@ -113,6 +121,10 @@ export interface RenderRequest {
   egress_allow: string[];
   egress_cred: string;
   limits: { timeout_ms: number; mem_mb: number };
+  // input is the ADDITIVE engine field (proto v2 / A27 W3): base64 source-image bytes the built-in
+  // __playlist source decodes via cap.sharp. Absent for operator functions (JSON omitempty on the
+  // Go side), so an operator request decodes it as undefined.
+  input?: string;
 }
 
 export function decodeRequest(payload: Uint8Array): RenderRequest {

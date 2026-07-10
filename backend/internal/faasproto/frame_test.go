@@ -42,9 +42,33 @@ func TestReadFrameCeilingBeforeAlloc(t *testing.T) {
 	}
 }
 
-func TestWriteFrameRejectsOversize(t *testing.T) {
-	if err := WriteFrame(&bytes.Buffer{}, KindRenderResponse, make([]byte, MaxFrame)); err == nil {
-		t.Fatal("WriteFrame accepted an oversize payload")
+// K7 (proto v2, direction-split ceilings): WriteFrame is the sup→worker REQUEST writer, so it
+// admits up to MaxRequestFrame (a multi-MB source image fits) but rejects beyond it. A former
+// MaxFrame-sized payload is now ACCEPTED — the old single-ceiling assert broke on purpose (that
+// break is the K7 red proof); this is the new contract.
+func TestWriteFrameRequestCeiling(t *testing.T) {
+	// A payload that fit the old MaxFrame ceiling is now well within the request ceiling: accepted.
+	if err := WriteFrame(&bytes.Buffer{}, KindRenderRequest, make([]byte, MaxFrame)); err != nil {
+		t.Fatalf("WriteFrame rejected a request within MaxRequestFrame: %v", err)
+	}
+	// One byte over MaxRequestFrame (total = payload+1) is rejected before allocation.
+	if err := WriteFrame(&bytes.Buffer{}, KindRenderRequest, make([]byte, MaxRequestFrame)); err == nil {
+		t.Fatal("WriteFrame accepted a payload over MaxRequestFrame")
+	}
+}
+
+// K7 (T4 response wall preserved): the request ceiling must NOT leak into the response reader. A
+// multi-MB length that sits BETWEEN MaxFrame and MaxRequestFrame — one a compromised worker could
+// declare — is still rejected by ReadFrame before any allocation, so the split did not weaken the
+// OOM isolation to the untrusted worker.
+func TestReadFrameResponseStaysTight(t *testing.T) {
+	if MaxRequestFrame <= MaxFrame {
+		t.Fatalf("test premise: MaxRequestFrame (%d) must exceed MaxFrame (%d)", MaxRequestFrame, MaxFrame)
+	}
+	var lenb [4]byte
+	binary.BigEndian.PutUint32(lenb[:], uint32(MaxFrame+1)) // multi-MB, over the tight response cap
+	if _, _, err := ReadFrame(bytes.NewReader(lenb[:])); err == nil || !strings.Contains(err.Error(), "before alloc") {
+		t.Fatalf("ReadFrame accepted a response over MaxFrame (T4 wall breached), got %v", err)
 	}
 }
 

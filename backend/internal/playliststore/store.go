@@ -266,6 +266,30 @@ func Reorder(ctx context.Context, pool Pool, playlistID int64, orderedItemIDs []
 	return tx.Commit(ctx)
 }
 
+// RotationItems returns ALL of a playlist's items in stored (position-ascending) order — the input to
+// the render-path rotation (plrender.RotationOrder needs the full id set to build a serial's shuffle
+// permutation, and the sequence walk needs the ordered slice). Unlike ListItems (the paginated editor
+// read) this loads the whole list: a playlist has at most hundreds of items (§6), read once per
+// rotation advance over the (playlist_id, position) index — not a hot per-request scan of the whole
+// list on every /frame (the supervisor caches nothing here beyond the packed frame).
+func RotationItems(ctx context.Context, q Querier, playlistID int64) ([]PlaylistItem, error) {
+	rows, err := q.Query(ctx,
+		`SELECT `+itemCols+` FROM playlist_item WHERE playlist_id = $1 ORDER BY position`, playlistID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PlaylistItem{}
+	for rows.Next() {
+		item, err := scanItemRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 // --- helpers ---
 
 // scanner is satisfied by both pgx.Row (QueryRow) and pgx.Rows (Query loop).

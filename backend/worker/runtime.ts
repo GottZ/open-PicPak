@@ -16,6 +16,11 @@ export interface Ctx {
   channel: string;
   trigger: { type: string; payload?: unknown };
   now: string;
+  // input is the decoded source-image bytes for the built-in __playlist source (A27 W3). It is
+  // present ONLY on the playlist render path (the supervisor sets Request.Input there); an operator
+  // function's ctx never carries it, so `cap.sharp(ctx.input)` in a stray operator fn would just see
+  // undefined. Not a security boundary — the injection is supervisor-only by construction.
+  input?: Uint8Array;
 }
 
 export interface Cap {

@@ -45,6 +45,23 @@ func (s *supervisor) doRender(ctx context.Context, fn *faasstore.Function, rctx 
 	})
 }
 
+// doRenderPlaylist drives the built-in __playlist source over M4 with the source image injected as
+// the request's `input` field (A27 W3). The synthetic function has no secrets and no egress, so it
+// resolves nothing and provisions nothing; renderOnce packs the worker's raw RGB to the 30000-byte
+// frame exactly as for an operator render (one render primitive, K7).
+func (s *supervisor) doRenderPlaylist(ctx context.Context, source string, input []byte, dither string) RenderResult {
+	fn := &faasstore.Function{Source: source}
+	rctx := faasproto.RequestCtx{Trigger: faasproto.Trigger{Type: "render"}, Now: nowOrDefault("")}
+	return renderOnce(ctx, s.pool, s.box, fn, rctx, RenderOpts{
+		Secrets:       SecretsReal,
+		Limits:        s.limits,
+		DitherDefault: dither,
+		M4Sock:        s.m4Sock,
+		Timeout:       time.Duration(s.limits.TimeoutMs)*time.Millisecond + 10*time.Second,
+		Input:         input,
+	})
+}
+
 // --- hot cache (in-memory TTL, keyed by (serial, fn); the entry carries the source version so a
 // version bump is an automatic miss — K7 cache-bust) ---
 

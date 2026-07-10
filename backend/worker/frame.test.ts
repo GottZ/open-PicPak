@@ -8,14 +8,19 @@ import {
   KIND_RENDER_RESPONSE,
   RAW_FRAME_SIZE,
   MAX_FRAME,
+  MAX_REQUEST_FRAME,
+  MAX_REQUEST_IMAGE_BYTES,
   META_MAX,
   type ResponseMeta,
 } from "./frame";
 
-test("constants match the faasproto spec", () => {
+test("constants match the faasproto spec (proto v2 direction-split ceilings)", () => {
   expect(RAW_FRAME_SIZE).toBe(360000);
   expect(META_MAX).toBe(16384);
   expect(MAX_FRAME).toBe(1 + 4 + 16384 + 360000);
+  // K7: the request ceiling is larger (multi-MB base64 source image) and must exceed the response one.
+  expect(MAX_REQUEST_FRAME).toBe(1 + 16384 + (Math.floor(MAX_REQUEST_IMAGE_BYTES / 3) + 1) * 4);
+  expect(MAX_REQUEST_FRAME).toBeGreaterThan(MAX_FRAME);
 });
 
 test("encodeFrame produces the spec wire format (u32be total | kind | payload)", () => {
@@ -46,10 +51,25 @@ test("FrameReader yields multiple frames from one chunk", () => {
   expect(out.map((f) => f.kind)).toEqual([0x01, 0x02]);
 });
 
-test("FrameReader rejects an over-declared length (ceiling before reading a body)", () => {
-  const prefix = new Uint8Array(4);
-  new DataView(prefix.buffer).setUint32(0, MAX_FRAME + 1, false);
-  expect(() => new FrameReader().feed(prefix)).toThrow(/> max/);
+// K7: FrameReader reads the sup→worker REQUEST direction, so its ceiling is MAX_REQUEST_FRAME. A
+// length that fit the old single MAX_FRAME ceiling is now accepted (the request may be that large);
+// only a length over MAX_REQUEST_FRAME is rejected before a body is read. (The old MAX_FRAME+1 assert
+// broke on purpose — that break is the TS half of the K7 red proof.)
+test("FrameReader admits a request up to MAX_REQUEST_FRAME and rejects beyond it", () => {
+  // A former-oversize length (MAX_FRAME+1) is now within the request ceiling: NOT rejected on the prefix.
+  const under = new Uint8Array(4);
+  new DataView(under.buffer).setUint32(0, MAX_FRAME + 1, false);
+  expect(new FrameReader().feed(under)).toHaveLength(0); // waits for the body, no throw
+  // Over the request ceiling → rejected before reading a body.
+  const over = new Uint8Array(4);
+  new DataView(over.buffer).setUint32(0, MAX_REQUEST_FRAME + 1, false);
+  expect(() => new FrameReader().feed(over)).toThrow(/> max/);
+});
+
+// K7 (response wall preserved): encodeFrame writes the worker→sup RESPONSE direction and stays tight
+// at MAX_FRAME — the larger request ceiling must not leak into the direction the untrusted worker emits.
+test("encodeFrame rejects a response payload over the tight MAX_FRAME ceiling", () => {
+  expect(() => encodeFrame(KIND_RENDER_RESPONSE, new Uint8Array(MAX_FRAME))).toThrow(/> max/);
 });
 
 test("encodeResponse enforces the fixed 360000-byte image invariant", () => {

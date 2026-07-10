@@ -22,6 +22,13 @@ type Request struct {
 	EgressAllow   []string          `json:"egress_allow"`
 	EgressCred    string            `json:"egress_cred"`
 	Limits        Limits            `json:"limits"`
+	// Input is an ADDITIVE engine field (A27 W3, proto v2): the raw source-image bytes the
+	// built-in __playlist source decodes via cap.sharp (base64 in JSON). Operator functions never
+	// set it and never see it (the supervisor injects it ONLY on the playlist render path), so it
+	// is omitempty — a plain operator render marshals byte-for-byte as before. It is the reason the
+	// request direction gets its own MaxRequestFrame ceiling (frame.go / K7): a multi-MB source
+	// image would not fit under the tight response-direction MaxFrame.
+	Input []byte `json:"input,omitempty"`
 }
 
 // RequestFn is the function identity + source shipped per call (no worker code cache).

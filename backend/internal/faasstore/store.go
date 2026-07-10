@@ -150,13 +150,38 @@ func WebhookTokenSHA(ctx context.Context, q Querier, id int64) ([]byte, error) {
 	return sha, nil
 }
 
-// BindDevice points a serial at a function (upsert — exactly one function per serial).
-func BindDevice(ctx context.Context, q Querier, serial string, fnID int64) error {
-	_, err := q.Exec(ctx, `
+// BindDevice points a serial at a function (upsert — exactly one function per serial) AND enforces
+// mutual exclusion with a playlist binding (A27 W3): a serial must never hold a function AND a
+// playlist binding at once. Both bind paths (this one and plrender.BindPlaylist) run in ONE tx under
+// pg_advisory_xact_lock(hashtext(serial)), so the "delete the other row + insert mine" sequence is
+// serialised fleet-wide — the TOCTOU race that would leave both rows (a serial silently showing a
+// foreign playlist) is mechanically impossible (§3/§5). The supervisor's playlist-first ordering is
+// then pure defense-in-depth, not the correctness anchor.
+func BindDevice(ctx context.Context, pool Pool, serial string, fnID int64) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	// Serialise every bind of this serial (function OR playlist) against each other.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, serial); err != nil {
+		return err
+	}
+	// Drop any playlist binding + its cursor: this serial now shows a function.
+	if _, err := tx.Exec(ctx, `DELETE FROM device_playlist_binding WHERE serial = $1`, serial); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM playlist_cursor WHERE serial = $1`, serial); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO device_render_binding (serial, function_id) VALUES ($1, $2)
 		ON CONFLICT (serial) DO UPDATE SET function_id = EXCLUDED.function_id, bound_at = now()`,
-		serial, fnID)
-	return err
+		serial, fnID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // BoundSerials returns every serial bound to a function — the cron/prerender fan-out set

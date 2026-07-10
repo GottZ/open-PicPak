@@ -16,6 +16,7 @@ interface Job {
   egress_allow: string[];
   egress_cred: string;
   proxy_url: string;
+  input?: string; // base64 source image (built-in __playlist source, A27 W3)
 }
 
 const logs: { lvl: string; msg: string }[] = [];
@@ -25,13 +26,16 @@ let payload: Uint8Array;
 try {
   const job = JSON.parse(await Bun.stdin.text()) as Job;
   jobId = job.id;
+  // Decode the base64 source image into ctx.input for the built-in __playlist source (A27 W3). Only
+  // present on the playlist path; an operator job leaves ctx.input undefined.
+  const ctx: Ctx = job.input ? { ...job.ctx, input: new Uint8Array(Buffer.from(job.input, "base64")) } : job.ctx;
   const cap = {
     fetch: makeFetch({ allow: job.egress_allow, proxyUrl: job.proxy_url, cred: job.egress_cred }),
     sharp: sharpFacade(),
     secrets: job.secrets,
     log: (lvl: string, msg: string) => logs.push({ lvl, msg }),
   };
-  const res = await runFunction(job.source, job.ctx, cap);
+  const res = await runFunction(job.source, ctx, cap);
   const raw = await rasterise(res.image);
   const meta: ResponseMeta = {
     v: 1,

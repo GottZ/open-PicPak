@@ -22,6 +22,7 @@ import (
 
 	"github.com/open-picpak/backend/internal/faasproto"
 	"github.com/open-picpak/backend/internal/faasstore"
+	"github.com/open-picpak/backend/internal/plrender"
 	"github.com/open-picpak/backend/internal/sealbox"
 )
 
@@ -52,10 +53,17 @@ type supervisor struct {
 	retryWake     int
 	egress        *egressClient
 	cache         *frameCache
-	render        renderFunc         // s.doRender in prod; a stub in tests
-	renderTTL     time.Duration      // sync hot-cache TTL default (RENDER_TTL)
-	schedTick     time.Duration      // scheduler scan cadence
+	render        renderFunc          // s.doRender in prod; a stub in tests
+	renderTTL     time.Duration       // sync hot-cache TTL default (RENDER_TTL)
+	schedTick     time.Duration       // scheduler scan cadence
 	lastRun       map[int64]time.Time // fn id -> last fan-out (scheduler goroutine only)
+
+	// A27 W3 playlist render anchor.
+	renderPlaylist playlistRenderFunc // s.doRenderPlaylist in prod; a counting stub in tests
+	plFlight       *singleFlight      // per-variant in-flight dedup (cache-stampede guard)
+	imgBlobDir     string             // imgblobs volume, :ro (source-image reads for the built-in source)
+	jitterFrac     float64            // X-Next-Wake jitter fraction (K12); 0 → default 0.15
+	rng            func() float64     // jitter randomness; nil → math/rand (tests inject determinism)
 }
 
 func main() {
@@ -86,8 +94,12 @@ func main() {
 		renderTTL:     time.Duration(envInt("RENDER_TTL", 120)) * time.Second,
 		schedTick:     time.Duration(envInt("FAAS_SCHED_TICK", 30)) * time.Second,
 		lastRun:       map[int64]time.Time{},
+		plFlight:      newSingleFlight(),
+		imgBlobDir:    env("IMG_BLOB_DIR", "/var/lib/picpak/imgblobs"),
+		jitterFrac:    0.15,
 	}
-	s.render = s.doRender // the real M4 render drive (tests inject a stub)
+	s.render = s.doRender                 // the real M4 render drive (tests inject a stub)
+	s.renderPlaylist = s.doRenderPlaylist // the built-in __playlist M4 drive (tests inject a stub)
 	go s.runScheduler(ctx)
 
 	renderSock := env("RENDER_SOCK", "/run/faas/render.sock")
@@ -158,17 +170,26 @@ func (s *supervisor) handleRender(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	fnID, ok, err := faasstore.BoundFunctionID(ctx, s.pool, body.Serial)
+	// A27 W3: resolve BOTH bindings in one round-trip (§4.3). A playlist binding takes precedence
+	// (playlist-first); the advisory-locked bind paths guarantee at most one binding exists, so this
+	// ordering is defense-in-depth, not the correctness anchor.
+	bind, err := plrender.ResolveBinding(ctx, s.pool, body.Serial)
 	if err != nil {
-		log.Printf("faas-supervisor: bound lookup %s: %v", body.Serial, err)
+		log.Printf("faas-supervisor: resolve binding %s: %v", body.Serial, err)
 		s.writeFrame(w, errorFrame, "error", true, s.retryWake)
 		return
 	}
-	if !ok {
-		// no function bound to this device — nothing to render; serve the error frame (retry soon).
+	if bind.PlaylistID != 0 {
+		packed, status, stale, wake := s.buildPlaylistFrame(ctx, body.Serial, bind.PlaylistID, time.Now())
+		s.writeFrame(w, packed, status, stale, wake)
+		return
+	}
+	if bind.FunctionID == 0 {
+		// no function AND no playlist bound to this device — nothing to render; serve the error frame.
 		s.writeFrame(w, errorFrame, "error", true, s.retryWake)
 		return
 	}
+	fnID := bind.FunctionID
 	fn, err := faasstore.LoadFunction(ctx, s.pool, fnID)
 	if err != nil {
 		if !errors.Is(err, faasstore.ErrNotFound) {

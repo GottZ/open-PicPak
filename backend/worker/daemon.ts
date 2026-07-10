@@ -162,6 +162,7 @@ async function handleRequest(
         egress_allow: req.egress_allow ?? [],
         egress_cred: req.egress_cred ?? "",
         proxy_url: proxyUrl,
+        input: req.input, // base64 source image for the built-in __playlist source (A27 W3), else undefined
       },
       req.limits?.timeout_ms ?? 8000,
     );

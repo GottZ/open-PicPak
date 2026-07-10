@@ -5,6 +5,14 @@
 // rejects any image byte count other than the exact 400x300 raw size, so a malicious
 // worker can neither over-declare a length to OOM the key+DB supervisor nor smuggle a
 // compressed payload it would have to decode (fix-4).
+//
+// Proto v2 (A27 W3 / K7) splits the single frame ceiling into two DIRECTION-specific caps.
+// The sup→worker REQUEST may now carry a multi-MB source image (Request.Input, base64), so
+// WriteFrame (which the trusted supervisor uses to WRITE requests) is bounded by the larger
+// MaxRequestFrame. The worker→sup RESPONSE stays tight: ReadFrame (which the trusted supervisor
+// uses to READ the untrusted worker's response) keeps MaxFrame, so a malicious worker still
+// cannot over-declare a multi-MB response length to OOM the key+DB supervisor (T4). One constant
+// can never be both tight (response) and multi-MB (request) — hence two.
 package faasproto
 
 import (
@@ -27,18 +35,31 @@ const (
 	RawFrameSize = 400 * 300 * 3 // 360000
 	// MetaMax caps the response meta JSON (small: dither/hint/log/err).
 	MetaMax = 16 << 10 // 16 KiB
-	// MaxFrame bounds any single M4 message before allocation: kind(1) + the response's
-	// metaLen(4) + meta + raw image. Requests (source + secret values + limits) are far
-	// smaller than the raw response, so this one ceiling bounds both directions.
+	// MaxFrame bounds the worker→sup RESPONSE direction before allocation: kind(1) + metaLen(4)
+	// + meta + raw image. ReadFrame (the trusted supervisor reading the untrusted worker) enforces
+	// it, so a malicious worker cannot over-declare a giant length to OOM the key+DB supervisor
+	// (T4). Kept tight — it does NOT cover the request's source image (that is MaxRequestFrame).
 	MaxFrame = 1 + 4 + MetaMax + RawFrameSize
+	// MaxRequestImageBytes caps the source image the built-in __playlist source receives in a
+	// render request (Request.Input). Multi-MB source blobs (§4.3), aligned with the imgstore
+	// ingest ceiling (imgstore.MaxImagePixels is a pixel cap; this is the request-frame byte cap).
+	MaxRequestImageBytes = 12 << 20 // 12 MiB
+	// MaxRequestFrame bounds the sup→worker REQUEST direction: kind(1) + the request JSON envelope
+	// (source + secret values + ctx + limits, MetaMax slack) + the base64-encoded source image.
+	// SEPARATE from MaxFrame (K7): only the trusted supervisor produces this direction, so a larger
+	// ceiling here does NOT weaken the T4 response wall. base64 inflates the raw image by 4/3.
+	MaxRequestFrame = 1 + MetaMax + (MaxRequestImageBytes/3+1)*4
 )
 
 // WriteFrame writes one length-prefixed message: u32be(total) | kind | payload, where
-// total = 1 + len(payload). It rejects a message that would exceed MaxFrame.
+// total = 1 + len(payload). In Go this is the supervisor→worker REQUEST writer (driveWorker),
+// so the ceiling is MaxRequestFrame — the request may carry a multi-MB source image (K7). The
+// response direction is written by the TS worker (encodeFrame, MaxFrame) and read here by
+// ReadFrame (MaxFrame), which keeps the T4 wall to the untrusted worker.
 func WriteFrame(w io.Writer, kind byte, payload []byte) error {
 	total := 1 + len(payload)
-	if total > MaxFrame {
-		return fmt.Errorf("faasproto: frame len %d > max %d", total, MaxFrame)
+	if total > MaxRequestFrame {
+		return fmt.Errorf("faasproto: frame len %d > max %d", total, MaxRequestFrame)
 	}
 	buf := make([]byte, 4+total)
 	binary.BigEndian.PutUint32(buf[:4], uint32(total))

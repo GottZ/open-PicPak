@@ -24,6 +24,14 @@ type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
+// Pool is a Querier that can open a transaction — BindDevice needs it to run the playlist↔function
+// mutual-exclusion (delete the playlist binding + upsert the render binding) in ONE tx under an
+// advisory lock (§3/§5, A27 W3). *pgxpool.Pool satisfies it.
+type Pool interface {
+	Querier
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 // TriggerType is the function's trigger discriminator (matches the 0009 CHECK).
 type TriggerType string
 
@@ -61,12 +69,12 @@ type Summary struct {
 // CreateParams is a new function. WebhookTokenSHA is set only for webhook triggers
 // (the plaintext token is generated + shown once by the admin handler, D24.13); nil otherwise.
 type CreateParams struct {
-	Name           string
-	Source         string
-	TriggerType    TriggerType
-	TriggerConfig  json.RawMessage
-	SecretBindings []string
-	EgressAllow    []string
+	Name            string
+	Source          string
+	TriggerType     TriggerType
+	TriggerConfig   json.RawMessage
+	SecretBindings  []string
+	EgressAllow     []string
 	WebhookTokenSHA []byte
 }
 
