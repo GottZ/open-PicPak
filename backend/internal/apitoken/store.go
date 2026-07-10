@@ -166,6 +166,26 @@ func Get(ctx context.Context, q Querier, id int64) (Token, error) {
 	return scanToken(q.QueryRow(ctx, `SELECT `+tokenCols+` FROM api_tokens WHERE id = $1`, id))
 }
 
+// List returns every token row ordered by id, WITHOUT any secret material — secret_hash is never in
+// the projection (tokenCols), so a listing cannot structurally leak key material (design §4.5, the
+// listOperators pattern). The caller derives active/revoked/expired status from disabled_at/expires_at.
+func List(ctx context.Context, q Querier) ([]Token, error) {
+	rows, err := q.Query(ctx, `SELECT `+tokenCols+` FROM api_tokens ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Token{}
+	for rows.Next() {
+		t, err := scanTokenRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // Revoke soft-disables a token (disabled_at = now()); from the next request on it authenticates as
 // absent (SEC-M1). ErrNotFound if the id does not exist. Re-revoking simply refreshes the stamp.
 func Revoke(ctx context.Context, q Querier, id int64) error {

@@ -9,6 +9,7 @@
 //	admin list-operators                           # list keys (never the token/hash)
 //	admin disable-operator -id <n>                 # soft-revoke a key (SEC-M1)
 //	admin create-user -username <name> [-admin]    # create a human admin_users account (password prompt)
+//	admin create-api-token -label <name> ...       # mint a machine api_token, print the token ONCE
 package main
 
 import (
@@ -36,6 +37,8 @@ func main() {
 			os.Exit(runOperatorCLI(os.Args[1], os.Args[2:]))
 		case "create-user":
 			os.Exit(runUserCLI(os.Args[1], os.Args[2:]))
+		case "create-api-token":
+			os.Exit(runTokenCLI(os.Args[1], os.Args[2:]))
 		case "-secret-decrypt", "secret-decrypt":
 			os.Exit(runSecretDecrypt(os.Stdin, os.Stdout, os.Stderr, stdoutIsTTY()))
 		}
@@ -138,6 +141,12 @@ func runServer() {
 	// startFragmentPrune analogue for admin_sessions.
 	registerAuthRoutes(mux, pool)
 	startSessionPrune(ctx, pool)
+
+	// Machine api-token management surface (A28 W6, design §4.5): mint / list / soft-revoke of
+	// api_tokens, all IsAdmin-gated. HTTP minting for an already-authenticated admin; the CLI
+	// (create-api-token) bootstraps the first token out-of-band. Single wiring source (registerTokenRoutes)
+	// so this test-gated mount and main.go never drift. Registered before the SPA catch-all below.
+	registerTokenRoutes(mux, pool)
 
 	// Telemetry dashboard read surface (A22): the enriched fleet list (the 22→17 seam — adds
 	// running_ver/batt/health), the per-device latest+history, and the non-secret SPA config (Grafana/
