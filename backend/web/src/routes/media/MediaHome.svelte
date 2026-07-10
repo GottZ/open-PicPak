@@ -12,6 +12,7 @@
   import { Paged } from '../../lib/media/paged.svelte'
   import { VisibilityPool } from '../../lib/media/visibilitypool.svelte'
   import Uploader from '../../lib/media/Uploader.svelte'
+  import PlaylistEditor from './PlaylistEditor.svelte'
   import type { Image, ImagesResponse } from '../../lib/media/types'
   import { session } from '../../lib/auth.svelte'
   import { mutationAffordance } from '../../lib/readonly'
@@ -41,6 +42,11 @@
   // unmounts its <img> through the pool. Only the visibility window keeps a live
   // node; the pool's hard cap recycles the oldest so even an observer misfire can
   // never mount all 500.
+  // W7 (§7): the /media area gains a second surface — the playlist editor — beside the image library.
+  // A plain in-shell tab (no route split) keeps both under the one /media area the design defines, and
+  // lets the editor's dirtyGuard treat a tab switch as an in-app navigation candidate.
+  let activeTab = $state<'library' | 'playlists'>('library')
+
   const pool = new VisibilityPool()
   let observer: IntersectionObserver | null = null
 
@@ -116,13 +122,38 @@
   <header>
     <h1>{m['media.title']()}</h1>
     <p class="subtitle">{m['media.subtitle']()}</p>
+    <div class="tabs" role="tablist" aria-label={m['media.title']()}>
+      <button
+        type="button"
+        role="tab"
+        class="tab"
+        class:active={activeTab === 'library'}
+        aria-selected={activeTab === 'library'}
+        onclick={() => (activeTab = 'library')}
+      >
+        {m['media.tab.library']()}
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class="tab"
+        class:active={activeTab === 'playlists'}
+        aria-selected={activeTab === 'playlists'}
+        onclick={() => (activeTab = 'playlists')}
+      >
+        {m['media.tab.playlists']()}
+      </button>
+    </div>
   </header>
 
-  <Uploader onUploaded={() => library.reload()} />
+  {#if activeTab === 'playlists'}
+    <PlaylistEditor />
+  {:else}
+    <Uploader onUploaded={() => library.reload()} />
 
-  <section class="library" aria-label={m['media.library.heading']()}>
-    <h2>{m['media.library.heading']()}</h2>
-    <StateView resource={library} emptyText={m['media.library.empty']()}>
+    <section class="library" aria-label={m['media.library.heading']()}>
+      <h2>{m['media.library.heading']()}</h2>
+      <StateView resource={library} emptyText={m['media.library.empty']()}>
       {#snippet ready(images)}
         <ul class="grid">
           {#each images as image (image.id)}
@@ -176,9 +207,10 @@
             {library.loadingMore ? m['media.library.loading_more']() : m['media.library.load_more']()}
           </button>
         {/if}
-      {/snippet}
-    </StateView>
-  </section>
+        {/snippet}
+      </StateView>
+    </section>
+  {/if}
 </section>
 
 <style>
@@ -201,6 +233,29 @@
     margin: 0.35rem 0 0;
     color: var(--fg-muted);
     font-size: 0.875rem;
+  }
+  .tabs {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: 0.6rem;
+  }
+  .tab {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    color: var(--fg-muted);
+    padding: 0.35rem 0.9rem;
+    cursor: pointer;
+    font-size: 0.875rem;
+  }
+  .tab:hover {
+    color: var(--fg);
+  }
+  .tab.active {
+    color: var(--fg);
+    border-color: var(--accent);
+    background: rgba(122, 162, 247, 0.1);
   }
   .library {
     display: flex;
