@@ -193,6 +193,14 @@ func runServer() {
 	// The source is foreign code at rest — never eval'd here, only the worker evaluates it (D24.7).
 	registerFaasRoutes(mux, pool)
 
+	// Template store (A30 W2): the 5-route template CRUD (prefab + operator-authored blueprints, §4.2).
+	// Reads auth-gated (any valid key browses the catalog / loads a template into the editor); mutations
+	// requireAdmin — the same gating as the function store. A builtin row is immutable (409); its source
+	// of truth is the embedded catalog upserted by SeedBuiltins at startup. The /apply dispatch (which
+	// enqueues a device script / mints a runnable function, RCE-equivalent) is a later wave. Single wiring
+	// source (registerTemplateRoutes); registered before the SPA catch-all.
+	registerTemplateRoutes(mux, pool)
+
 	// FaaS editor support (A25 W1): the binding READS A24 left to the editor wave — forward
 	// (which function a device renders) + reverse (a function's blast radius, D25.9) + the unbind.
 	// Reads auth-gated; the unbind + test-run requireAdmin. test-run forwards to the supervisor's

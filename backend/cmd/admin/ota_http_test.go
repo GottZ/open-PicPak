@@ -44,6 +44,9 @@ func dbPool(t *testing.T) *pgxpool.Pool {
 		`DELETE FROM api_tokens`, // before operator_keys: created_by -> operator_keys is RESTRICT
 		`DELETE FROM operator_keys`,
 		`DELETE FROM faas_functions`, // FK CASCADE drops device_render_binding + faas_frame_lastgood
+		// after faas_functions (its template_id -> templates is ON DELETE SET NULL; the referencing rows
+		// are already gone, so the CASCADE has nothing to reach). A30 template CRUD isolation.
+		`TRUNCATE templates RESTART IDENTITY CASCADE`,
 		`DELETE FROM devices`,
 		`DELETE FROM firmware_versions`,
 	} {
