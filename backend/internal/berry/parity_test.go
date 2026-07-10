@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -28,11 +29,11 @@ var c2SurfaceFiles = []string{
 // reRegfunc matches be_regfunc(vm, "<name>", …) and captures the Berry-visible name.
 var reRegfunc = regexp.MustCompile(`be_regfunc\s*\(\s*vm\s*,\s*"([^"]+)"`)
 
-// firmwareSurface reads the C2 surface files and returns the set of registered Berry names.
-func firmwareSurface(t *testing.T) map[string]bool {
+// regfuncNames reads one firmware surface file and returns the set of be_regfunc-registered Berry names.
+func regfuncNames(t *testing.T, files ...string) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
-	for _, f := range c2SurfaceFiles {
+	for _, f := range files {
 		src, err := os.ReadFile(filepath.Clean(f))
 		if err != nil {
 			t.Fatalf("read firmware surface %s: %v (run from the package dir; the relative path "+
@@ -43,6 +44,12 @@ func firmwareSurface(t *testing.T) map[string]bool {
 		}
 	}
 	return out
+}
+
+// firmwareSurface reads the C2 surface files and returns the set of registered Berry names.
+func firmwareSurface(t *testing.T) map[string]bool {
+	t.Helper()
+	return regfuncNames(t, c2SurfaceFiles...)
 }
 
 // setDiff returns the names present in a but absent from b. The load-bearing helper the bidirectional
@@ -75,6 +82,48 @@ func TestManifestParity(t *testing.T) {
 	if extra := setDiff(firmware, manifest); len(extra) > 0 {
 		t.Errorf("be_regfunc names MISSING from the manifest (a capability the editor would never "+
 			"offer — update manifest.json): %v", extra)
+	}
+}
+
+// fbSurfaceFile is the render-phase drawing surface (fb.c). Its be_regfunc names are the "forbidden"
+// render class in the manifest — NOT in the C2 VM (cmd.c registers no fb surface), so a berry_snippet
+// that calls one faults on-device while the cursor still advances. A30-W7 closes the drift the parity
+// surface above deliberately excludes: the manifest declared only 7 of fb.c's 10 render names
+// (text16/qr/dump were missing), so the editor lint marked them "unknown" instead of "forbidden with a
+// phase hint". This binds the manifest's render-phase forbidden set to fb.c bidirectionally.
+const fbSurfaceFile = "../../../firmware/main/fb.c"
+
+// renderPhaseForbiddenNames is the manifest's forbidden render-phase surface: class == forbidden AND a
+// Render-phase doc (the policy-phase net names — wifi_*/http_get from netberry.c — carry a Policy-phase
+// doc and are out of this test's scope). Mirrors catalog.ts phaseOf's Render-phase discriminator.
+func renderPhaseForbiddenNames() map[string]bool {
+	out := map[string]bool{}
+	for _, c := range Get().Capabilities {
+		if c.Class == ClassForbidden && strings.HasPrefix(c.Doc, "Render-phase") {
+			out[c.Name] = true
+		}
+	}
+	return out
+}
+
+// TestForbiddenFbParity binds the manifest's render-phase forbidden names to fb.c's be_regfunc sites in
+// BOTH directions — the A30-W7 gate. A render name registered in fb.c but absent from the manifest (the
+// text16/qr/dump gap this wave closes) → red; a manifest render-phase name with no fb.c registration →
+// red. Red-proof: delete the "text16" line from manifest.json and re-run → this test fails in the
+// firmware\manifest direction.
+func TestForbiddenFbParity(t *testing.T) {
+	manifest := renderPhaseForbiddenNames()
+	fb := regfuncNames(t, fbSurfaceFile)
+
+	if len(fb) == 0 {
+		t.Fatal("no be_regfunc sites found in fb.c — the regex or the path drifted")
+	}
+	if missing := setDiff(manifest, fb); len(missing) > 0 {
+		t.Errorf("manifest render-phase names with NO be_regfunc in fb.c (a phantom forbidden entry): %v", missing)
+	}
+	if extra := setDiff(fb, manifest); len(extra) > 0 {
+		t.Errorf("fb.c render names MISSING from the manifest forbidden class (the editor would mark them "+
+			"'unknown' instead of 'forbidden with a phase hint' — add them to manifest.json): %v", extra)
 	}
 }
 

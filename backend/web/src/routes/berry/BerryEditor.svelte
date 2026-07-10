@@ -38,6 +38,7 @@
   } from '../../lib/berry/enqueue'
   import type { Device, DevicesResponse } from '../../lib/api/types'
   import { loadDraft, saveDraft } from '../../lib/draft'
+  import TemplatePicker from '../../lib/templates/TemplatePicker.svelte'
 
   // Berry C2 command editor (Design 23, W2) — author + lint + autocomplete ONLY. No enqueue ships here
   // (W3) and no feedback (W4): this is the author-safe surface, useful even to a read-only operator as a
@@ -211,6 +212,12 @@
               </ul>
             {/if}
           </div>
+
+          <TemplatePicker
+            kind="berry_snippet"
+            devices={deviceList}
+            onLoad={(src) => handle?.setDoc(src)}
+          />
 
           <div class="enqueue">
             <div class="target" role="radiogroup" aria-label="enqueue target">

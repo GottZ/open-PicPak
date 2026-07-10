@@ -25,6 +25,8 @@
   } from '../../lib/faas/config'
   import { TRIGGER_TYPES, newFunctionError, blastRadiusLabel, type NewFunctionDraft } from '../../lib/faas/functions'
   import FramePreview from '../../lib/media/FramePreview.svelte'
+  import TemplatePicker from '../../lib/templates/TemplatePicker.svelte'
+  import { m } from '../../paraglide/messages.js'
   import { parseTestFrame, buildTestRunBody, type TestRunResult } from '../../lib/faas/testrun'
   import type {
     TriggerType,
@@ -178,6 +180,20 @@
       egress: JSON.stringify([...fn.egress_allow]),
       secrets: JSON.stringify([...fn.secret_bindings].sort()),
     }
+  }
+
+  // Load a render_fn template's source into the active editor (A30-W7). setDoc dispatches a change, so the
+  // onChange listener updates `source` + saves the draft. A load needs a selected function (the editor is
+  // only mounted in the detail column); with none selected, hint instead of silently no-op'ing. Apply is
+  // independent — it mints a NEW function and does not require a selection.
+  function onLoadTemplate(src: string): void {
+    if (selectedId === null || !handle) {
+      notify.info(m['templates.select_function_first']())
+      return
+    }
+    source = src
+    handle.setDoc(src)
+    saveDraft(`faas:${selectedId}`, src)
   }
 
   async function reloadAll(keepSelection: boolean): Promise<void> {
@@ -496,6 +512,8 @@
               {/if}
             </div>
           </div>
+
+          <TemplatePicker kind="render_fn" devices={deviceList} onLoad={onLoadTemplate} />
         </div>
 
         <div class="detail-col">

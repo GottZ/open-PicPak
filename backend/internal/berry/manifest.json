@@ -56,7 +56,10 @@
     {"name": "disc", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
     {"name": "circle", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
     {"name": "triangle", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
-    {"name": "text", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."}
+    {"name": "text", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "text16", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "qr", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."},
+    {"name": "dump", "params": [], "ret": "", "class": "forbidden", "doc": "Render-phase (fb, framebuffer drawing) capability — NOT registered in the C2 executor; calling it faults at runtime and the cursor still advances with no error surfaced."}
   ],
   "builtins": [
     "if", "elif", "else", "end", "for", "while", "do", "def", "return", "break", "continue",

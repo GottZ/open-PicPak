@@ -18,6 +18,8 @@ import type { Manifest } from './catalog'
 
 export interface BerryEditorHandle {
   getDoc(): string
+  /** Replace the whole document without re-mounting (a template load, A30-W7). */
+  setDoc(doc: string): void
   destroy(): void
 }
 
@@ -122,6 +124,9 @@ export function createBerryEditor(opts: {
   const view = new EditorView({ state, parent: opts.parent })
   return {
     getDoc: () => view.state.doc.toString(),
+    setDoc: (doc: string) => {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: doc } })
+    },
     destroy: () => view.destroy(),
   }
 }
