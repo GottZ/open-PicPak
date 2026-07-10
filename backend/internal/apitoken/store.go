@@ -33,6 +33,13 @@ const (
 
 var enc = base64.RawURLEncoding
 
+// tokenIDEncLen is the fixed character length of an encoded token_id. Both the token_id and the
+// secret are base64url, whose alphabet INCLUDES '_', so the id/secret separator cannot be found by
+// splitting on the first '_' (a token_id or secret containing '_' would mis-split, and ~21% of
+// token_ids do). Create always writes the separator at exactly this offset, so ParseToken splits at
+// the fixed length instead.
+var tokenIDEncLen = enc.EncodedLen(tokenIDLen)
+
 var (
 	// ErrNotFound is returned when a token id does not exist (Get/Revoke).
 	ErrNotFound = errors.New("apitoken: not found")
@@ -103,15 +110,22 @@ func Create(ctx context.Context, q Querier, label string, scopes []string, expir
 }
 
 // ParseToken splits a ppk_<token_id>_<secret> bearer into its parts. It does no DB work and no
-// crypto — it only validates the structural shape. A bearer without the prefix, or missing either
-// part, is malformed (ok=false).
+// crypto — it only validates the structural shape. A bearer without the prefix, too short, or
+// missing the separator at the fixed token_id offset is malformed (ok=false).
+//
+// The split is at the FIXED token_id length, not on the first '_': the token_id and the secret are
+// both base64url and may contain '_', so a first-'_' split mis-parses ~21% of tokens (the token_id
+// would be truncated and the DB lookup miss). Create always writes the separator at tokenIDEncLen.
 func ParseToken(raw string) (tokenID, secret string, ok bool) {
 	rest, found := strings.CutPrefix(raw, TokenPrefix)
 	if !found {
 		return "", "", false
 	}
-	tokenID, secret, found = strings.Cut(rest, "_")
-	if !found || tokenID == "" || secret == "" {
+	if len(rest) < tokenIDEncLen+2 || rest[tokenIDEncLen] != '_' {
+		return "", "", false
+	}
+	tokenID, secret = rest[:tokenIDEncLen], rest[tokenIDEncLen+1:]
+	if tokenID == "" || secret == "" {
 		return "", "", false
 	}
 	return tokenID, secret, true

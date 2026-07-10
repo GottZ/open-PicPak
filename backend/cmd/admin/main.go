@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -173,7 +174,28 @@ func runServer() {
 	handler := adminhttp.WithRequestID(mux)
 	log.Printf("admin listening on %s", addr)
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	// Tag every request with its listener origin (non-spoofable — it comes from the bind address, not
+	// a header). W2 only sets the tag; W7 reads it to gate the operator_key bearer fallback to the
+	// loopback listener before the SSO removal makes admin public (design §4.1 / §5 B8).
+	srv.BaseContext = adminhttp.ListenerBaseContext(ctx, originForAddr(addr))
 	log.Fatal(srv.ListenAndServe())
+}
+
+// originForAddr classifies a bind address as loopback or public. A loopback IP (or "localhost")
+// binds the SSH-tunnel-only zone; anything else (incl. a wildcard bind) is reachable off-host and is
+// treated as public. This is the tag only — the trust policy built on it is W7.
+func originForAddr(addr string) adminhttp.ListenerOrigin {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "localhost" {
+		return adminhttp.OriginLoopback
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return adminhttp.OriginLoopback
+	}
+	return adminhttp.OriginPublic
 }
 
 func whoami(w http.ResponseWriter, r *http.Request) {

@@ -67,6 +67,12 @@ func GetByUsername(ctx context.Context, q Querier, username string) (User, error
 	return scanUser(q.QueryRow(ctx, `SELECT `+userCols+` FROM admin_users WHERE username = $1`, username))
 }
 
+// GetByID returns a user by id or ErrNotFound (no password hash). The session carrier uses it to
+// resolve a session's user_id to the account identity + admin flag (design §4.1).
+func GetByID(ctx context.Context, q Querier, id int64) (User, error) {
+	return scanUser(q.QueryRow(ctx, `SELECT `+userCols+` FROM admin_users WHERE id = $1`, id))
+}
+
 // Verify authenticates username+password. It returns (user, true) ONLY for an existing,
 // non-disabled account whose password matches. A wrong password, an unknown username, OR a
 // disabled account all return (_, false, nil). An unknown username still runs a dummy argon2id

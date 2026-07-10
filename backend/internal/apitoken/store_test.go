@@ -96,8 +96,15 @@ func TestResolveConstantTimeCompare(t *testing.T) {
 		t.Fatalf("resolve correct: ok=%v id=%d err=%v", ok, got.ID, err)
 	}
 
-	// Wrong secret under the same (valid) token_id must NOT resolve.
-	forged := TokenPrefix + tokenID + "_" + secret[:len(secret)-1] + "A"
+	// Wrong secret under the same (valid) token_id must NOT resolve. Flip the last char to one
+	// guaranteed different from the original (a fixed 'A' collides ~6-16% of the time, since the
+	// last base64url char of a 32-byte value is restricted — a real forged token would then equal
+	// the real one and spuriously resolve).
+	repl := byte('A')
+	if secret[len(secret)-1] == 'A' {
+		repl = 'B'
+	}
+	forged := TokenPrefix + tokenID + "_" + secret[:len(secret)-1] + string(repl)
 	if _, ok, err := Resolve(ctx, pool, forged); ok || err != nil {
 		t.Fatalf("resolve forged secret: want (false,nil), got (%v,%v)", ok, err)
 	}
@@ -140,5 +147,42 @@ func TestCreateRejectsUnknownScope(t *testing.T) {
 	ctx := context.Background()
 	if _, _, err := Create(ctx, pool, "bad", []string{"fleet:admin"}, nil, nil); err == nil {
 		t.Fatal("Create accepted an unknown scope")
+	}
+}
+
+// TestParseTokenUnderscoreInParts is the deterministic regression for the id/secret separator bug:
+// both token_id and secret are base64url and may contain '_', so ParseToken must split at the fixed
+// token_id length, not the first '_'. Red state (strings.Cut on first '_'): the token_id below is
+// truncated to "aa" and the DB lookup misses → a valid token 401s ~21% of the time.
+func TestParseTokenUnderscoreInParts(t *testing.T) {
+	id := "aa_defghijklmno1"                             // 16 chars, contains '_'
+	secret := "s_cret_with_many_underscores_1234567890abcd" // 43 chars, contains '_'
+	if len(id) != 16 || len(secret) != 43 {
+		t.Fatalf("test fixture lengths wrong: id=%d secret=%d", len(id), len(secret))
+	}
+	raw := TokenPrefix + id + "_" + secret
+	gotID, gotSecret, ok := ParseToken(raw)
+	if !ok || gotID != id || gotSecret != secret {
+		t.Fatalf("ParseToken split wrong: ok=%v id=%q secret=%q (want id=%q secret=%q)", ok, gotID, gotSecret, id, secret)
+	}
+}
+
+// TestParseTokenRoundTripsCreate: every freshly minted token parses back to a non-empty id+secret,
+// regardless of which base64url chars the RNG produced (a probabilistic guard on the fix).
+func TestParseTokenRoundTrips(t *testing.T) {
+	for i := 0; i < 500; i++ {
+		id, err := randString(tokenIDLen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secret, err := randString(secretLen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw := TokenPrefix + id + "_" + secret
+		gotID, gotSecret, ok := ParseToken(raw)
+		if !ok || gotID != id || gotSecret != secret {
+			t.Fatalf("round-trip %d failed: raw=%q -> ok=%v id=%q secret=%q", i, raw, ok, gotID, gotSecret)
+		}
 	}
 }
