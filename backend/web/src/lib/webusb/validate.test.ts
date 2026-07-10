@@ -41,12 +41,13 @@ describe('validateSerial (D26.11 / F9 charset + on-device cap)', () => {
 
 describe('validateSsid / validatePassword', () => {
   it('rejects a spaced SSID (console tokenization) and control chars', () => {
-    expect(validateSsid('my net')).toMatch(/space/)
-    expect(validateSsid('net\r')).toMatch(/control/)
+    // A34.2: validation messages resolve through the catalog; node → baseLocale (de).
+    expect(validateSsid('my net')).toMatch(/Leerzeichen/)
+    expect(validateSsid('net\r')).toMatch(/Steuerzeichen/)
     expect(validateSsid('ok-ssid')).toBeNull()
   })
   it('rejects a password with CR/LF but allows spaces and empty', () => {
-    expect(validatePassword('pass\nword')).toMatch(/control/)
+    expect(validatePassword('pass\nword')).toMatch(/Steuerzeichen/)
     expect(validatePassword('a spaced pass')).toBeNull()
     expect(validatePassword('')).toBeNull() // open network
   })
@@ -55,9 +56,9 @@ describe('validateSsid / validatePassword', () => {
 describe('validateUrl (https-only firmware gate)', () => {
   it('requires https and rejects control chars', () => {
     expect(validateUrl('http://x/y', 'C2 URL')).toMatch(/https/)
-    expect(validateUrl('https://x/\ry', 'C2 URL')).toMatch(/control/)
+    expect(validateUrl('https://x/\ry', 'C2 URL')).toMatch(/Steuerzeichen/)
     expect(validateUrl('https://x/y', 'C2 URL')).toBeNull()
-    expect(validateUrl('', 'C2 URL')).toMatch(/required/)
+    expect(validateUrl('', 'C2 URL')).toMatch(/erforderlich/)
   })
 })
 
@@ -66,7 +67,7 @@ describe('validateSeconds (optional numeric)', () => {
     expect(validateSeconds('', 'C2 period')).toBeNull()
     expect(validateSeconds(undefined, 'C2 period')).toBeNull()
     expect(validateSeconds('1800', 'C2 period')).toBeNull()
-    expect(validateSeconds('30s', 'C2 period')).toMatch(/whole number/)
+    expect(validateSeconds('30s', 'C2 period')).toMatch(/ganze Sekundenzahl/)
   })
 })
 

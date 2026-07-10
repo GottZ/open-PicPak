@@ -3,11 +3,12 @@
   // (the active page's EventsClient mirrors its status there) so an operator
   // always knows when live views are stale because the stream dropped.
   import { conn, connDisplay } from './conn.svelte'
+  import { m } from '../paraglide/messages.js'
 
   const d = $derived(connDisplay(conn.status))
 </script>
 
-<span class="conn conn-{d.tone}" title="live event stream">
+<span class="conn conn-{d.tone}" title={m['conn.title']()}>
   <span class="dot" aria-hidden="true"></span>{d.label}
 </span>
 

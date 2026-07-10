@@ -1,6 +1,8 @@
 <script lang="ts">
   import { route } from '../router'
   import { AREAS } from './index'
+  import { m } from '../paraglide/messages.js'
+  import { navLabel, areaShips } from '../lib/i18n'
 
   // Generic slot for the not-yet-built areas (design 19 §4.4): nav + routing are
   // real, the target UI ships in a later design doc. sv-router can't pass props
@@ -10,14 +12,14 @@
 
 <section class="area">
   <header>
-    <h1>{area?.title ?? 'Area'}</h1>
-    <span class="pending">pending</span>
+    <h1>{area ? navLabel(area.path) : ''}</h1>
+    <span class="pending">{m['area.pending']()}</span>
   </header>
   <p class="description">
-    This area is reserved in the shell. Its page is delivered by a later design doc.
+    {m['area.reserved']()}
   </p>
   {#if area}
-    <p class="ships">{area.ships}</p>
+    <p class="ships">{areaShips(area.path)}</p>
   {/if}
 </section>
 

@@ -4,6 +4,8 @@
 // could append an NVSSET), and a space/quote can split or corrupt a value. Every field is validated here,
 // before transmit; provision.ts calls this first and aborts on any error.
 
+import { m } from '../../paraglide/messages.js'
+
 /** CON_LINE_MAX (console.c:23) — the full built command line must fit; the raw dev_sn NVS read is raw[160]. */
 export const CON_LINE_MAX = 160
 
@@ -33,46 +35,46 @@ export type FieldErrors = Partial<Record<keyof ProvisionFields, string>>
 
 /** Serial: charset + the on-device 31-char cap. A control char / space / quote / 40-char value is rejected. */
 export function validateSerial(serial: string): string | null {
-  if (serial === '') return 'serial is required'
+  if (serial === '') return m['onboard.validate.serial_required']()
   if (!SERIAL_RE.test(serial)) {
-    return 'serial must match ^[A-Za-z0-9_-]{1,31}$ (no spaces/quotes; the on-device cap is 31 chars)'
+    return m['onboard.validate.serial_charset']()
   }
   return null
 }
 
 /** SSID: non-empty, no control char, no space (the console tokenizes SETWIFI on spaces — SSID is token 1). */
 export function validateSsid(ssid: string): string | null {
-  if (ssid === '') return 'Wi-Fi SSID is required'
-  if (CONTROL_RE.test(ssid)) return 'SSID must not contain control characters'
+  if (ssid === '') return m['onboard.validate.ssid_required']()
+  if (CONTROL_RE.test(ssid)) return m['onboard.validate.ssid_control']()
   // TODO(spaced-ssid): a length-delimited SETWIFI form would onboard spaced SSIDs (Design 26 G31). For now
   // the console line protocol tokenizes on spaces, so a spaced SSID is not onboardable via this guided flow.
-  if (/\s/.test(ssid)) return 'SSID must not contain spaces (console line-protocol limitation)'
-  if (ssid.length > SSID_MAX) return `SSID must be ≤ ${SSID_MAX} characters`
+  if (/\s/.test(ssid)) return m['onboard.validate.ssid_spaces']()
+  if (ssid.length > SSID_MAX) return m['onboard.validate.ssid_length']({ max: SSID_MAX })
   return null
 }
 
 /** Password: control-char rejected (CR/LF injection), length-capped. May be empty (open network). Spaces OK
  *  (rest-of-line). */
 export function validatePassword(password: string): string | null {
-  if (CONTROL_RE.test(password)) return 'Wi-Fi password must not contain control characters'
-  if (password.length > PASS_MAX) return `Wi-Fi password must be ≤ ${PASS_MAX} characters`
+  if (CONTROL_RE.test(password)) return m['onboard.validate.password_control']()
+  if (password.length > PASS_MAX) return m['onboard.validate.password_length']({ max: PASS_MAX })
   return null
 }
 
 /** A device URL (frame or C2): https-only (the SETURL/C2 URL firmware gate, console.c:435), control-char
  *  rejected, length-capped. */
 export function validateUrl(url: string, label: string): string | null {
-  if (url === '') return `${label} is required`
-  if (CONTROL_RE.test(url)) return `${label} must not contain control characters`
-  if (!/^https:\/\//.test(url)) return `${label} must be an https:// URL (firmware requires TLS)`
-  if (url.length > URL_MAX) return `${label} must be ≤ ${URL_MAX} characters`
+  if (url === '') return m['onboard.validate.url_required']({ label })
+  if (CONTROL_RE.test(url)) return m['onboard.validate.url_control']({ label })
+  if (!/^https:\/\//.test(url)) return m['onboard.validate.url_scheme']({ label })
+  if (url.length > URL_MAX) return m['onboard.validate.url_length']({ label, max: URL_MAX })
   return null
 }
 
 /** An optional non-negative integer seconds field (C2 PERIOD / SETWAKE). Blank = omit the command. */
 export function validateSeconds(value: string | undefined, label: string): string | null {
   if (value === undefined || value.trim() === '') return null
-  if (!/^\d+$/.test(value.trim())) return `${label} must be a whole number of seconds`
+  if (!/^\d+$/.test(value.trim())) return m['onboard.validate.seconds']({ label })
   return null
 }
 
@@ -85,13 +87,13 @@ export function validateProvisionFields(f: ProvisionFields): FieldErrors {
   if (ssid) errors.ssid = ssid
   const password = validatePassword(f.password)
   if (password) errors.password = password
-  const frameUrl = validateUrl(f.frameUrl, 'Frame URL')
+  const frameUrl = validateUrl(f.frameUrl, m['onboard.field.frame_url']())
   if (frameUrl) errors.frameUrl = frameUrl
-  const c2Url = validateUrl(f.c2Url, 'C2 URL')
+  const c2Url = validateUrl(f.c2Url, m['onboard.field.c2_url']())
   if (c2Url) errors.c2Url = c2Url
-  const period = validateSeconds(f.c2PeriodSeconds, 'C2 period')
+  const period = validateSeconds(f.c2PeriodSeconds, m['onboard.field.c2_period']())
   if (period) errors.c2PeriodSeconds = period
-  const wake = validateSeconds(f.wakeSeconds, 'Wake interval')
+  const wake = validateSeconds(f.wakeSeconds, m['onboard.field.wake']())
   if (wake) errors.wakeSeconds = wake
   return errors
 }

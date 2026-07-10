@@ -227,7 +227,7 @@
         method: 'POST',
         body: JSON.stringify({ name: newName.trim(), source: TEMPLATE, trigger_type: newTrigger }),
       })
-      notify.success(`created “${res.name}” (disabled — author it, then enable)`)
+      notify.success(m['faas.notify.created']({ name: res.name }))
       if (res.webhook_token) mintedToken = { name: res.name, token: res.webhook_token }
       newName = ''
       newTrigger = 'render'
@@ -258,8 +258,8 @@
       const bound = detail.bound_serials.length
       notify.success(
         bound > 0
-          ? `saved “${fn.name}” (version bumped) — next frame changes on ${blastRadiusLabel(bound)}`
-          : `saved “${fn.name}” (version bumped)`,
+          ? m['faas.notify.saved_bound']({ name: fn.name, devices: blastRadiusLabel(bound) })
+          : m['faas.notify.saved']({ name: fn.name }),
       )
       await reloadAll(true)
     } catch (e) {
@@ -275,7 +275,7 @@
     const fn = detail.function
     try {
       await apiFetch(`/api/functions/${fn.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !fn.enabled }) })
-      notify.success(`${fn.name} ${fn.enabled ? 'disabled' : 'enabled'}`)
+      notify.success(fn.enabled ? m['faas.notify.toggled_off']({ name: fn.name }) : m['faas.notify.toggled_on']({ name: fn.name }))
       await reloadAll(true)
     } catch (e) {
       notify.error(toApiError(e))
@@ -294,7 +294,7 @@
         body: JSON.stringify({ rotate_token: true }),
       })
       mintedToken = { name: fn.name, token: res.webhook_token }
-      notify.success(`rotated webhook token for ${fn.name}`)
+      notify.success(m['faas.notify.rotated']({ name: fn.name }))
     } catch (e) {
       notify.error(toApiError(e))
     } finally {
@@ -318,7 +318,7 @@
     try {
       await apiFetch(`/api/functions/${fn.id}`, { method: 'DELETE' })
       clearDraft(`faas:${fn.id}`)
-      notify.success(`deleted “${fn.name}”`)
+      notify.success(m['faas.notify.deleted']({ name: fn.name }))
       selectedId = null
       detail = null
       baseline = null
@@ -344,7 +344,7 @@
         method: 'PUT',
         body: JSON.stringify({ function_id: fn.id }),
       })
-      notify.success(`bound ${bindTarget} → ${fn.name} (renders on its next poll)`)
+      notify.success(m['faas.notify.bound']({ serial: bindTarget, name: fn.name }))
       bindTarget = null
       await reloadAll(true)
     } catch (e) {
@@ -359,7 +359,7 @@
     mutating = true
     try {
       await apiFetch(`/api/devices/${serial}/render`, { method: 'DELETE' })
-      notify.success(`unbound ${serial} (falls back to no function)`)
+      notify.success(m['faas.notify.unbound']({ serial }))
       await reloadAll(true)
     } catch (e) {
       notify.error(toApiError(e))
@@ -400,14 +400,14 @@
   async function runTest(): Promise<void> {
     if (!detail || !session.is_admin || testing) return
     if (testSerial.trim() === '') {
-      testError = 'a device serial is required for the test context'
+      testError = m['faas.test_serial_required']()
       return
     }
     let payload: unknown
     try {
       payload = payloadValue()
     } catch {
-      testError = 'payload must be valid JSON'
+      testError = m['faas.test_payload_invalid']()
       return
     }
     testing = true
@@ -435,7 +435,7 @@
       })
       testResult = parseTestFrame(buf)
       if (!testResult.meta.ok && testResult.meta.err) {
-        notify.warn(`test-run: ${testResult.meta.err.kind} — see the log below`)
+        notify.warn(m['faas.notify.testrun_err']({ kind: testResult.meta.err.kind }))
       }
     } catch (e) {
       testError = toApiError(e).message
@@ -448,32 +448,29 @@
 
 <section class="functions">
   <header>
-    <h1>Functions</h1>
+    <h1>{m['faas.title']()}</h1>
     <p class="muted">
-      Author render / schedule / webhook functions for the FaaS engine. Edit the source, configure the
-      trigger / egress / secret bindings / dither, and enable when ready. Test-run + frame preview arrive
-      in the next wave — this surface authors, it does not execute.
+      {m['faas.intro']()}
     </p>
   </header>
 
   {#if mintedToken}
     <div class="token-banner" role="alert">
       <p>
-        Webhook token for <strong>{mintedToken.name}</strong> — shown once, not recoverable. Hand it to the
-        caller; rotate to replace.
+        {m['faas.token_banner']({ name: mintedToken.name })}
       </p>
       <code class="token">{mintedToken.token}</code>
-      <button type="button" class="dismiss" onclick={() => (mintedToken = null)}>dismiss</button>
+      <button type="button" class="dismiss" onclick={() => (mintedToken = null)}>{m['faas.dismiss']()}</button>
     </div>
   {/if}
 
-  <StateView resource={functions} isEmpty={() => false} loadingText="loading functions…">
+  <StateView resource={functions} isEmpty={() => false} loadingText={m['faas.loading_functions']()}>
     {#snippet ready(data: FunctionsResponse)}
       <div class="grid">
         <div class="list-col">
-          <h2>functions</h2>
+          <h2>{m['faas.list_heading']()}</h2>
           {#if data.functions.length === 0}
-            <p class="muted empty">No functions yet — create one below.</p>
+            <p class="muted empty">{m['faas.empty']()}</p>
           {:else}
             <ul class="fn-list" role="listbox">
               {#each data.functions as fn (fn.id)}
@@ -486,7 +483,7 @@
                     aria-selected={fn.id === selectedId}
                     onclick={() => loadDetail(fn.id)}
                   >
-                    <span class="dot" class:on={fn.enabled} title={fn.enabled ? 'enabled' : 'disabled'}></span>
+                    <span class="dot" class:on={fn.enabled} title={fn.enabled ? m['faas.status_enabled']() : m['faas.status_disabled']()}></span>
                     <span class="fn-name">{fn.name}</span>
                     <span class="fn-trigger">{fn.trigger_type}</span>
                     <span class="fn-ver">v{fn.version}</span>
@@ -497,20 +494,20 @@
           {/if}
 
           <div class="create">
-            <h3>create function</h3>
+            <h3>{m['faas.create_heading']()}</h3>
             <label>
-              name
-              <input type="text" bind:value={newName} placeholder="lowercase-slug" autocomplete="off" spellcheck="false" />
+              {m['faas.name']()}
+              <input type="text" bind:value={newName} placeholder={m['faas.name_ph']()} autocomplete="off" spellcheck="false" />
             </label>
             <label>
-              trigger
+              {m['faas.trigger']()}
               <select bind:value={newTrigger}>
                 {#each TRIGGER_TYPES as tt (tt)}
                   <option value={tt}>{tt}</option>
                 {/each}
               </select>
             </label>
-            <p class="muted small">Created with a starter template — author the source in the editor.</p>
+            <p class="muted small">{m['faas.create_hint']()}</p>
             {#if newName !== '' && createError !== null}
               <p class="inline-err" role="status">{createError}</p>
             {/if}
@@ -523,10 +520,10 @@
                 aria-disabled={affordance['aria-disabled'] || createError !== null}
                 onclick={doCreate}
               >
-                {creating ? 'creating…' : 'Create'}
+                {creating ? m['faas.creating']() : m['faas.create']()}
               </button>
               {#if newTrigger === 'webhook'}
-                <span class="muted hint">a token is minted + shown once</span>
+                <span class="muted hint">{m['faas.webhook_mint_hint']()}</span>
               {/if}
             </div>
           </div>
@@ -536,12 +533,12 @@
 
         <div class="detail-col">
           {#if detailStatus === 'loading'}
-            <p class="muted" aria-busy="true">loading function…</p>
+            <p class="muted" aria-busy="true">{m['faas.loading_detail']()}</p>
           {:else if detailStatus === 'error'}
             <div class="detail-error" role="alert">
               <p>{detailError}</p>
               {#if selectedId !== null}
-                <button type="button" onclick={() => selectedId !== null && loadDetail(selectedId)}>retry</button>
+                <button type="button" onclick={() => selectedId !== null && loadDetail(selectedId)}>{m['faas.retry']()}</button>
               {/if}
             </div>
           {:else if detail}
@@ -550,13 +547,13 @@
               <div class="detail-head">
                 <h2>{fn.name}</h2>
                 <span class="badge">{fn.trigger_type}</span>
-                <span class="badge" class:on={fn.enabled}>{fn.enabled ? 'enabled' : 'disabled'}</span>
+                <span class="badge" class:on={fn.enabled}>{fn.enabled ? m['faas.status_enabled']() : m['faas.status_disabled']()}</span>
                 <span class="muted">v{fn.version}</span>
-                {#if dirty}<span class="badge dirty">unsaved</span>{/if}
+                {#if dirty}<span class="badge dirty">{m['faas.unsaved']()}</span>{/if}
               </div>
 
               {#if !session.is_admin}
-                <p class="muted small">Read-only — sign in with an admin key to edit, enable or delete.</p>
+                <p class="muted small">{m['faas.readonly_hint']()}</p>
               {/if}
 
               <div class="editor-wrap">
@@ -571,14 +568,14 @@
               </div>
 
               <div class="config">
-                <h3>trigger · {fn.trigger_type}</h3>
+                <h3>{m['faas.config_trigger']({ type: fn.trigger_type })}</h3>
                 {#if fn.trigger_type === 'render'}
                   <div class="row">
                     <label>
-                      mode
+                      {m['faas.mode']()}
                       <select bind:value={trigFields.mode} disabled={affordance.disabled}>
-                        <option value="">sync (default)</option>
-                        {#each RENDER_MODES as m (m)}<option value={m}>{m}</option>{/each}
+                        <option value="">{m['faas.mode_sync']()}</option>
+                        {#each RENDER_MODES as mode (mode)}<option value={mode}>{mode}</option>{/each}
                       </select>
                     </label>
                     <label>
@@ -593,7 +590,7 @@
                 {:else if fn.trigger_type === 'schedule'}
                   <div class="row">
                     <label class="grow">
-                      cron
+                      {m['faas.cron']()}
                       <input
                         type="text"
                         bind:value={trigFields.cron}
@@ -607,17 +604,17 @@
                       <input type="number" min="0" bind:value={trigFields.intervalS} disabled={affordance.disabled} />
                     </label>
                   </div>
-                  {#if !cronOk}<p class="inline-err">cron must be 5 whitespace-separated fields</p>{/if}
-                  <p class="muted small">Cron drives the schedule; interval_s is the M1 fallback.</p>
+                  {#if !cronOk}<p class="inline-err">{m['faas.cron_invalid']()}</p>{/if}
+                  <p class="muted small">{m['faas.cron_hint']()}</p>
                 {:else}
                   <div class="webhook">
                     {#if hookURL}
                       <label class="grow">
-                        inbound URL
+                        {m['faas.inbound_url']()}
                         <input type="text" class="mono" readonly value={hookURL} />
                       </label>
                     {:else}
-                      <p class="muted small">Webhook base URL not configured (ADMIN_WEBHOOK_BASE_URL) — the URL is hidden.</p>
+                      <p class="muted small">{m['faas.webhook_hidden']()}</p>
                     {/if}
                     <button
                       type="button"
@@ -625,20 +622,20 @@
                       title={affordance.disabled ? affordance.title : ''}
                       onclick={rotateToken}
                     >
-                      rotate token
+                      {m['faas.rotate_token']()}
                     </button>
                   </div>
                 {/if}
 
                 <div class="row wrap">
                   <label>
-                    dither
+                    {m['faas.dither']()}
                     <select bind:value={trigFields.dither} disabled={affordance.disabled}>
                       {#each DITHER_OPTIONS as d (d.value)}<option value={d.value}>{d.label}</option>{/each}
                     </select>
                   </label>
                   <div class="enabled-toggle">
-                    <span class="flabel">enabled</span>
+                    <span class="flabel">{m['faas.field_enabled']()}</span>
                     <button
                       type="button"
                       class:on={fn.enabled}
@@ -646,13 +643,13 @@
                       title={affordance.disabled ? affordance.title : ''}
                       onclick={toggleEnabled}
                     >
-                      {fn.enabled ? 'on' : 'off'}
+                      {fn.enabled ? m['faas.on']() : m['faas.off']()}
                     </button>
                   </div>
                 </div>
 
                 <div class="field">
-                  <span class="flabel">egress allow (one host[:port] per line — empty = no outbound network)</span>
+                  <span class="flabel">{m['faas.egress_label']()}</span>
                   <textarea
                     bind:value={egressText}
                     rows="2"
@@ -663,10 +660,10 @@
                 </div>
 
                 <div class="field">
-                  <span class="flabel">secret bindings (names only — least privilege; a value is never shown)</span>
+                  <span class="flabel">{m['faas.secrets_label']()}</span>
                   {#if session.is_admin}
                     {#if secretNames.length === 0}
-                      <p class="muted small">No secrets defined — add them in Settings (Doc 18).</p>
+                      <p class="muted small">{m['faas.secrets_empty']()}</p>
                     {:else}
                       <ul class="secret-picker">
                         {#each secretNames as name (name)}
@@ -688,13 +685,13 @@
                       {#each boundSecrets as name (name)}<li class="chip mono">{name}</li>{/each}
                     </ul>
                   {:else}
-                    <p class="muted small">none</p>
+                    <p class="muted small">{m['faas.secrets_none']()}</p>
                   {/if}
                 </div>
 
                 {#if dirty && detail.bound_serials.length > 0}
                   <p class="blast-warn" role="status">
-                    ⚠ saving changes the next frame on {blastRadiusLabel(detail.bound_serials.length)}.
+                    {m['faas.blast_warn']({ devices: blastRadiusLabel(detail.bound_serials.length) })}
                   </p>
                 {/if}
                 <div class="save-row">
@@ -706,7 +703,7 @@
                     aria-disabled={affordance['aria-disabled'] || !dirty}
                     onclick={doSave}
                   >
-                    {saving ? 'saving…' : 'Save'}
+                    {saving ? m['faas.saving']() : m['faas.save']()}
                   </button>
                   <button
                     type="button"
@@ -715,90 +712,88 @@
                     title={affordance.disabled ? affordance.title : ''}
                     onclick={doDelete}
                   >
-                    {deleteArmed ? `confirm delete (${blastRadiusLabel(detail.bound_serials.length)})` : 'Delete'}
+                    {deleteArmed ? m['faas.confirm_delete']({ devices: blastRadiusLabel(detail.bound_serials.length) }) : m['faas.delete']()}
                   </button>
-                  {#if deleteArmed}<button type="button" class="link" onclick={() => (deleteArmed = false)}>cancel</button>{/if}
-                  <span class="muted small blast">bound: {blastRadiusLabel(detail.bound_serials.length)}</span>
+                  {#if deleteArmed}<button type="button" class="link" onclick={() => (deleteArmed = false)}>{m['faas.cancel']()}</button>{/if}
+                  <span class="muted small blast">{m['faas.bound']({ devices: blastRadiusLabel(detail.bound_serials.length) })}</span>
                 </div>
               </div>
 
               <div class="bindings">
-                <h3>device bindings — blast radius: {blastRadiusLabel(detail.bound_serials.length)}</h3>
+                <h3>{m['faas.bindings_heading']({ devices: blastRadiusLabel(detail.bound_serials.length) })}</h3>
                 {#if detail.bound_serials.length > 0}
                   <ul class="chips">
                     {#each detail.bound_serials as s (s)}
                       <li class="chip mono bind-chip">
                         <span>{s}</span>
                         {#if session.is_admin}
-                          <button type="button" class="chip-x" title="unbind {s}" disabled={mutating} onclick={() => unbindDevice(s)}>✕</button>
+                          <button type="button" class="chip-x" title={m['faas.unbind_title']({ serial: s })} disabled={mutating} onclick={() => unbindDevice(s)}>✕</button>
                         {/if}
                       </li>
                     {/each}
                   </ul>
-                  <p class="muted small">Editing this function's source changes the next frame on every bound device.</p>
+                  <p class="muted small">{m['faas.bindings_note']()}</p>
                 {:else}
-                  <p class="muted small">Not bound to any device — nothing renders it yet.</p>
+                  <p class="muted small">{m['faas.not_bound']()}</p>
                 {/if}
                 {#if session.is_admin}
                   <div class="bind-row">
-                    <DevicePicker devices={bindableDevices} bind:value={bindTarget} placeholder="bind a device to this function…" />
-                    <button type="button" disabled={mutating || !bindTarget} onclick={bindDevice}>Bind</button>
+                    <DevicePicker devices={bindableDevices} bind:value={bindTarget} placeholder={m['faas.bind_ph']()} />
+                    <button type="button" disabled={mutating || !bindTarget} onclick={bindDevice}>{m['faas.bind']()}</button>
                   </div>
                 {/if}
               </div>
 
               {#if session.is_admin}
                 <div class="testrun">
-                  <h3>test run</h3>
+                  <h3>{m['faas.testrun_heading']()}</h3>
                   <p class="muted small">
-                    Runs the current editor draft against a device context in the production worker sandbox —
-                    secrets are stubbed (a <code>&lt;secret:name&gt;</code> marker, never a value) and it
-                    writes NO fleet state (side-effect-free).
+                    {m['faas.testrun_note']()}
                   </p>
                   <div class="row wrap">
                     <label class="grow">
-                      device serial (context)
-                      <input type="text" bind:value={testSerial} placeholder="a device serial" spellcheck="false" />
+                      {m['faas.test_serial']()}
+                      <input type="text" bind:value={testSerial} placeholder={m['faas.test_serial_ph']()} spellcheck="false" />
                     </label>
                     <label>
-                      now (optional)
+                      {m['faas.test_now']()}
                       <input type="text" bind:value={testNow} placeholder="RFC3339" spellcheck="false" />
                     </label>
                   </div>
                   {#if fn.trigger_type === 'webhook'}
                     <label class="field">
-                      payload (JSON → ctx.trigger.payload)
+                      {m['faas.test_payload']()}
                       <textarea bind:value={testPayload} rows="2" placeholder={'{ "key": "value" }'} spellcheck="false"></textarea>
                     </label>
                   {/if}
                   <div class="actions">
                     <button type="button" class="primary" disabled={testing} onclick={runTest}>
-                      {testing ? 'running…' : 'Run test'}
+                      {testing ? m['faas.running']() : m['faas.run_test']()}
                     </button>
                     {#if testError}<span class="inline-err">{testError}</span>{/if}
                   </div>
 
                   {#if testResult}
-                    {@const m = testResult.meta}
+                    {@const meta = testResult.meta}
                     <div class="result">
                       <div class="result-head">
-                        <span class="badge" class:on={m.ok} class:err={!m.ok}>{m.status}</span>
-                        <span class="muted small">wake {m.wake}s · dither {m.dither}</span>
+                        <span class="badge" class:on={meta.ok} class:err={!meta.ok}>{meta.status}</span>
+                        <span class="muted small">{m['faas.result_wake']({ wake: meta.wake, dither: meta.dither })}</span>
                       </div>
-                      {#if m.err}
-                        <p class="inline-err">error [{m.err.kind}]: {m.err.msg}</p>
+                      {#if meta.err}
+                        <p class="inline-err">{m['faas.result_error']({ kind: meta.err.kind, msg: meta.err.msg })}</p>
                       {/if}
                       <FramePreview
                         packed={testResult.packed}
-                        raw={m.raw_fmt === 'rgb' ? testResult.raw : null}
-                        alt="panel (400×300 BWRY)"
-                        rawAlt="raw render (what you drew)"
+                        raw={meta.raw_fmt === 'rgb' ? testResult.raw : null}
+                        alt={m['faas.panel_alt']()}
+                        rawAlt={m['faas.raw_alt']()}
                       />
-                      {#if m.log.length > 0}
+                      {#if meta.log.length > 0}
                         <div class="log">
-                          <span class="flabel">worker log</span>
+                          <span class="flabel">{m['faas.worker_log']()}</span>
                           <ul>
-                            {#each m.log as l, i (i)}
+                            {#each meta.log as l, i (i)}
                               <li class="log-{l.lvl}"><span class="lvl">{l.lvl}</span> {l.msg}</li>
                             {/each}
                           </ul>
@@ -810,24 +805,23 @@
               {/if}
 
               <details class="caps">
-                <summary>capability reference</summary>
+                <summary>{m['faas.caps_summary']()}</summary>
                 <p class="muted small">
-                  The curated worker scope — autocomplete offers exactly these (and this function's bound
-                  secrets). Documentation, not a firmware-parity manifest.
+                  {m['faas.caps_note']()}
                 </p>
-                <h4>cap.* (capabilities)</h4>
+                <h4>{m['faas.caps_cap']()}</h4>
                 <ul class="caplist">
                   {#each CAP_ENTRIES as c (c.label)}
                     <li><code>{c.detail}</code><span class="doc">{c.info}</span></li>
                   {/each}
                 </ul>
-                <h4>ctx.* (context)</h4>
+                <h4>{m['faas.caps_ctx']()}</h4>
                 <ul class="caplist">
                   {#each CTX_ENTRIES as c (c.label)}
                     <li><code>{c.detail}</code><span class="doc">{c.info}</span></li>
                   {/each}
                 </ul>
-                <h4>return</h4>
+                <h4>{m['faas.caps_return']()}</h4>
                 <ul class="caplist">
                   {#each RETURN_ENTRIES as c (c.label)}
                     <li><code>{c.detail}</code><span class="doc">{c.info}</span></li>
@@ -836,7 +830,7 @@
               </details>
             </div>
           {:else}
-            <p class="muted select-hint">Select a function to author it, or create one.</p>
+            <p class="muted select-hint">{m['faas.select_hint']()}</p>
           {/if}
         </div>
       </div>

@@ -22,6 +22,12 @@
   import { webSerialReady } from '../../lib/webusb/support'
   import type { FlashManifest, LogSink } from '../../lib/webusb/types'
   import type { Device } from '../../lib/api/types'
+  import { m } from '../../paraglide/messages.js'
+  // NOTE (A34.2): the operator-facing UI chrome, notify.* toasts and confirm()
+  // texts below are catalog-backed. The low-level log() lines that stream into the
+  // monospace onboarding console stay English by design — they are transport /
+  // esptool diagnostics (a serial-monitor surface), consistent with §2 "the server
+  // stays English" and the LogViewer device-payload exemption.
 
   // --- environment gate (F7): WebSerial is Chromium-desktop + secure-context only ------------------------
   const serialReady = webSerialReady(
@@ -111,7 +117,7 @@
       log(`Connected: ${chip}`, 'ok')
     } catch (e) {
       log('Connect failed: ' + (e as Error).message, 'err')
-      notify.warn('Connect failed — see the log. Tip: triple-press the button to force setup mode.')
+      notify.warn(m['onboard.notify.connect_failed']())
     } finally {
       busy = false
     }
@@ -122,8 +128,8 @@
     busy = true
     backupProgress = 0
     try {
-      const m = await loadManifest().catch(() => null)
-      const bytes = manifestFlashBytes(m)
+      const mf = await loadManifest().catch(() => null)
+      const bytes = manifestFlashBytes(mf)
       log(`Reading ${(bytes / 1048576).toFixed(0)} MB from flash…`, 'info')
       const data = await flasher.backup(bytes, (p) => (backupProgress = p))
       const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
@@ -141,20 +147,20 @@
     busy = true
     flashProgress = 0
     try {
-      const m = await loadManifest()
+      const mf = await loadManifest()
       // G7: reflash preserves NVS (Wi-Fi/dev_sn/identity keypair) unless the operator opts into a full erase.
       // A "fresh flash" that keeps a stale keypair would re-enroll an old identity believing it is new.
-      const manifest: FlashManifest = { ...m, eraseBeforeFlash: eraseNvs || !!m.eraseBeforeFlash }
-      log(`Flashing ${m.name} ${m.version}${eraseNvs ? ' (full erase — NVS/identity wiped)' : ''}…`, 'info')
+      const manifest: FlashManifest = { ...mf, eraseBeforeFlash: eraseNvs || !!mf.eraseBeforeFlash }
+      log(`Flashing ${mf.name} ${mf.version}${eraseNvs ? ' (full erase — NVS/identity wiped)' : ''}…`, 'info')
       await flasher.flash(manifest, fetchPart, (p) => (flashProgress = p))
       flashed = true
       connected = false // esptool transport released; provision re-opens at console baud
       log('Flash complete. Rebooting into the CFW…', 'ok')
-      notify.success('Firmware flashed. Provision the device next.')
+      notify.success(m['onboard.notify.flashed']())
     } catch (e) {
       const err = toApiError(e)
       if (err.status === 404) {
-        notify.warn('Firmware artifacts are not configured on this server (ADMIN_ONBOARD_FW_DIR unset).')
+        notify.warn(m['onboard.notify.fw_missing']())
       }
       log('Flash failed: ' + (e as Error).message, 'err')
     } finally {
@@ -182,17 +188,17 @@
       log('Provisioning over the setup console…', 'info')
       const res = await runProvision(cs, fields, { waitForBanner: true })
       if (!res.ok) {
-        notify.warn('Provisioning: ' + res.reason)
+        notify.warn(m['onboard.notify.provisioning_reason']({ reason: res.reason }))
         log('Provisioning stopped: ' + res.reason, 'err')
         return
       }
       pubkeyHex = res.pubkeyHex
       provisioned = true
       log('Provisioned; device emitted its public key.', 'ok')
-      notify.success('Provisioned. Enroll to register the device.')
+      notify.success(m['onboard.notify.provisioned']())
     } catch (e) {
       log('Provisioning failed: ' + (e as Error).message, 'err')
-      notify.warn('Provisioning failed — see the log.')
+      notify.warn(m['onboard.notify.provision_failed']())
     } finally {
       if (link) await link.close()
       try {
@@ -219,8 +225,9 @@
       if (
         enrollNeedsConfirm(existing) &&
         !confirm(
-          `Serial "${fields.serial}" is already registered${existing?.bonded ? ' and bonded' : ''}. ` +
-            `Re-enroll will update it (or re-bond it if the key differs). Continue?`,
+          existing?.bonded
+            ? m['onboard.confirm_reenroll_bonded']({ serial: fields.serial })
+            : m['onboard.confirm_reenroll']({ serial: fields.serial }),
         )
       ) {
         return
@@ -236,11 +243,11 @@
         body: JSON.stringify(body),
       })
       if (!isEnrollSuccess(res.action)) {
-        notify.warn('Enroll returned an unexpected action: ' + res.action)
+        notify.warn(m['onboard.notify.enroll_unexpected']({ action: res.action }))
         return
       }
       enrolled = true
-      notify.success(`Enrolled (${res.action}). Waiting for the first bond…`)
+      notify.success(m['onboard.notify.enrolled']({ action: res.action }))
       void pollBond()
     } catch (e) {
       notify.error(toApiError(e))
@@ -259,7 +266,7 @@
         const r = await apiFetch<{ device: Device }>(`/api/devices/${encodeURIComponent(fields.serial)}`)
         if (r.device.bonded) {
           bondState = 'bonded'
-          notify.success('Device bonded end-to-end ✓')
+          notify.success(m['onboard.notify.bonded']())
           return
         }
       } catch {
@@ -270,79 +277,77 @@
 </script>
 
 <section class="onboard">
-  <h1>Onboard a device</h1>
+  <h1>{m['onboard.title']()}</h1>
   <p class="lede">
-    Flash the open firmware and provision Wi-Fi + C2 enrollment over USB, entirely in your browser. Nothing
-    but the final public-key registration ever leaves this page.
+    {m['onboard.lede']()}
   </p>
 
   {#if !serialReady}
     <div class="banner err" role="alert">
-      WebSerial is unavailable here. Use a Chromium-based desktop browser over HTTPS (or localhost). On Windows
-      the C3's native USB may need its serial driver assigned before it appears in the port picker.
+      {m['onboard.no_serial']()}
     </div>
   {/if}
 
   <ol class="steps" class:disabled={!serialReady}>
     <li class="step" class:done={connected}>
-      <h2>1 · Connect</h2>
-      <button onclick={connect} disabled={!serialReady || busy || connected}>Connect device</button>
-      {#if chip}<span class="ok">Connected: {chip}</span>{/if}
+      <h2>{m['onboard.step1']()}</h2>
+      <button onclick={connect} disabled={!serialReady || busy || connected}>{m['onboard.connect']()}</button>
+      {#if chip}<span class="ok">{m['onboard.connected']({ chip })}</span>{/if}
     </li>
 
     <li class="step" class:done={backupProgress >= 100}>
-      <h2>2 · Backup <small>(recommended)</small></h2>
-      <button onclick={backup} disabled={!connected || busy}>Full-flash backup → .bin</button>
+      <h2>{m['onboard.step2']()} <small>{m['onboard.recommended']()}</small></h2>
+      <button onclick={backup} disabled={!connected || busy}>{m['onboard.backup']()}</button>
       {#if backupProgress > 0}<progress max="100" value={backupProgress}></progress>{/if}
     </li>
 
     <li class="step" class:done={flashed}>
-      <h2>3 · Flash</h2>
+      <h2>{m['onboard.step3']()}</h2>
       <label class="chk">
         <input type="checkbox" bind:checked={eraseNvs} disabled={busy} />
-        Full chip-erase (wipe Wi-Fi / dev_sn / identity keypair — a truly fresh device)
+        {m['onboard.erase_label']()}
       </label>
-      <button onclick={flash} disabled={!connected || busy}>Flash open-picpak CFW</button>
+      <button onclick={flash} disabled={!connected || busy}>{m['onboard.flash']()}</button>
       {#if flashProgress > 0}<progress max="100" value={flashProgress}></progress>{/if}
     </li>
 
     <li class="step" class:done={provisioned}>
-      <h2>4 · Provision</h2>
-      <p class="hint">The device is in its setup console after a flash (or triple-press it to re-provision without reflashing).</p>
+      <h2>{m['onboard.step4']()}</h2>
+      <p class="hint">{m['onboard.provision_hint']()}</p>
       <div class="grid">
-        <label>Serial<input bind:value={fields.serial} placeholder="PP-001" /></label>
+        <label>{m['onboard.field.serial']()}<input bind:value={fields.serial} placeholder="PP-001" /></label>
         {#if fieldErrors.serial}<span class="fielderr">{fieldErrors.serial}</span>{/if}
-        <label>Wi-Fi SSID<input bind:value={fields.ssid} /></label>
+        <label>{m['onboard.field.ssid']()}<input bind:value={fields.ssid} /></label>
         {#if fieldErrors.ssid}<span class="fielderr">{fieldErrors.ssid}</span>{/if}
-        <label>Wi-Fi password<input type="password" bind:value={fields.password} /></label>
-        <label>Frame URL<input bind:value={fields.frameUrl} placeholder="https://…" /></label>
+        <label>{m['onboard.field.password']()}<input type="password" bind:value={fields.password} /></label>
+        <label>{m['onboard.field.frame_url']()}<input bind:value={fields.frameUrl} placeholder="https://…" /></label>
         {#if fieldErrors.frameUrl}<span class="fielderr">{fieldErrors.frameUrl}</span>{/if}
-        <label>C2 URL<input bind:value={fields.c2Url} placeholder="https://…" /></label>
+        <label>{m['onboard.field.c2_url']()}<input bind:value={fields.c2Url} placeholder="https://…" /></label>
         {#if fieldErrors.c2Url}<span class="fielderr">{fieldErrors.c2Url}</span>{/if}
-        <label>C2 period (s)<input bind:value={fields.c2PeriodSeconds} placeholder="1800" /></label>
-        <label>Wake interval (s)<input bind:value={fields.wakeSeconds} placeholder="optional" /></label>
+        <label>{m['onboard.field.c2_period']()}<input bind:value={fields.c2PeriodSeconds} placeholder="1800" /></label>
+        <label>{m['onboard.field.wake']()}<input bind:value={fields.wakeSeconds} placeholder={m['onboard.ph_optional']()} /></label>
       </div>
-      <button onclick={provision} disabled={busy || !provisionValid}>Provision + emit key</button>
+      <button onclick={provision} disabled={busy || !provisionValid}>{m['onboard.provision_btn']()}</button>
     </li>
 
     <li class="step" class:done={enrolled}>
-      <h2>5 · Enroll</h2>
+      <h2>{m['onboard.step5']()}</h2>
       {#if !session.is_admin}
-        <p class="hint">Registering a device needs an admin key. The local steps above work with any operator login.</p>
+        <p class="hint">{m['onboard.enroll_admin_hint']()}</p>
       {/if}
       <div class="grid">
-        <label>Label <small>(optional)</small><input bind:value={label} /></label>
-        <label>Channel <small>(optional — blank keeps the default)</small><input bind:value={channel} placeholder="stable" /></label>
+        <label>{m['onboard.field.label']()} <small>{m['onboard.optional']()}</small><input bind:value={label} /></label>
+        <label>{m['onboard.field.channel']()} <small>{m['onboard.channel_hint']()}</small><input bind:value={channel} placeholder="stable" /></label>
       </div>
       <button onclick={enroll} disabled={!enrollAllowed || busy} title={affordance.title} aria-disabled={affordance['aria-disabled']}>
-        Register device (POST /api/devices)
+        {m['onboard.enroll_btn']()}
       </button>
-      {#if bondState === 'waiting'}<span class="hint">Registered — waiting for the first bond (bonds on the next C2 poll).</span>{/if}
-      {#if bondState === 'bonded'}<span class="ok">Bonded end-to-end ✓</span>{/if}
+      {#if bondState === 'waiting'}<span class="hint">{m['onboard.waiting_bond']()}</span>{/if}
+      {#if bondState === 'bonded'}<span class="ok">{m['onboard.bonded']()}</span>{/if}
     </li>
   </ol>
 
-  <section class="logpane" aria-label="onboarding log">
+  <section class="logpane" aria-label={m['onboard.log_aria']()}>
     {#each logLines as line, i (i)}<div class={line.cls}>{line.msg}</div>{/each}
   </section>
 </section>

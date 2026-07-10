@@ -28,19 +28,20 @@ describe('newFunctionError', () => {
     expect(newFunctionError(ok)).toBeNull()
   })
   it('requires a name first', () => {
-    expect(newFunctionError({ ...ok, name: '   ' })).toBe('name is required')
+    // A34.2: messages resolve through the catalog; node falls back to baseLocale (de).
+    expect(newFunctionError({ ...ok, name: '   ' })).toBe('Name ist erforderlich')
   })
   it('validates the name charset', () => {
     expect(newFunctionError({ ...ok, name: 'Bad Name!' })).toContain('^[a-z0-9]')
   })
   it('requires source (an empty function has nothing to run)', () => {
-    expect(newFunctionError({ ...ok, source: '  \n ' })).toBe('source is required')
+    expect(newFunctionError({ ...ok, source: '  \n ' })).toBe('Quelltext ist erforderlich')
   })
   it('checks name before source (server order)', () => {
-    expect(newFunctionError({ name: '', source: '', triggerType: 'render' })).toBe('name is required')
+    expect(newFunctionError({ name: '', source: '', triggerType: 'render' })).toBe('Name ist erforderlich')
   })
   it('rejects an out-of-vocabulary trigger type', () => {
-    expect(newFunctionError({ ...ok, triggerType: 'cron' as TriggerType })).toContain('trigger type')
+    expect(newFunctionError({ ...ok, triggerType: 'cron' as TriggerType })).toContain('render, schedule')
   })
 })
 
@@ -48,12 +49,12 @@ describe('newFunctionError', () => {
 // how many devices an edit or delete touches.
 describe('blastRadiusLabel', () => {
   it('spells zero, singular and plural', () => {
-    expect(blastRadiusLabel(0)).toBe('no devices')
-    expect(blastRadiusLabel(1)).toBe('1 device')
-    expect(blastRadiusLabel(3)).toBe('3 devices')
+    expect(blastRadiusLabel(0)).toBe('keine Geräte')
+    expect(blastRadiusLabel(1)).toBe('1 Gerät')
+    expect(blastRadiusLabel(3)).toBe('3 Geräte')
   })
   it('treats a negative count as none (defensive)', () => {
-    expect(blastRadiusLabel(-1)).toBe('no devices')
+    expect(blastRadiusLabel(-1)).toBe('keine Geräte')
   })
 })
 

@@ -5,6 +5,7 @@
 // — live view paused" banner reuses THIS signal rather than inventing its own.
 
 import type { SseStatus } from './sse.svelte'
+import { m } from '../paraglide/messages.js'
 
 class ConnState {
   status = $state<SseStatus>('idle')
@@ -18,13 +19,13 @@ export type ConnTone = 'live' | 'reconnecting' | 'offline'
 export function connDisplay(s: SseStatus): { label: string; tone: ConnTone } {
   switch (s) {
     case 'open':
-      return { label: 'live', tone: 'live' }
+      return { label: m['conn.live'](), tone: 'live' }
     case 'connecting':
     case 'error':
       // 'error' is a transient connect failure that the client retries with
       // backoff — to the operator that is "reconnecting", not "offline".
-      return { label: 'reconnecting', tone: 'reconnecting' }
+      return { label: m['conn.reconnecting'](), tone: 'reconnecting' }
     default:
-      return { label: 'offline', tone: 'offline' } // idle | closed
+      return { label: m['conn.offline'](), tone: 'offline' } // idle | closed
   }
 }

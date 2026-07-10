@@ -18,7 +18,8 @@ describe('dispatchEvent', () => {
     expect(t.close).toHaveBeenCalledTimes(1)
     expect(t.invalidate).toHaveBeenCalledTimes(1)
     // The reason text reaches the login screen notice.
-    expect(t.invalidate.mock.calls[0][0]).toMatch(/revoked/i)
+    // A34.2: the revoked notice resolves through the catalog; node → baseLocale (de).
+    expect(t.invalidate.mock.calls[0][0]).toMatch(/widerrufen/i)
   })
 
   it('does NOT tear down on a roster delta (only error is terminal)', () => {

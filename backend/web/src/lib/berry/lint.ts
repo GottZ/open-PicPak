@@ -11,6 +11,7 @@
 // catalog; balance is a stack match over the stripped code.
 
 import { type Manifest, byName, phaseOf, RISK_SEVERING } from './catalog'
+import { m } from '../../paraglide/messages.js'
 
 export type Severity = 'error' | 'warning'
 export type LintKind = 'balance' | 'string' | 'forbidden' | 'unknown' | 'severing'
@@ -48,7 +49,7 @@ export function lint(script: string, manifest: Manifest): Finding[] {
       severity: 'error',
       kind: 'string',
       line: unterminatedStringLine,
-      message: 'unterminated string literal',
+      message: m['berry.lint.unterminated'](),
     })
   }
 
@@ -166,7 +167,7 @@ function balance(code: string): Finding[] {
       const want = OPEN_BRACKETS[ch]
       const top = brackets[brackets.length - 1]
       if (!top || top.ch !== want) {
-        findings.push({ severity: 'error', kind: 'balance', line, message: `unmatched '${ch}'` })
+        findings.push({ severity: 'error', kind: 'balance', line, message: m['berry.lint.unmatched']({ ch }) })
       } else {
         brackets.pop()
       }
@@ -182,7 +183,7 @@ function balance(code: string): Finding[] {
         blocks.push({ kw: word, line })
       } else if (word === 'end') {
         if (blocks.length === 0) {
-          findings.push({ severity: 'error', kind: 'balance', line, message: "unexpected 'end' (no open block)" })
+          findings.push({ severity: 'error', kind: 'balance', line, message: m['berry.lint.unexpected_end']() })
         } else {
           blocks.pop()
         }
@@ -198,11 +199,11 @@ function balance(code: string): Finding[] {
       severity: 'error',
       kind: 'balance',
       line: b.line,
-      message: `unclosed '${b.kw}' block — missing 'end'`,
+      message: m['berry.lint.unclosed_block']({ kw: b.kw }),
     })
   }
   for (const br of brackets) {
-    findings.push({ severity: 'error', kind: 'balance', line: br.line, message: `unclosed '${br.ch}'` })
+    findings.push({ severity: 'error', kind: 'balance', line: br.line, message: m['berry.lint.unclosed_bracket']({ ch: br.ch }) })
   }
   return findings
 }
@@ -221,11 +222,11 @@ function calls(code: string, manifest: Manifest): Finding[] {
 
   // user-defined functions are legitimate call targets — collect them first.
   const userDefs = new Set<string>()
-  for (const m of code.matchAll(DEF_RE)) userDefs.add(m[1])
+  for (const match of code.matchAll(DEF_RE)) userDefs.add(match[1])
 
-  for (const m of code.matchAll(CALL_RE)) {
-    const name = m[1]
-    const at = m.index ?? 0
+  for (const match of code.matchAll(CALL_RE)) {
+    const name = match[1]
+    const at = match.index ?? 0
     // skip member calls (preceded by '.') — obj.method(...) is not a bare global.
     const prev = code.slice(0, at).trimEnd()
     if (prev.endsWith('.')) continue
@@ -245,7 +246,7 @@ function calls(code: string, manifest: Manifest): Finding[] {
           line,
           col,
           endCol,
-          message: `${name}() is severing — it can cut the device's own C2 path (USB recovery only).`,
+          message: m['berry.lint.severing']({ name }),
         })
       }
       continue
@@ -257,9 +258,7 @@ function calls(code: string, manifest: Manifest): Finding[] {
         line,
         col,
         endCol,
-        message:
-          `${name}() is a ${phaseOf(cap)} capability — not in the C2 executor; it faults at runtime ` +
-          `and the cursor still advances (no error surfaced).`,
+        message: m['berry.lint.forbidden']({ name, phase: phaseOf(cap) }),
       })
       continue
     }
@@ -271,9 +270,7 @@ function calls(code: string, manifest: Manifest): Finding[] {
       line,
       col,
       endCol,
-      message: hint
-        ? `${name}() is not a C2 capability — did you mean ${hint}()?`
-        : `${name}() is not a C2 capability.`,
+      message: hint ? m['berry.lint.unknown_suggest']({ name, hint }) : m['berry.lint.unknown']({ name }),
     })
   }
   return findings

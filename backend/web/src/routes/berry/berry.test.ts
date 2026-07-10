@@ -80,7 +80,7 @@ describe('T2 — forbidden-surface lint', () => {
 describe('T3 — balance lint', () => {
   it('flags a missing end', () => {
     const f = lint('if connected()\n  reboot()\n', manifest)
-    expect(f.some((x) => x.kind === 'balance' && /missing 'end'/.test(x.message))).toBe(true)
+    expect(f.some((x) => x.kind === 'balance' && /'end'/.test(x.message))).toBe(true)
     // red: a naive line-count linter misses the missing end.
   })
 

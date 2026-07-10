@@ -7,6 +7,11 @@
 // server-computed health/reasons/channel_mismatch. A Go Null[T] marshals to value-or-null, so every
 // metric is `number | null` here. has_data=false → the lateral telemetry join missed (NO_DATA), the
 // metric fields are null and time is the zero value.
+// User-facing prose (noDataLabel / channelDisplay / ageLabel) resolves through the
+// message catalog (A34.2); the n/a sentinel, units and health glyphs stay
+// locale-invariant tokens.
+import { m } from '../../paraglide/messages.js'
+
 export type Health = 'OK' | 'LOW_BATT' | 'BAD_BOOTS' | 'BROWNOUT' | 'OFFLINE_STALE' | 'NO_DATA'
 
 export interface FleetRow {
@@ -234,7 +239,7 @@ export function healthClass(h: Health): 'ok' | 'warn' | 'danger' | 'muted' {
 /** The NO_DATA split (D22.12): C2-alive (telemetry unwired, the current normal) vs truly silent. */
 export function noDataLabel(row: FleetRow): string {
   if (row.has_data) return ''
-  return row.reasons.includes('c2_alive') ? 'C2-alive, awaiting telemetry' : 'silent — no C2 contact'
+  return row.reasons.includes('c2_alive') ? m['fleet.c2_alive']() : m['fleet.silent']()
 }
 
 // ---- F3: sentinel n/a rendering ----
@@ -261,7 +266,10 @@ export function battLabel(pct: number | null, mv: number | null): string {
  */
 export function channelDisplay(row: FleetRow): { text: string; mismatch: boolean } {
   if (row.channel_mismatch && row.reported_channel) {
-    return { text: `${row.assigned_channel} (reports ${row.reported_channel})`, mismatch: true }
+    return {
+      text: m['fleet.channel_reports']({ assigned: row.assigned_channel, reported: row.reported_channel }),
+      mismatch: true,
+    }
   }
   return { text: row.assigned_channel, mismatch: false }
 }
@@ -289,10 +297,10 @@ export function ageLabel(iso: string | null, nowMs: number): string {
   const t = new Date(iso).getTime()
   if (Number.isNaN(t)) return '—'
   const s = Math.max(0, Math.floor((nowMs - t) / 1000))
-  if (s < 60) return `${s}s ago`
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
-  return `${Math.floor(s / 86400)}d ago`
+  if (s < 60) return m['fleet.age_seconds']({ s })
+  if (s < 3600) return m['fleet.age_minutes']({ m: Math.floor(s / 60) })
+  if (s < 86400) return m['fleet.age_hours']({ h: Math.floor(s / 3600) })
+  return m['fleet.age_days']({ d: Math.floor(s / 86400) })
 }
 
 // ---- sparkline (inline SVG path) ----

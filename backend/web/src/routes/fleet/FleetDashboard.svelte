@@ -19,6 +19,7 @@
     newestTime,
     ageLabel,
   } from './fleet'
+  import { m } from '../../paraglide/messages.js'
 
   // Telemetry dashboard (Design 22 §4.4) — replaces the Doc 19 scaffold roster. The initial paint is one
   // enriched GET /api/fleet (running_ver/batt/health per device, silent devices as NO_DATA); the SSE
@@ -96,25 +97,25 @@
 
 <section class="fleet">
   <header>
-    <h1>Fleet</h1>
-    <button onclick={reload} disabled={fleet.status === 'loading'}>refresh</button>
+    <h1>{m['fleet.title']()}</h1>
+    <button onclick={reload} disabled={fleet.status === 'loading'}>{m['fleet.refresh']()}</button>
   </header>
 
   {#if showLoading}
-    <p class="muted" aria-busy="true">loading fleet…</p>
+    <p class="muted" aria-busy="true">{m['fleet.loading']()}</p>
   {:else if showError}
     <div class="error" role="alert">
       <p>{fleet.error?.message}</p>
-      {#if fleet.error?.requestId}<p class="muted">request {fleet.error.requestId}</p>{/if}
+      {#if fleet.error?.requestId}<p class="muted">{m['app.request']({ id: fleet.error.requestId })}</p>{/if}
     </div>
   {:else if showEmpty}
-    <p class="muted">No devices registered yet.</p>
+    <p class="muted">{m['fleet.empty']()}</p>
   {:else}
     <table>
       <thead>
         <tr>
-          <th>Health</th><th>Serial</th><th>Label</th><th>Version</th>
-          <th>Battery</th><th>Channel</th><th>Last seen</th>
+          <th>{m['fleet.col.health']()}</th><th>{m['fleet.col.serial']()}</th><th>{m['fleet.col.label']()}</th><th>{m['fleet.col.version']()}</th>
+          <th>{m['fleet.col.battery']()}</th><th>{m['fleet.col.channel']()}</th><th>{m['fleet.col.last_seen']()}</th>
         </tr>
       </thead>
       <tbody>
@@ -130,7 +131,7 @@
             <td class="mono">{r.has_data ? r.running_ver || '—' : noDataLabel(r)}</td>
             <td>{r.has_data ? battLabel(r.batt_pct, r.batt_mv) : '—'}</td>
             <td class="mono">
-              {ch.text}{#if ch.mismatch}<span class="badge mismatch" title="device reports a channel it is not assigned">≠</span>{/if}
+              {ch.text}{#if ch.mismatch}<span class="badge mismatch" title={m['fleet.mismatch_title']()}>≠</span>{/if}
             </td>
             <td class="muted">{ageLabel(r.reg_last_seen, nowMs)}</td>
           </tr>
@@ -139,9 +140,9 @@
     </table>
 
     <footer class="clocks muted">
-      <span>poll: {ageLabel(serverTime, nowMs)}</span>
-      <span>newest report: {ageLabel(newestTelemetry, nowMs)}</span>
-      <span>newest C2 contact: {ageLabel(newestC2, nowMs)}</span>
+      <span>{m['fleet.clock_poll']({ age: ageLabel(serverTime, nowMs) })}</span>
+      <span>{m['fleet.clock_report']({ age: ageLabel(newestTelemetry, nowMs) })}</span>
+      <span>{m['fleet.clock_c2']({ age: ageLabel(newestC2, nowMs) })}</span>
     </footer>
   {/if}
 

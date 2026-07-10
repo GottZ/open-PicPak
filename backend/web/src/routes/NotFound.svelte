@@ -1,7 +1,11 @@
+<script lang="ts">
+  import { m } from '../paraglide/messages.js'
+</script>
+
 <section class="not-found">
   <p class="code">404</p>
-  <p>No such route in this UI.</p>
-  <p><a href="/fleet">Back to fleet</a></p>
+  <p>{m['notfound.message']()}</p>
+  <p><a href="/fleet">{m['notfound.back']()}</a></p>
 </section>
 
 <style>

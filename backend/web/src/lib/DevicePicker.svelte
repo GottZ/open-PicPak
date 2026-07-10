@@ -8,11 +8,12 @@
   // labelled identically everywhere. Pure core in devicepicker.ts.
   import type { Device } from './api/types'
   import { filterDevices, sortByRecency, isStale, staleDays } from './devicepicker'
+  import { m } from '../paraglide/messages.js'
 
   let {
     devices,
     value = $bindable(null),
-    placeholder = 'filter by label or serial…',
+    placeholder = m['devicepicker.placeholder'](),
   }: {
     devices: Device[]
     value?: string | null
@@ -31,13 +32,13 @@
   }
   function staleNote(d: Device): string {
     const days = staleDays(d, now)
-    if (days === null) return 'never polled — a command will sit pending'
-    return `last polled ${days}d ago — a command may sit pending`
+    if (days === null) return m['devicepicker.stale_never']()
+    return m['devicepicker.stale_days']({ days })
   }
 </script>
 
 <div class="picker">
-  <input type="search" bind:value={query} {placeholder} aria-label="filter devices" />
+  <input type="search" bind:value={query} {placeholder} aria-label={m['devicepicker.aria']()} />
   <ul class="list" role="listbox">
     {#each matches as d (d.serial)}
       <li>
@@ -51,12 +52,12 @@
         >
           <span class="label">{label(d)}</span>
           <span class="serial mono">{d.serial}</span>
-          {#if d.bonded}<span class="badge">bonded</span>{/if}
-          {#if isStale(d, now)}<span class="badge stale">stale</span>{/if}
+          {#if d.bonded}<span class="badge">{m['devicepicker.bonded']()}</span>{/if}
+          {#if isStale(d, now)}<span class="badge stale">{m['devicepicker.stale']()}</span>{/if}
         </button>
       </li>
     {:else}
-      <li class="muted empty">no devices match</li>
+      <li class="muted empty">{m['devicepicker.empty']()}</li>
     {/each}
   </ul>
   {#if selectedStale && selected}

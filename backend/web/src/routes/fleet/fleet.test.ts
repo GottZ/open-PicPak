@@ -113,9 +113,12 @@ describe('healthGlyph / healthClass (F2 — every verdict incl NO_DATA)', () => 
   })
 
   it('noDataLabel splits c2_alive from silent', () => {
-    expect(noDataLabel(noDataRow({ serial: 'A', label: null, channel: 'stable', last_seen: null, bonded: false }))).toContain('silent')
+    // A34.2: noDataLabel now resolves through the message catalog; in node with no
+    // locale strategy Paraglide falls back to baseLocale (de) — assert the German
+    // catalog values (mirrors errors.test.ts).
+    expect(noDataLabel(noDataRow({ serial: 'A', label: null, channel: 'stable', last_seen: null, bonded: false }))).toContain('still')
     const alive = { ...noDataRow({ serial: 'A', label: null, channel: 'stable', last_seen: null, bonded: false }), reasons: ['c2_alive'] }
-    expect(noDataLabel(alive)).toContain('C2-alive')
+    expect(noDataLabel(alive)).toContain('C2-aktiv')
     expect(noDataLabel(row({ serial: 'A', has_data: true }))).toBe('') // data rows: no NO_DATA label
   })
 })
@@ -158,8 +161,8 @@ describe('clocks, sparkline, grafana link', () => {
   it('ageLabel coarsens and tolerates null', () => {
     const now = Date.parse('2026-06-30T12:00:00Z')
     expect(ageLabel(null, now)).toBe('—')
-    expect(ageLabel('2026-06-30T11:58:00Z', now)).toBe('2m ago')
-    expect(ageLabel('2026-06-30T09:00:00Z', now)).toBe('3h ago')
+    expect(ageLabel('2026-06-30T11:58:00Z', now)).toBe('vor 2 min')
+    expect(ageLabel('2026-06-30T09:00:00Z', now)).toBe('vor 3 h')
   })
 
   it('sparklinePath skips nulls and needs >=2 real points', () => {

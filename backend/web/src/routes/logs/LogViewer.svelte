@@ -16,6 +16,7 @@
     reconcile,
     synthesizeView,
   } from './logs'
+  import { m } from '../../paraglide/messages.js'
 
   // Log viewer (Design 21 §4.6). Read-only (D21.7): no mutation controls, so read-only operators see the
   // page unchanged. The device filter REUSES the shared DevicePicker (masterplan K13, D19.12) fed by
@@ -152,10 +153,10 @@
   })
 
   function dividerText(variant: 'gap' | 'suspect' | 'boot', bootCount: number | null): string {
-    const boot = bootCount === null ? '' : ` (boot ${bootCount})`
-    if (variant === 'gap') return `— gap${boot} —`
-    if (variant === 'suspect') return `— suspect: offset rollback${boot} —`
-    return `— boot ${bootCount ?? '?'} —`
+    const boot = bootCount === null ? '' : m['logs.boot_suffix']({ n: bootCount })
+    if (variant === 'gap') return m['logs.divider_gap']({ boot })
+    if (variant === 'suspect') return m['logs.divider_suspect']({ boot })
+    return m['logs.divider_boot']({ boot: bootCount ?? '?' })
   }
 
   function tsLabel(iso: string): string {
@@ -188,21 +189,21 @@
 
 <section class="logs">
   <header>
-    <h1>Logs</h1>
+    <h1>{m['logs.title']()}</h1>
     <div class="follow">
       <label>
         <input type="checkbox" bind:checked={follow} onchange={() => follow && scrollToBottom()} />
-        follow
+        {m['logs.follow']()}
       </label>
-      <button onclick={reload} disabled={page.status === 'loading'}>refresh</button>
+      <button onclick={reload} disabled={page.status === 'loading'}>{m['logs.refresh']()}</button>
     </div>
   </header>
 
   <div class="filters">
     <div class="devicefilter">
-      <DevicePicker {devices} bind:value={selectedSerial} placeholder="filter logs by device…" />
+      <DevicePicker {devices} bind:value={selectedSerial} placeholder={m['logs.filter_placeholder']()} />
       {#if selectedSerial}
-        <button class="clear" onclick={() => (selectedSerial = null)}>show all devices</button>
+        <button class="clear" onclick={() => (selectedSerial = null)}>{m['logs.show_all']()}</button>
       {/if}
     </div>
     <div class="sources">
@@ -217,17 +218,17 @@
 
   <div class="viewport" bind:this={viewport} onscroll={onScroll}>
     {#if showLoading}
-      <p class="muted" aria-busy="true">loading logs…</p>
+      <p class="muted" aria-busy="true">{m['logs.loading']()}</p>
     {:else if showError}
       <div class="error" role="alert">
         <p>{page.error?.message}</p>
-        {#if page.error?.requestId}<p class="muted">request {page.error.requestId}</p>{/if}
+        {#if page.error?.requestId}<p class="muted">{m['app.request']({ id: page.error.requestId })}</p>{/if}
       </div>
     {:else if showEmpty}
-      <p class="muted">No log lines for this filter.</p>
+      <p class="muted">{m['logs.empty']()}</p>
     {:else}
-      {#if !reachedEdge}<p class="muted edge">scroll up for older lines…</p>{/if}
-      {#if reachedEdge}<p class="muted edge">— start of retained history —</p>{/if}
+      {#if !reachedEdge}<p class="muted edge">{m['logs.scroll_older']()}</p>{/if}
+      {#if reachedEdge}<p class="muted edge">{m['logs.start_history']()}</p>{/if}
       {#each view as item (item.key)}
         {#if item.kind === 'divider'}
           <div class="divider" class:suspect={item.variant === 'suspect'} role="separator">

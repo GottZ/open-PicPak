@@ -6,6 +6,7 @@
 import { SseClient, type SseStatus } from './sse.svelte'
 import { session } from './auth.svelte'
 import type { Device } from './api/types'
+import { m } from '../paraglide/messages.js'
 
 export type RosterOp = 'upsert' | 'remove'
 export interface RosterDelta {
@@ -35,7 +36,9 @@ export interface Teardown {
   invalidate: (reason: string) => void
 }
 
-const REVOKED_NOTICE = 'Session ended: the live stream was revoked.'
+// Resolved per-call (not a module-const) so the active locale — set at boot,
+// before this lazily-imported module loads — is always the one in effect.
+const revokedNotice = (): string => m['app.session_revoked']()
 
 /**
  * Dispatch one named SSE event. A terminal `event: error` (re-auth failed /
@@ -69,7 +72,7 @@ export function dispatchEvent(
       break
     case 'error':
       teardown.close()
-      teardown.invalidate(REVOKED_NOTICE)
+      teardown.invalidate(revokedNotice())
       break
   }
 }

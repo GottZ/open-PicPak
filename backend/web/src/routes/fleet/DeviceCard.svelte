@@ -16,6 +16,7 @@
     grafanaLink,
     loadAppConfig,
   } from './fleet'
+  import { m } from '../../paraglide/messages.js'
 
   // Per-device card (Design 22 §4.4): the latest full telemetry row (sentinel-aware n/a), a few fixed-
   // window sparklines, a recent-history table, the brownout/bad-boots reason chips, and the
@@ -59,15 +60,15 @@
 <aside class="card">
   <header>
     <h2 class="mono">{serial}</h2>
-    {#if onclose}<button class="close" onclick={onclose} aria-label="close">✕</button>{/if}
+    {#if onclose}<button class="close" onclick={onclose} aria-label={m['fleet.card.close']()}>✕</button>{/if}
   </header>
 
   {#if card.status === 'loading' || card.status === 'idle'}
-    <p class="muted" aria-busy="true">loading device…</p>
+    <p class="muted" aria-busy="true">{m['fleet.card.loading']()}</p>
   {:else if card.status === 'error'}
     <div class="error" role="alert">
       <p>{card.error?.message}</p>
-      {#if card.error?.requestId}<p class="muted">request {card.error.requestId}</p>{/if}
+      {#if card.error?.requestId}<p class="muted">{m['app.request']({ id: card.error.requestId })}</p>{/if}
     </div>
   {:else if card.data}
     {@const d = card.data}
@@ -89,33 +90,33 @@
       {#each d.fleet.reasons as r (r)}
         {#if d.fleet.has_data}<span class="chip {healthClass(d.fleet.health)}">{r}</span>{/if}
       {/each}
-      {#if d.rollback_brownout}<span class="chip danger">uptime rollback + brownout</span>{/if}
+      {#if d.rollback_brownout}<span class="chip danger">{m['fleet.card.rollback_brownout']()}</span>{/if}
     </div>
 
     {#if d.latest}
       {@const L = d.latest}
       <dl class="grid">
-        <div><dt>version</dt><dd class="mono">{L.running_ver || 'n/a'}</dd></div>
-        <div><dt>battery</dt><dd>{battLabel(L.batt_pct, L.batt_mv)}</dd></div>
-        <div><dt>uptime (ms)</dt><dd>{metricLabel(L.uptime_ms)}</dd></div>
-        <div><dt>boot count</dt><dd>{metricLabel(L.boot_count)}</dd></div>
-        <div><dt>bad boots</dt><dd>{metricLabel(L.bad_boots)}</dd></div>
-        <div><dt>reset reason</dt><dd>{L.reset_reason ?? 'n/a'}</dd></div>
-        <div><dt>usb</dt><dd>{L.usb === null ? 'n/a' : L.usb ? 'yes' : 'no'}</dd></div>
-        <div><dt>diag ota_rr</dt><dd>{metricLabel(L.diag_ota_rr)}</dd></div>
-        <div><dt>diag runstate</dt><dd>{metricLabel(L.diag_runstate)}</dd></div>
-        <div><dt>rssi</dt><dd>{metricLabel(L.extra.rssi, ' dBm')}</dd></div>
-        <div><dt>heap</dt><dd>{metricLabel(L.extra.heap)}</dd></div>
-        <div><dt>temp</dt><dd>{metricLabel(L.extra.temp, '°C')}</dd></div>
+        <div><dt>{m['fleet.card.dt.version']()}</dt><dd class="mono">{L.running_ver || 'n/a'}</dd></div>
+        <div><dt>{m['fleet.card.dt.battery']()}</dt><dd>{battLabel(L.batt_pct, L.batt_mv)}</dd></div>
+        <div><dt>{m['fleet.card.dt.uptime']()}</dt><dd>{metricLabel(L.uptime_ms)}</dd></div>
+        <div><dt>{m['fleet.card.dt.boot_count']()}</dt><dd>{metricLabel(L.boot_count)}</dd></div>
+        <div><dt>{m['fleet.card.dt.bad_boots']()}</dt><dd>{metricLabel(L.bad_boots)}</dd></div>
+        <div><dt>{m['fleet.card.dt.reset_reason']()}</dt><dd>{L.reset_reason ?? 'n/a'}</dd></div>
+        <div><dt>{m['fleet.card.dt.usb']()}</dt><dd>{L.usb === null ? 'n/a' : L.usb ? m['fleet.card.yes']() : m['fleet.card.no']()}</dd></div>
+        <div><dt>{m['fleet.card.dt.diag_ota_rr']()}</dt><dd>{metricLabel(L.diag_ota_rr)}</dd></div>
+        <div><dt>{m['fleet.card.dt.diag_runstate']()}</dt><dd>{metricLabel(L.diag_runstate)}</dd></div>
+        <div><dt>{m['fleet.card.dt.rssi']()}</dt><dd>{metricLabel(L.extra.rssi, ' dBm')}</dd></div>
+        <div><dt>{m['fleet.card.dt.heap']()}</dt><dd>{metricLabel(L.extra.heap)}</dd></div>
+        <div><dt>{m['fleet.card.dt.temp']()}</dt><dd>{metricLabel(L.extra.temp, '°C')}</dd></div>
       </dl>
 
       <div class="sparks">
-        {#each [{ k: 'batt %', pick: (p: HistoryPoint) => p.batt_pct }, { k: 'uptime', pick: (p: HistoryPoint) => p.uptime_ms }, { k: 'bad boots', pick: (p: HistoryPoint) => p.bad_boots }] as s (s.k)}
+        {#each [{ k: 'batt', label: m['fleet.card.spark.batt'](), pick: (p: HistoryPoint) => p.batt_pct }, { k: 'uptime', label: m['fleet.card.spark.uptime'](), pick: (p: HistoryPoint) => p.uptime_ms }, { k: 'bad_boots', label: m['fleet.card.spark.bad_boots'](), pick: (p: HistoryPoint) => p.bad_boots }] as s (s.k)}
           {@const path = sparklinePath(series(d.history, s.pick), SPARK_W, SPARK_H)}
           <div class="spark">
-            <span class="muted sk">{s.k}</span>
+            <span class="muted sk">{s.label}</span>
             {#if path}
-              <svg viewBox="0 0 {SPARK_W} {SPARK_H}" width={SPARK_W} height={SPARK_H} role="img" aria-label="{s.k} trend">
+              <svg viewBox="0 0 {SPARK_W} {SPARK_H}" width={SPARK_W} height={SPARK_H} role="img" aria-label={m['fleet.card.spark_trend']({ label: s.label })}>
                 <path d={path} fill="none" stroke="var(--accent)" stroke-width="1.5" />
               </svg>
             {:else}
@@ -127,7 +128,7 @@
 
       {#if d.history.length > 0}
         <table class="hist">
-          <thead><tr><th>Time</th><th>Batt</th><th>Uptime</th><th>Bad boots</th><th>Reset</th></tr></thead>
+          <thead><tr><th>{m['fleet.card.hist.time']()}</th><th>{m['fleet.card.hist.batt']()}</th><th>{m['fleet.card.hist.uptime']()}</th><th>{m['fleet.card.hist.bad_boots']()}</th><th>{m['fleet.card.hist.reset']()}</th></tr></thead>
           <tbody>
             {#each d.history as p (p.time)}
               <tr>
@@ -142,13 +143,13 @@
         </table>
       {/if}
     {:else}
-      <p class="muted">No telemetry yet for this device — {noDataLabel(d.fleet)}.</p>
+      <p class="muted">{m['fleet.card.no_telemetry']({ reason: noDataLabel(d.fleet) })}</p>
     {/if}
 
     <footer class="foot muted">
-      <span>report: {ageLabel(d.fleet.reg_last_seen, nowMs)}</span>
-      <span>C2: {ageLabel(d.fleet.c2_last_seen, nowMs)}</span>
-      {#if link}<a class="grafana" href={link} target="_blank" rel="noopener noreferrer">deep dive → Grafana</a>{/if}
+      <span>{m['fleet.card.report']({ age: ageLabel(d.fleet.reg_last_seen, nowMs) })}</span>
+      <span>{m['fleet.card.c2']({ age: ageLabel(d.fleet.c2_last_seen, nowMs) })}</span>
+      {#if link}<a class="grafana" href={link} target="_blank" rel="noopener noreferrer">{m['fleet.card.grafana']()}</a>{/if}
     </footer>
   {/if}
 </aside>

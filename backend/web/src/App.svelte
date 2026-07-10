@@ -8,14 +8,14 @@
   import Toaster from './lib/Toaster.svelte'
   import ConnIndicator from './lib/ConnIndicator.svelte'
   import { m } from './paraglide/messages.js'
-  import { locales, localeLabels, activeLocale, switchLocale, type Locale } from './lib/i18n'
+  import { locales, localeLabels, activeLocale, switchLocale, navLabel, type Locale } from './lib/i18n'
 
   onMount(() => void session.restore())
 </script>
 
 {#if session.restoring}
   <div class="boot" aria-busy="true">
-    <p>restoring session…</p>
+    <p>{m['app.restoring']()}</p>
   </div>
 {:else if !session.active}
   <Login />
@@ -25,7 +25,7 @@
       <span class="brand">open-picpak</span>
       <nav>
         {#each AREAS as a (a.path)}
-          <a href={a.path} {@attach isActiveLink()}>{a.title}</a>
+          <a href={a.path} {@attach isActiveLink()}>{navLabel(a.path)}</a>
         {/each}
       </nav>
       <div class="identity">
@@ -43,10 +43,10 @@
         <!-- Read-only degradation (D19.6): the badge is comfort; the server's
              requireAdmin (design 17 §4.2) is the truth. -->
         <span class="badge" class:admin={session.is_admin}>
-          {session.is_admin ? 'admin' : 'read-only'}
+          {session.is_admin ? m['app.role_admin']() : m['app.role_readonly']()}
         </span>
         <span class="key-label">{session.label}</span>
-        <button class="logout" onclick={() => session.logout()}>sign out</button>
+        <button class="logout" onclick={() => session.logout()}>{m['app.sign_out']()}</button>
       </div>
     </header>
     <main>

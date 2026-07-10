@@ -4,6 +4,7 @@
 // this is the pre-flight, never the gate.
 
 import type { TriggerType } from './types'
+import { m } from '../../paraglide/messages.js'
 
 /** The trigger vocabulary (0009 CHECK) — the create form's radio/select options, in author order. */
 export const TRIGGER_TYPES: readonly TriggerType[] = ['render', 'schedule', 'webhook']
@@ -33,10 +34,10 @@ export interface NewFunctionDraft {
  */
 export function newFunctionError(draft: NewFunctionDraft): string | null {
   const name = draft.name.trim()
-  if (name === '') return 'name is required'
-  if (!validName(name)) return 'name must match ^[a-z0-9][a-z0-9._-]{0,127}$'
-  if (draft.source.trim() === '') return 'source is required'
-  if (!TRIGGER_TYPES.includes(draft.triggerType)) return 'trigger type must be render, schedule or webhook'
+  if (name === '') return m['faas.err.name_required']()
+  if (!validName(name)) return m['faas.err.name_charset']()
+  if (draft.source.trim() === '') return m['faas.err.source_required']()
+  if (!TRIGGER_TYPES.includes(draft.triggerType)) return m['faas.err.trigger_type']()
   return null
 }
 
@@ -45,6 +46,7 @@ export function newFunctionError(draft: NewFunctionDraft): string | null {
  * will affect. Pluralized; zero is spelled out so an unbound function reads clearly.
  */
 export function blastRadiusLabel(count: number): string {
-  if (count <= 0) return 'no devices'
-  return `${count} device${count === 1 ? '' : 's'}`
+  if (count <= 0) return m['faas.blast_none']()
+  if (count === 1) return m['faas.blast_one']()
+  return m['faas.blast_many']({ count })
 }

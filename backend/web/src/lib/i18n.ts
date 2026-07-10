@@ -12,8 +12,51 @@ import {
   overwriteGetLocale,
   type Locale,
 } from '../paraglide/runtime.js'
+import { m } from '../paraglide/messages.js'
 
 export { locales, type Locale }
+
+/**
+ * Localized nav/area label for an operator area path (routes/index.ts AREAS).
+ * The route table stays a pure, node-tested data module (its title is the stable
+ * identifier); the display string is resolved here so the shell nav and the
+ * AreaPlaceholder render the same translated label. Unknown paths fall through
+ * to the raw path (never throws).
+ */
+export function navLabel(path: string): string {
+  switch (path) {
+    case '/fleet':
+      return m['nav.fleet']()
+    case '/ota':
+      return m['nav.ota']()
+    case '/logs':
+      return m['nav.logs']()
+    case '/berry':
+      return m['nav.berry']()
+    case '/functions':
+      return m['nav.functions']()
+    case '/onboard':
+      return m['nav.onboard']()
+    case '/settings':
+      return m['nav.settings']()
+    case '/media':
+      return m['nav.media']()
+    default:
+      return path
+  }
+}
+
+/** Localized "ships in <doc>" placeholder copy for the not-yet-built areas. */
+export function areaShips(path: string): string {
+  switch (path) {
+    case '/ota':
+      return m['nav.ota.ships']()
+    case '/settings':
+      return m['nav.settings.ships']()
+    default:
+      return ''
+  }
+}
 
 const STORAGE_KEY = 'picpak.locale'
 // A navigator miss falls back to English, not to the (German) baseLocale (§2).
