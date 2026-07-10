@@ -68,6 +68,8 @@ type Summary struct {
 
 // CreateParams is a new function. WebhookTokenSHA is set only for webhook triggers
 // (the plaintext token is generated + shown once by the admin handler, D24.13); nil otherwise.
+// TemplateID is the provenance stamp when the function was minted from a template /apply (A30 W5,
+// §3.2); nil for a hand-authored function → NULL (the column is ON DELETE SET NULL).
 type CreateParams struct {
 	Name            string
 	Source          string
@@ -76,6 +78,7 @@ type CreateParams struct {
 	SecretBindings  []string
 	EgressAllow     []string
 	WebhookTokenSHA []byte
+	TemplateID      *int64
 }
 
 // UpdateParams updates the mutable body; the caller bumps version via Update.

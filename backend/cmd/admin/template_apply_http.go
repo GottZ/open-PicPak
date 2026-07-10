@@ -12,6 +12,7 @@ import (
 	"github.com/open-picpak/backend/internal/adminhttp"
 	"github.com/open-picpak/backend/internal/commandstore"
 	"github.com/open-picpak/backend/internal/devicestore"
+	"github.com/open-picpak/backend/internal/faasstore"
 	"github.com/open-picpak/backend/internal/templatestore"
 )
 
@@ -55,8 +56,10 @@ func (h templateHandlers) apply(w http.ResponseWriter, r *http.Request) {
 	switch t.Kind {
 	case templatestore.KindBerrySnippet:
 		h.applyBerry(w, r, t, body)
+	case templatestore.KindRenderFn:
+		h.applyRenderFn(w, r, t, body)
 	default:
-		// render_fn arrives in W5; playlist_preset belongs to A29 (§9). Both are a clean 422, not a panic.
+		// playlist_preset is the Playlist axis's materialisation (A29, §9) — a clean 422 here, not a panic.
 		adminhttp.WriteErr(w, r, http.StatusUnprocessableEntity, "unsupported_kind",
 			"apply is not available for kind "+t.Kind)
 	}
@@ -117,6 +120,110 @@ func (h templateHandlers) applyBerry(w http.ResponseWriter, r *http.Request, t *
 		results = append(results, map[string]any{"serial": serial, "seq": seq})
 	}
 	adminhttp.WriteOK(w, r, map[string]any{"kind": t.Kind, "enqueued": results})
+}
+
+// applyRenderFn mints a faas_functions row from a render_fn template (§4.3). The substituted source, the
+// template's trust profile (egress_allow / secret_bindings / trigger_config) and a template_id provenance
+// stamp all flow into faasstore.Create — without the trust-profile passthrough the minted function would
+// fetch with an empty allow-list and the egress proxy would hard-block it (a dead Deliverable-4 function).
+// The function name is repeatable at fleet scale: an explicit fn_name collides as 409 function_name_taken,
+// a derived name ({template}-{param-hash}) retries with a numeric suffix so a second apply never dies on the
+// name UNIQUE. Fleet semantics are n:1 — ONE function, then a bind per target serial (no "*" fanout, the
+// render binding has no fleet row, §4.3).
+func (h templateHandlers) applyRenderFn(w http.ResponseWriter, r *http.Request, t *templatestore.Template, body applyBody) {
+	params, perr := decodeParams(body.Params)
+	if perr != nil {
+		adminhttp.WriteErr(w, r, http.StatusBadRequest, "bad_request", "params must be a JSON object")
+		return
+	}
+	source := substitute(t.Source, params)
+
+	explicit := body.FnName != ""
+	base := body.FnName
+	if !explicit {
+		base = deriveFnName(t.Name, params)
+	}
+	if !faasstore.ValidName(base) {
+		adminhttp.WriteErr(w, r, http.StatusUnprocessableEntity, "invalid_name",
+			`fn_name must match ^[a-z0-9][a-z0-9._-]{0,127}$ (the reserved 'builtin/' namespace is rejected by the charset)`)
+		return
+	}
+
+	// Bind targets are explicit serials (never "*": the render binding has no fleet row). Validate up front
+	// so a bad serial fails before a function is minted.
+	if body.Bind {
+		for _, serial := range body.TargetSerials {
+			if !devicestore.ValidSerial(serial) {
+				adminhttp.WriteErr(w, r, http.StatusUnprocessableEntity, "invalid_serial",
+					"serial must be a valid device serial (render_fn bind has no '*' fanout): "+serial)
+				return
+			}
+		}
+	}
+
+	newID, name, done := h.createRenderFn(w, r, t, source, base, explicit)
+	if done {
+		return
+	}
+
+	serials := []string{}
+	if body.Bind {
+		for _, serial := range body.TargetSerials {
+			if err := faasstore.BindDevice(r.Context(), h.pool, serial, newID); err != nil {
+				adminhttp.WriteErr(w, r, http.StatusInternalServerError, "internal", "bind failed for "+serial)
+				return
+			}
+			serials = append(serials, serial)
+		}
+	}
+	adminhttp.WriteOK(w, r, map[string]any{"kind": t.Kind, "id": newID, "name": name, "serials": serials})
+}
+
+// createRenderFn inserts the function and resolves a name collision. An explicit fn_name that collides is a
+// terminal 409 function_name_taken (the operator chose it). A derived name retries with a -2/-3… suffix so a
+// repeat apply of the same template mints a fresh function instead of dying on the name UNIQUE. It writes
+// the error response and returns done=true on failure.
+func (h templateHandlers) createRenderFn(w http.ResponseWriter, r *http.Request, t *templatestore.Template, source, base string, explicit bool) (int64, string, bool) {
+	for attempt := 0; attempt < 64; attempt++ {
+		name := base
+		if attempt > 0 {
+			name = fmt.Sprintf("%s-%d", base, attempt+1) // -2, -3, …
+		}
+		id, err := faasstore.Create(r.Context(), h.pool, faasstore.CreateParams{
+			Name: name, Source: source,
+			TriggerConfig: t.TriggerConfig, SecretBindings: t.SecretBindings, EgressAllow: t.EgressAllow,
+			TemplateID: &t.ID,
+		})
+		if err == nil {
+			return id, name, false
+		}
+		if faasstore.IsUniqueViolation(err) {
+			if explicit {
+				adminhttp.WriteErr(w, r, http.StatusConflict, "function_name_taken",
+					"a function with that name already exists")
+				return 0, "", true
+			}
+			continue // derived name: try the next suffix
+		}
+		adminhttp.WriteErr(w, r, http.StatusInternalServerError, "internal", "function create failed")
+		return 0, "", true
+	}
+	adminhttp.WriteErr(w, r, http.StatusConflict, "function_name_taken",
+		"could not derive a free function name after 64 attempts")
+	return 0, "", true
+}
+
+// deriveFnName builds {template-name without the 'builtin/' prefix}-{param-hash} (§4.3). The hash keeps the
+// name stable for a given param set and short enough to stay inside the 128-char charset.
+func deriveFnName(templateName string, params map[string]any) string {
+	base := strings.TrimPrefix(templateName, "builtin/")
+	canon, _ := json.Marshal(sortedParams(params))
+	sum := sha256.Sum256(canon)
+	hash := fmt.Sprintf("%x", sum[:4]) // 8 hex chars
+	if max := 128 - 1 - len(hash); len(base) > max {
+		base = base[:max]
+	}
+	return base + "-" + hash
 }
 
 // --- substitution + idempotency helpers (§4.4 basic mechanic; full schema validation lands in W6) ---

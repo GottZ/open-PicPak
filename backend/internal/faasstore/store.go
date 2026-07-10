@@ -34,15 +34,16 @@ func IsUniqueViolation(err error) bool {
 const functionCols = `id, name, source, version, trigger_type, trigger_config, secret_bindings, egress_allow, enabled, created_at, updated_at`
 
 // Create inserts a function (enabled=false, version=1 by default) and returns its id.
-// A duplicate name surfaces as a unique violation (IsUniqueViolation → 409).
+// A duplicate name surfaces as a unique violation (IsUniqueViolation → 409). TemplateID (nil for a
+// hand-authored function) stamps the template a /apply minted it from (§3.2).
 func Create(ctx context.Context, q Querier, p CreateParams) (int64, error) {
 	var id int64
 	err := q.QueryRow(ctx, `
-		INSERT INTO faas_functions (name, source, trigger_type, trigger_config, secret_bindings, egress_allow, webhook_token_sha256)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO faas_functions (name, source, trigger_type, trigger_config, secret_bindings, egress_allow, webhook_token_sha256, template_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id`,
 		p.Name, p.Source, string(triggerOrDefault(p.TriggerType)), coalesceJSON(p.TriggerConfig),
-		coalesceSlice(p.SecretBindings), coalesceSlice(p.EgressAllow), p.WebhookTokenSHA,
+		coalesceSlice(p.SecretBindings), coalesceSlice(p.EgressAllow), p.WebhookTokenSHA, nullableInt64(p.TemplateID),
 	).Scan(&id)
 	return id, err
 }
@@ -313,6 +314,14 @@ func coalesceSlice(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// nullableInt64 passes a *int64 through as an int64 or SQL NULL (template_id is nullable / SET NULL).
+func nullableInt64(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
 }
 
 func triggerOrDefault(t TriggerType) TriggerType {

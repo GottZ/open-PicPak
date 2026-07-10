@@ -123,24 +123,150 @@ func TestTemplateApplyBerryDedup_DB(t *testing.T) {
 	}
 }
 
-// T-apply-wrong-kind — applying to a non-berry kind on this wave is a defined 422 unsupported_kind, never a
-// panic path (§5.2). render_fn lands in W5; playlist_preset is A29's materialisation (§9). Red: a dispatch
-// that falls through / type-asserts a nil branch panics or 500s instead of a clean 422.
+// T-apply-wrong-kind — applying a playlist_preset is a defined 422 unsupported_kind (A29 owns its
+// materialisation, §9), never a panic path (§5.2). render_fn and berry_snippet are handled (W4/W5). Red: a
+// dispatch that falls through / type-asserts a nil branch panics or 500s instead of a clean 422.
 func TestTemplateApplyWrongKind_DB(t *testing.T) {
 	pool := dbPool(t)
 	seedOperator(t, pool, "admin-tok", true)
 	h := testTemplateHandler(pool)
 
-	render := createTemplate(t, h, `{"name":"wk-render","kind":"render_fn","source":"export default async()=>({})"}`)
 	preset := createTemplate(t, h, `{"name":"wk-preset","kind":"playlist_preset","source":"{}"}`)
-	for _, id := range []int64{render, preset} {
-		w := do(h, "POST", "/api/templates/"+itoa(id)+"/apply", "admin-tok",
-			strings.NewReader(`{"target_serials":["*"]}`), "application/json")
-		if w.Code != http.StatusUnprocessableEntity {
-			t.Errorf("apply id %d (non-berry) = %d, want 422 (%s)", id, w.Code, truncBody(w.Body.String()))
-		}
-		if code, _ := jsonBody(t, w)["code"].(string); code != "unsupported_kind" {
-			t.Errorf("apply id %d code = %q, want unsupported_kind", id, code)
-		}
+	w := do(h, "POST", "/api/templates/"+itoa(preset)+"/apply", "admin-tok",
+		strings.NewReader(`{"target_serials":["*"]}`), "application/json")
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("apply playlist_preset = %d, want 422 (%s)", w.Code, truncBody(w.Body.String()))
+	}
+	if code, _ := jsonBody(t, w)["code"].(string); code != "unsupported_kind" {
+		t.Errorf("apply playlist_preset code = %q, want unsupported_kind", code)
+	}
+}
+
+// T-apply-render-stamp — a render_fn apply mints a faas_functions row that carries the template_id
+// provenance stamp AND the three trust-profile fields (egress_allow / secret_bindings / trigger_config)
+// copied from the template row, source-substituted, enabled=false. Asserted on the DB row. Red: without the
+// trust-profile passthrough the function fetches with an empty allow-list and the egress proxy hard-blocks
+// it (a dead Deliverable-4 function); without the stamp its provenance is lost.
+func TestTemplateApplyRenderStamp_DB(t *testing.T) {
+	pool := dbPool(t)
+	seedOperator(t, pool, "admin-tok", true)
+	h := testTemplateHandler(pool)
+
+	id := createTemplate(t, h, `{"name":"stamp-render","kind":"render_fn","source":"fetch({{url}})",`+
+		`"egress_allow":["example.com"],"secret_bindings":["API_KEY"],"trigger_config":{"mode":"sync","ttl_s":60}}`)
+	w := do(h, "POST", "/api/templates/"+itoa(id)+"/apply", "admin-tok",
+		strings.NewReader(`{"params":{"url":"example.com/a"}}`), "application/json")
+	if w.Code != http.StatusOK {
+		t.Fatalf("render apply = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	fnID := int64(jsonBody(t, w)["id"].(float64))
+
+	var tmplID *int64
+	var egress, secrets []string
+	var trigger, source string
+	var enabled bool
+	if err := pool.QueryRow(context.Background(),
+		`SELECT template_id, egress_allow, secret_bindings, trigger_config::text, source, enabled
+		   FROM faas_functions WHERE id = $1`, fnID).
+		Scan(&tmplID, &egress, &secrets, &trigger, &source, &enabled); err != nil {
+		t.Fatalf("read minted function: %v", err)
+	}
+	if tmplID == nil || *tmplID != id {
+		t.Errorf("template_id stamp = %v, want %d", tmplID, id)
+	}
+	if len(egress) != 1 || egress[0] != "example.com" {
+		t.Errorf("egress_allow = %v, want [example.com]", egress)
+	}
+	if len(secrets) != 1 || secrets[0] != "API_KEY" {
+		t.Errorf("secret_bindings = %v, want [API_KEY]", secrets)
+	}
+	if !strings.Contains(trigger, "sync") { // JSONB re-serialises with spaces; the value is what matters
+		t.Errorf("trigger_config = %q, want it to carry the template's sync config", trigger)
+	}
+	if source != "fetch(example.com/a)" {
+		t.Errorf("source = %q, want the substituted fetch(example.com/a)", source)
+	}
+	if enabled {
+		t.Errorf("minted function enabled=true, want false (operator activates deliberately)")
+	}
+}
+
+// T-apply-render-collision — repeatability at fleet scale: a derived-name apply of the SAME template twice
+// mints two distinct functions (the second gets a -2 suffix via the collision retry), while an explicit
+// fn_name that collides is a terminal 409 function_name_taken. Red: without the retry the second derived
+// apply dies on the name UNIQUE (409) instead of minting a fresh function.
+func TestTemplateApplyRenderCollision_DB(t *testing.T) {
+	pool := dbPool(t)
+	seedOperator(t, pool, "admin-tok", true)
+	h := testTemplateHandler(pool)
+
+	id := createTemplate(t, h, `{"name":"coll-render","kind":"render_fn","source":"export default async()=>({})"}`)
+	path := "/api/templates/" + itoa(id) + "/apply"
+
+	w1 := do(h, "POST", path, "admin-tok", strings.NewReader(`{}`), "application/json")
+	w2 := do(h, "POST", path, "admin-tok", strings.NewReader(`{}`), "application/json")
+	if w1.Code != http.StatusOK || w2.Code != http.StatusOK {
+		t.Fatalf("derived double-apply = %d / %d, want 200 / 200 (%s)", w1.Code, w2.Code, w2.Body.String())
+	}
+	n1, _ := jsonBody(t, w1)["name"].(string)
+	n2, _ := jsonBody(t, w2)["name"].(string)
+	if n1 == n2 {
+		t.Errorf("derived names collided: both %q (retry did not fire)", n1)
+	}
+	var count int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM faas_functions WHERE template_id = $1`, id).Scan(&count); err != nil {
+		t.Fatalf("count functions: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("template minted %d functions, want 2", count)
+	}
+
+	// explicit fn_name collision is terminal 409.
+	e1 := do(h, "POST", path, "admin-tok", strings.NewReader(`{"fn_name":"explicit-fn"}`), "application/json")
+	if e1.Code != http.StatusOK {
+		t.Fatalf("explicit apply = %d, want 200 (%s)", e1.Code, e1.Body.String())
+	}
+	e2 := do(h, "POST", path, "admin-tok", strings.NewReader(`{"fn_name":"explicit-fn"}`), "application/json")
+	if e2.Code != http.StatusConflict {
+		t.Errorf("explicit name collision = %d, want 409 (%s)", e2.Code, e2.Body.String())
+	}
+	if code, _ := jsonBody(t, e2)["code"].(string); code != "function_name_taken" {
+		t.Errorf("explicit collision code = %q, want function_name_taken", code)
+	}
+}
+
+// T-apply-render-bind-n1 — the n:1 fleet bind: applying with bind + N serials mints ONE function and binds
+// all N serials to it (the render binding has no "*" fanout, §4.3). Red: a per-serial function mint would
+// leave N functions, or a missing bind loop would leave 0 bindings.
+func TestTemplateApplyRenderBindN1_DB(t *testing.T) {
+	pool := dbPool(t)
+	seedOperator(t, pool, "admin-tok", true)
+	h := testTemplateHandler(pool)
+	mustExec(t, pool, `INSERT INTO devices (serial, channel) VALUES ('bn-a','stable'),('bn-b','stable'),('bn-c','stable')`)
+
+	id := createTemplate(t, h, `{"name":"bind-render","kind":"render_fn","source":"export default async()=>({})"}`)
+	w := do(h, "POST", "/api/templates/"+itoa(id)+"/apply", "admin-tok",
+		strings.NewReader(`{"bind":true,"target_serials":["bn-a","bn-b","bn-c"]}`), "application/json")
+	if w.Code != http.StatusOK {
+		t.Fatalf("bind apply = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	fnID := int64(jsonBody(t, w)["id"].(float64))
+
+	var funcs int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM faas_functions WHERE template_id = $1`, id).Scan(&funcs); err != nil {
+		t.Fatalf("count functions: %v", err)
+	}
+	if funcs != 1 {
+		t.Errorf("n:1 apply minted %d functions, want 1", funcs)
+	}
+	var binds int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM device_render_binding WHERE function_id = $1`, fnID).Scan(&binds); err != nil {
+		t.Fatalf("count bindings: %v", err)
+	}
+	if binds != 3 {
+		t.Errorf("n:1 apply produced %d bindings, want 3", binds)
 	}
 }
