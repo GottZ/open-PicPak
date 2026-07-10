@@ -40,6 +40,7 @@
   import { loadDraft, saveDraft } from '../../lib/draft'
   import TemplatePicker from '../../lib/templates/TemplatePicker.svelte'
   import SimulatorPanel from '../../lib/sim/SimulatorPanel.svelte'
+  import C2TracePanel from '../../lib/sim/C2TracePanel.svelte'
 
   // Berry C2 command editor (Design 23, W2) — author + lint + autocomplete ONLY. No enqueue ships here
   // (W3) and no feedback (W4): this is the author-safe surface, useful even to a read-only operator as a
@@ -315,6 +316,8 @@
           </aside>
         {/if}
       </div>
+
+      <C2TracePanel {script} {manifest} />
 
       <SimulatorPanel />
 
