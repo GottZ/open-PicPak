@@ -27,6 +27,7 @@ import (
 	"github.com/open-picpak/backend/internal/adminhttp"
 	"github.com/open-picpak/backend/internal/sealbox"
 	"github.com/open-picpak/backend/internal/secrets"
+	"github.com/open-picpak/backend/internal/templatestore"
 	"github.com/open-picpak/backend/web"
 )
 
@@ -95,6 +96,18 @@ func runServer() {
 			log.Printf("secrets: ROTATION INCOMPLETE — keep SECRETS_KEY_PREV set; %d secret(s) not re-sealed: %v",
 				len(stranded), stranded)
 		}
+	}
+
+	// Prefab template catalog (A30 W1): idempotently upsert the embedded builtins into `templates`.
+	// The IS-DISTINCT-FROM guard makes a restart on an unchanged catalog a true no-op (no version
+	// bump), and the whole loop runs under an advisory lock so concurrent replica boots serialise.
+	// Fail-open: a seed error still serves the rest of the plane (parity the secrets sweep) — a
+	// broken embedded catalog would already have panicked at build/embed time.
+	if res, terr := templatestore.SeedBuiltins(ctx, pool); terr != nil {
+		log.Printf("templatestore: WARN builtin seed failed, prefab catalog may be stale: %v", terr)
+	} else {
+		log.Printf("templatestore: builtin seed ok (inserted=%d updated=%d unchanged=%d)",
+			res.Inserted, res.Updated, res.Unchanged)
 	}
 
 	// Operator zone binds to loopback/VPN by default — NEVER the public ingest interface. TLS

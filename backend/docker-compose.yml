@@ -74,6 +74,8 @@ services:
       - "-f"
       - /migrations/0015_operator_keys_expiry.up.sql
       - "-f"
+      - /migrations/0016_templates.up.sql
+      - "-f"
       - /migrations/0017_command_dedup.up.sql
     volumes:
       - ./migrations:/migrations:ro

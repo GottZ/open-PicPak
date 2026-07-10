@@ -1,0 +1,34 @@
+[
+  {
+    "name": "builtin/external-image",
+    "kind": "render_fn",
+    "source_file": "external-image.js",
+    "params": [
+      { "name": "url", "label": "Image URL", "type": "url", "required": true }
+    ],
+    "egress_allow": ["images.example.com:443"],
+    "secret_bindings": [],
+    "trigger_config": { "mode": "sync", "ttl_s": 900 }
+  },
+  {
+    "name": "builtin/clock",
+    "kind": "render_fn",
+    "source_file": "clock.js",
+    "params": [],
+    "egress_allow": [],
+    "secret_bindings": [],
+    "trigger_config": { "mode": "sync", "ttl_s": 60 }
+  },
+  {
+    "name": "builtin/wifi-preset",
+    "kind": "berry_snippet",
+    "source_file": "wifi-preset.be",
+    "params": [
+      { "name": "ssid", "label": "Wi-Fi SSID", "type": "string", "required": true },
+      { "name": "pass", "label": "Passphrase", "type": "string", "required": true }
+    ],
+    "egress_allow": [],
+    "secret_bindings": [],
+    "trigger_config": null
+  }
+]
