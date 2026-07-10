@@ -24,7 +24,7 @@
     type TriggerFields,
   } from '../../lib/faas/config'
   import { TRIGGER_TYPES, newFunctionError, blastRadiusLabel, type NewFunctionDraft } from '../../lib/faas/functions'
-  import { decodePacked, rawRGBToRGBA, W as PANEL_W, H as PANEL_H } from '../../lib/faas/bwrydecode'
+  import FramePreview from '../../lib/media/FramePreview.svelte'
   import { parseTestFrame, buildTestRunBody, type TestRunResult } from '../../lib/faas/testrun'
   import type {
     TriggerType,
@@ -357,16 +357,6 @@
   let testing = $state(false)
   let testResult = $state<TestRunResult | null>(null)
   let testError = $state<string | null>(null)
-  let panelCanvas = $state<HTMLCanvasElement | null>(null)
-  let rawCanvas = $state<HTMLCanvasElement | null>(null)
-
-  // Build a 400×300 ImageData from an RGBA buffer via .data.set — avoids the ImageData(data,…) constructor
-  // overload whose lib type rejects a Uint8ClampedArray<ArrayBufferLike> (SharedArrayBuffer union).
-  function toImageData(rgba: Uint8ClampedArray): ImageData {
-    const img = new ImageData(PANEL_W, PANEL_H)
-    img.data.set(rgba)
-    return img
-  }
 
   function payloadValue(): unknown {
     if (!detail || detail.function.trigger_type !== 'webhook' || testPayload.trim() === '') return undefined
@@ -420,21 +410,6 @@
       testing = false
     }
   }
-
-  // paint the framed result onto the panel (BWRY decode) + raw (pre-pack RGB) canvases when both the
-  // result and the canvas nodes exist. ImageData/putImageData are browser-only (never runs in vitest).
-  $effect(() => {
-    const r = testResult
-    if (!r) return
-    if (panelCanvas) {
-      const c = panelCanvas.getContext('2d')
-      if (c) c.putImageData(toImageData(decodePacked(r.packed)), 0, 0)
-    }
-    if (rawCanvas && r.raw) {
-      const c = rawCanvas.getContext('2d')
-      if (c) c.putImageData(toImageData(rawRGBToRGBA(r.raw)), 0, 0)
-    }
-  })
 </script>
 
 <section class="functions">
@@ -770,18 +745,12 @@
                       {#if m.err}
                         <p class="inline-err">error [{m.err.kind}]: {m.err.msg}</p>
                       {/if}
-                      <div class="previews">
-                        <figure>
-                          <figcaption>panel (400×300 BWRY)</figcaption>
-                          <canvas bind:this={panelCanvas} width={PANEL_W} height={PANEL_H}></canvas>
-                        </figure>
-                        {#if m.raw_fmt === 'rgb'}
-                          <figure>
-                            <figcaption>raw render (what you drew)</figcaption>
-                            <canvas bind:this={rawCanvas} width={PANEL_W} height={PANEL_H}></canvas>
-                          </figure>
-                        {/if}
-                      </div>
+                      <FramePreview
+                        packed={testResult.packed}
+                        raw={m.raw_fmt === 'rgb' ? testResult.raw : null}
+                        alt="panel (400×300 BWRY)"
+                        rawAlt="raw render (what you drew)"
+                      />
                       {#if m.log.length > 0}
                         <div class="log">
                           <span class="flabel">worker log</span>
@@ -1225,31 +1194,6 @@
   .badge.err {
     color: var(--danger);
     border-color: var(--danger);
-  }
-  .previews {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-  }
-  .previews figure {
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-  .previews figcaption {
-    font-size: 0.72rem;
-    color: var(--fg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .previews canvas {
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    width: 400px;
-    max-width: 100%;
-    height: auto;
-    image-rendering: pixelated;
   }
   .log ul {
     list-style: none;
