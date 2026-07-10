@@ -2,6 +2,17 @@
   {
     "name": "builtin/external-image",
     "kind": "render_fn",
+    "description": {
+      "de": "Lädt ein Bild von einer URL und zeigt es auf dem Display.",
+      "en": "Fetches an image from a URL and renders it to the display.",
+      "fr": "Récupère une image depuis une URL et l'affiche à l'écran.",
+      "it": "Recupera un'immagine da un URL e la mostra sul display.",
+      "es": "Obtiene una imagen desde una URL y la muestra en la pantalla.",
+      "ru": "Загружает изображение по URL и выводит его на экран.",
+      "zh": "从 URL 获取图像并显示在屏幕上。",
+      "ko": "URL에서 이미지를 가져와 화면에 표시합니다.",
+      "ja": "URL から画像を取得してディスプレイに表示します。"
+    },
     "source_file": "external-image.js",
     "params": [
       { "name": "url", "label": "Image URL", "type": "url", "required": true }
@@ -13,6 +24,17 @@
   {
     "name": "builtin/clock",
     "kind": "render_fn",
+    "description": {
+      "de": "Zeigt die aktuelle Uhrzeit auf dem Display.",
+      "en": "Shows the current time on the display.",
+      "fr": "Affiche l'heure actuelle à l'écran.",
+      "it": "Mostra l'ora corrente sul display.",
+      "es": "Muestra la hora actual en la pantalla.",
+      "ru": "Показывает текущее время на экране.",
+      "zh": "在屏幕上显示当前时间。",
+      "ko": "현재 시간을 화면에 표시합니다.",
+      "ja": "現在の時刻をディスプレイに表示します。"
+    },
     "source_file": "clock.js",
     "params": [],
     "egress_allow": [],
@@ -22,6 +44,17 @@
   {
     "name": "builtin/wifi-preset",
     "kind": "berry_snippet",
+    "description": {
+      "de": "Hinterlegt WLAN-Zugangsdaten (SSID und Passwort) auf dem Gerät.",
+      "en": "Provisions Wi-Fi credentials (SSID and passphrase) onto the device.",
+      "fr": "Enregistre les identifiants Wi-Fi (SSID et mot de passe) sur l'appareil.",
+      "it": "Configura le credenziali Wi-Fi (SSID e password) sul dispositivo.",
+      "es": "Configura las credenciales Wi-Fi (SSID y contraseña) en el dispositivo.",
+      "ru": "Задаёт учётные данные Wi-Fi (SSID и пароль) на устройстве.",
+      "zh": "在设备上配置 Wi-Fi 凭据（SSID 和密码）。",
+      "ko": "기기에 Wi-Fi 자격 증명(SSID 및 비밀번호)을 설정합니다.",
+      "ja": "デバイスに Wi-Fi 認証情報（SSID とパスフレーズ）を設定します。"
+    },
     "source_file": "wifi-preset.be",
     "params": [
       { "name": "ssid", "label": "Wi-Fi SSID", "type": "string", "required": true },

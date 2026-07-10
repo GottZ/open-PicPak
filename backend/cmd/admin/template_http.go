@@ -76,13 +76,14 @@ func (h templateHandlers) get(w http.ResponseWriter, r *http.Request) {
 // nothing until an /apply wave (W5) reaches faasstore.Create with them.
 func (h templateHandlers) create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name           string          `json:"name"`
-		Kind           string          `json:"kind"`
-		Source         string          `json:"source"`
-		Params         json.RawMessage `json:"params"`
-		EgressAllow    []string        `json:"egress_allow"`
-		SecretBindings []string        `json:"secret_bindings"`
-		TriggerConfig  json.RawMessage `json:"trigger_config"`
+		Name           string            `json:"name"`
+		Kind           string            `json:"kind"`
+		Description    map[string]string `json:"description"`
+		Source         string            `json:"source"`
+		Params         json.RawMessage   `json:"params"`
+		EgressAllow    []string          `json:"egress_allow"`
+		SecretBindings []string          `json:"secret_bindings"`
+		TriggerConfig  json.RawMessage   `json:"trigger_config"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		adminhttp.WriteErr(w, r, http.StatusBadRequest, "bad_request", "malformed JSON body")
@@ -93,7 +94,7 @@ func (h templateHandlers) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, err := templatestore.Create(r.Context(), h.pool, templatestore.CreateParams{
-		Name: body.Name, Kind: body.Kind, Source: body.Source, Params: body.Params,
+		Name: body.Name, Kind: body.Kind, Description: body.Description, Source: body.Source, Params: body.Params,
 		EgressAllow: body.EgressAllow, SecretBindings: body.SecretBindings, TriggerConfig: body.TriggerConfig,
 	})
 	if err != nil {
@@ -121,11 +122,12 @@ func (h templateHandlers) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Source         string          `json:"source"`
-		Params         json.RawMessage `json:"params"`
-		EgressAllow    []string        `json:"egress_allow"`
-		SecretBindings []string        `json:"secret_bindings"`
-		TriggerConfig  json.RawMessage `json:"trigger_config"`
+		Description    map[string]string `json:"description"`
+		Source         string            `json:"source"`
+		Params         json.RawMessage   `json:"params"`
+		EgressAllow    []string          `json:"egress_allow"`
+		SecretBindings []string          `json:"secret_bindings"`
+		TriggerConfig  json.RawMessage   `json:"trigger_config"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		adminhttp.WriteErr(w, r, http.StatusBadRequest, "bad_request", "malformed JSON body")
@@ -136,7 +138,7 @@ func (h templateHandlers) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	found, err := templatestore.Update(r.Context(), h.pool, id, templatestore.UpdateParams{
-		Source: body.Source, Params: body.Params, EgressAllow: body.EgressAllow,
+		Description: body.Description, Source: body.Source, Params: body.Params, EgressAllow: body.EgressAllow,
 		SecretBindings: body.SecretBindings, TriggerConfig: body.TriggerConfig,
 	})
 	if errors.Is(err, templatestore.ErrScriptTooLong) {

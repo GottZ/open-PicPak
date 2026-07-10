@@ -53,34 +53,40 @@ func IsUniqueViolation(err error) bool {
 
 // Template is the full template row (source + params + the render_fn trust profile).
 type Template struct {
-	ID             int64           `json:"id"`
-	Name           string          `json:"name"`
-	Kind           string          `json:"kind"`
-	Source         string          `json:"source"`
-	Params         json.RawMessage `json:"params"`
-	EgressAllow    []string        `json:"egress_allow"`
-	SecretBindings []string        `json:"secret_bindings"`
-	TriggerConfig  json.RawMessage `json:"trigger_config,omitempty"`
-	Builtin        bool            `json:"builtin"`
-	Version        int             `json:"version"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	// Description is the multilingual "what does this template do" copy: a locale→text map
+	// ({de,en,fr,…}). JSONB on the row; the SPA resolves one string via localizedDescription
+	// (locale→en→de→first fallback). Never SQL NULL — an empty map is the schema default.
+	Description    map[string]string `json:"description"`
+	Source         string            `json:"source"`
+	Params         json.RawMessage   `json:"params"`
+	EgressAllow    []string          `json:"egress_allow"`
+	SecretBindings []string          `json:"secret_bindings"`
+	TriggerConfig  json.RawMessage   `json:"trigger_config,omitempty"`
+	Builtin        bool              `json:"builtin"`
+	Version        int               `json:"version"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
 // Summary is the list-view projection: no source, no params, no trust profile — the picker view.
 type Summary struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	Kind      string    `json:"kind"`
-	Builtin   bool      `json:"builtin"`
-	Version   int       `json:"version"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          int64             `json:"id"`
+	Name        string            `json:"name"`
+	Kind        string            `json:"kind"`
+	Description map[string]string `json:"description"`
+	Builtin     bool              `json:"builtin"`
+	Version     int               `json:"version"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
 // CreateParams is a new operator-authored template (builtin is always false — seeds bypass Create).
 type CreateParams struct {
 	Name           string
 	Kind           string
+	Description    map[string]string
 	Source         string
 	Params         json.RawMessage
 	EgressAllow    []string
@@ -90,6 +96,7 @@ type CreateParams struct {
 
 // UpdateParams replaces the mutable body; Update bumps version.
 type UpdateParams struct {
+	Description    map[string]string
 	Source         string
 	Params         json.RawMessage
 	EgressAllow    []string

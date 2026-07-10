@@ -33,7 +33,7 @@ func validKind(kind string) bool {
 	return false
 }
 
-const fullCols = `id, name, kind, source, params, egress_allow, secret_bindings, trigger_config, builtin, version, created_at, updated_at`
+const fullCols = `id, name, kind, description, source, params, egress_allow, secret_bindings, trigger_config, builtin, version, created_at, updated_at`
 
 // Create inserts an operator-authored template (builtin=false, version=1) and returns its id. Name is
 // ValidName-checked (rejects the 'builtin/' namespace), kind against the enum, and a berry_snippet
@@ -51,10 +51,10 @@ func Create(ctx context.Context, q Querier, p CreateParams) (int64, error) {
 	}
 	var id int64
 	err := q.QueryRow(ctx, `
-		INSERT INTO templates (name, kind, source, params, egress_allow, secret_bindings, trigger_config, builtin)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, false)
+		INSERT INTO templates (name, kind, description, source, params, egress_allow, secret_bindings, trigger_config, builtin)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)
 		RETURNING id`,
-		p.Name, p.Kind, p.Source, coalesceParams(p.Params),
+		p.Name, p.Kind, coalesceDescription(p.Description), p.Source, coalesceParams(p.Params),
 		coalesceSlice(p.EgressAllow), coalesceSlice(p.SecretBindings), nullableJSON(p.TriggerConfig),
 	).Scan(&id)
 	return id, err
@@ -77,10 +77,10 @@ func Update(ctx context.Context, q Querier, id int64, p UpdateParams) (bool, err
 	}
 	tag, err := q.Exec(ctx, `
 		UPDATE templates
-		SET source = $2, params = $3, egress_allow = $4, secret_bindings = $5, trigger_config = $6,
+		SET description = $2, source = $3, params = $4, egress_allow = $5, secret_bindings = $6, trigger_config = $7,
 		    version = version + 1, updated_at = now()
 		WHERE id = $1`,
-		id, p.Source, coalesceParams(p.Params), coalesceSlice(p.EgressAllow),
+		id, coalesceDescription(p.Description), p.Source, coalesceParams(p.Params), coalesceSlice(p.EgressAllow),
 		coalesceSlice(p.SecretBindings), nullableJSON(p.TriggerConfig))
 	if err != nil {
 		return false, err
@@ -114,11 +114,11 @@ func List(ctx context.Context, q Querier, kindFilter string, limit, afterID int6
 	var err error
 	if kindFilter == "" {
 		rows, err = q.Query(ctx, `
-			SELECT id, name, kind, builtin, version, updated_at FROM templates
+			SELECT id, name, kind, description, builtin, version, updated_at FROM templates
 			WHERE id > $1 ORDER BY id LIMIT $2`, afterID, limit)
 	} else {
 		rows, err = q.Query(ctx, `
-			SELECT id, name, kind, builtin, version, updated_at FROM templates
+			SELECT id, name, kind, description, builtin, version, updated_at FROM templates
 			WHERE kind = $1 AND id > $2 ORDER BY id LIMIT $3`, kindFilter, afterID, limit)
 	}
 	if err != nil {
@@ -128,7 +128,7 @@ func List(ctx context.Context, q Querier, kindFilter string, limit, afterID int6
 	out := []Summary{}
 	for rows.Next() {
 		var s Summary
-		if err := rows.Scan(&s.ID, &s.Name, &s.Kind, &s.Builtin, &s.Version, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Kind, &s.Description, &s.Builtin, &s.Version, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -141,7 +141,7 @@ func List(ctx context.Context, q Querier, kindFilter string, limit, afterID int6
 func scanTemplate(row pgx.Row) (*Template, error) {
 	var t Template
 	var params, trigger []byte
-	err := row.Scan(&t.ID, &t.Name, &t.Kind, &t.Source, &params, &t.EgressAllow, &t.SecretBindings,
+	err := row.Scan(&t.ID, &t.Name, &t.Kind, &t.Description, &t.Source, &params, &t.EgressAllow, &t.SecretBindings,
 		&trigger, &t.Builtin, &t.Version, &t.CreatedAt, &t.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, ErrNotFound
@@ -154,6 +154,15 @@ func scanTemplate(row pgx.Row) (*Template, error) {
 		t.TriggerConfig = json.RawMessage(trigger)
 	}
 	return &t, nil
+}
+
+// coalesceDescription keeps the description JSONB non-null: a nil map would json-marshal to SQL NULL,
+// which the NOT NULL DEFAULT '{}' column rejects. An empty (or nil) map ships as '{}' (parity coalesceParams).
+func coalesceDescription(d map[string]string) map[string]string {
+	if d == nil {
+		return map[string]string{}
+	}
+	return d
 }
 
 // coalesceParams keeps the params JSONB non-null (schema default '[]').

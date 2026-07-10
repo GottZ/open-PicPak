@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { m } from '../../paraglide/messages.js'
+  import { activeLocale, localizedDescription } from '../i18n'
   import { toApiError } from '../api'
   import { session } from '../auth.svelte'
   import { notify } from '../toasts.svelte'
@@ -195,6 +196,10 @@
             </div>
           </div>
 
+          {#if localizedDescription(t.description, activeLocale())}
+            <p class="tpl-desc muted small">{localizedDescription(t.description, activeLocale())}</p>
+          {/if}
+
           {#if applyFor && applyFor.id === t.id}
             <form class="tpl-apply" onsubmit={(e) => { e.preventDefault(); void submitApply() }}>
               <p class="apply-title">{m['templates.apply_title']({ name: applyFor.name })}</p>
@@ -309,6 +314,9 @@
   }
   .tpl-ver {
     font-size: 0.75rem;
+  }
+  .tpl-desc {
+    margin: 0.1rem 0 0.2rem;
   }
   .tpl-actions {
     margin-left: auto;

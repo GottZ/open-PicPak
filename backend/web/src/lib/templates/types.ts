@@ -33,6 +33,10 @@ export interface TemplateSummary {
   id: number
   name: string
   kind: TemplateKind
+  // Multilingual "what does this template do" copy (locale→text). Rendered via localizedDescription
+  // (lib/i18n.ts): locale→en→de→first→''. Carried on the list projection so the picker shows it without
+  // a per-row detail fetch. May be {} (no description authored). Mirror of templatestore.Summary.Description.
+  description: Record<string, string>
   builtin: boolean
   version: number
   updated_at: string
@@ -51,6 +55,9 @@ export interface TemplateDetail {
   id: number
   name: string
   kind: TemplateKind
+  // Multilingual description map (locale→text); resolved via localizedDescription. Mirror of
+  // templatestore.Template.Description. The FIELDS golden binds this set to the Go struct's json tags.
+  description: Record<string, string>
   source: string
   params: ParamSpec[]
   egress_allow: string[]

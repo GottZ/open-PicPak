@@ -75,6 +75,19 @@ export const localeLabels: Record<Locale, string> = {
   ja: '日本語',
 }
 
+/**
+ * Resolve a multilingual description map to one string for the given locale (design 34-i18n
+ * §description). Fallback chain: active locale → en → de → first key present → '' (a null/empty map
+ * yields ''). Mirrors the Go producer's per-locale JSONB; the caller renders the result as a text node.
+ */
+export function localizedDescription(
+  desc: Record<string, string> | null | undefined,
+  locale: Locale,
+): string {
+  if (!desc) return ''
+  return desc[locale] ?? desc.en ?? desc.de ?? Object.values(desc)[0] ?? ''
+}
+
 /** Detection cascade (§2): stored choice → browser preference → English. */
 function detectLocale(): Locale {
   const stored = localStorage.getItem(STORAGE_KEY)

@@ -294,6 +294,54 @@ func TestSeedUpdatesOnlyChangedRow(t *testing.T) {
 	}
 }
 
+// --- A34.4: the IS-DISTINCT gate sees a JSONB description drift (not just source/params) ---
+//     Seed, mutate ONE builtin's description in the DB, re-seed → exactly that row is Updated
+//     (version bumped, description restored to the catalog value). Proves description rides the gate. ---
+
+func TestSeedDetectsDescriptionDrift(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	if _, err := SeedBuiltins(ctx, pool); err != nil {
+		t.Fatalf("seed #1: %v", err)
+	}
+
+	const target = "builtin/clock"
+	var ver0 int
+	if err := pool.QueryRow(ctx, `SELECT version FROM templates WHERE name=$1`, target).Scan(&ver0); err != nil {
+		t.Fatalf("target missing: %v", err)
+	}
+	// Drift ONLY the description JSONB (source/params/trust profile untouched) — an older catalog copy.
+	if _, err := pool.Exec(ctx,
+		`UPDATE templates SET description='{"en":"stale copy"}'::jsonb WHERE name=$1`, target); err != nil {
+		t.Fatalf("drift: %v", err)
+	}
+
+	res, err := SeedBuiltins(ctx, pool)
+	if err != nil {
+		t.Fatalf("re-seed: %v", err)
+	}
+	if res.Updated != 1 {
+		t.Fatalf("description drift must update exactly 1 row, got %+v", res)
+	}
+	// Row restored to the catalog description + version bumped past the drift baseline.
+	var desc map[string]string
+	var ver1 int
+	if err := pool.QueryRow(ctx, `SELECT description, version FROM templates WHERE name=$1`, target).Scan(&desc, &ver1); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if desc["en"] == "stale copy" || desc["en"] == "" || ver1 != ver0+1 {
+		t.Fatalf("description not refreshed: desc=%+v version %d->%d", desc, ver0, ver1)
+	}
+	// A follow-up re-seed on the now-matching catalog is a pure no-op (the gate settles).
+	res2, err := SeedBuiltins(ctx, pool)
+	if err != nil {
+		t.Fatalf("re-seed #2: %v", err)
+	}
+	if res2.Updated != 0 || res2.Inserted != 0 {
+		t.Fatalf("re-seed after restore must be a no-op, got %+v", res2)
+	}
+}
+
 // --- SeedBuiltins never touches an operator-owned row (WHERE builtin fail-closed) ---
 
 func TestSeedLeavesUserRows(t *testing.T) {

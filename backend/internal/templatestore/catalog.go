@@ -27,13 +27,14 @@ const seedAdvisoryLock int64 = 0x7069637061705431
 // trust profile (egress_allow/secret_bindings/trigger_config) rides along so a builtin carries its
 // A24 least-privilege on the wire (Deliverable-4 needs a pinned egress host, §4.3).
 type catalogEntry struct {
-	Name           string          `json:"name"`
-	Kind           string          `json:"kind"`
-	SourceFile     string          `json:"source_file"`
-	Params         json.RawMessage `json:"params"`
-	EgressAllow    []string        `json:"egress_allow"`
-	SecretBindings []string        `json:"secret_bindings"`
-	TriggerConfig  json.RawMessage `json:"trigger_config"`
+	Name           string            `json:"name"`
+	Kind           string            `json:"kind"`
+	Description    map[string]string `json:"description"`
+	SourceFile     string            `json:"source_file"`
+	Params         json.RawMessage   `json:"params"`
+	EgressAllow    []string          `json:"egress_allow"`
+	SecretBindings []string          `json:"secret_bindings"`
+	TriggerConfig  json.RawMessage   `json:"trigger_config"`
 }
 
 // SeedResult reports the outcome of a SeedBuiltins run. Unchanged>0 with Inserted==Updated==0 on a
@@ -111,10 +112,11 @@ func SeedBuiltins(ctx context.Context, pool Pool) (SeedResult, error) {
 		// reads without a second query.
 		var wasUpdate bool
 		err := tx.QueryRow(ctx, `
-			INSERT INTO templates (name, kind, source, params, egress_allow, secret_bindings, trigger_config, builtin)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+			INSERT INTO templates (name, kind, description, source, params, egress_allow, secret_bindings, trigger_config, builtin)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)
 			ON CONFLICT (name) DO UPDATE SET
 			    kind = EXCLUDED.kind,
+			    description = EXCLUDED.description,
 			    source = EXCLUDED.source,
 			    params = EXCLUDED.params,
 			    egress_allow = EXCLUDED.egress_allow,
@@ -124,13 +126,14 @@ func SeedBuiltins(ctx context.Context, pool Pool) (SeedResult, error) {
 			    updated_at = now()
 			WHERE templates.builtin AND (
 			    templates.kind IS DISTINCT FROM EXCLUDED.kind OR
+			    templates.description IS DISTINCT FROM EXCLUDED.description OR
 			    templates.source IS DISTINCT FROM EXCLUDED.source OR
 			    templates.params IS DISTINCT FROM EXCLUDED.params OR
 			    templates.egress_allow IS DISTINCT FROM EXCLUDED.egress_allow OR
 			    templates.secret_bindings IS DISTINCT FROM EXCLUDED.secret_bindings OR
 			    templates.trigger_config IS DISTINCT FROM EXCLUDED.trigger_config)
 			RETURNING (xmax <> 0)`,
-			e.Name, e.Kind, sources[i], coalesceParams(e.Params),
+			e.Name, e.Kind, coalesceDescription(e.Description), sources[i], coalesceParams(e.Params),
 			coalesceSlice(e.EgressAllow), coalesceSlice(e.SecretBindings), nullableJSON(e.TriggerConfig),
 		).Scan(&wasUpdate)
 		switch {

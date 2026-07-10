@@ -1,6 +1,7 @@
 <script lang="ts">
   import { apiFetch } from '../../lib/api'
   import { Resource } from '../../lib/resource.svelte'
+  import { activeLocale } from '../../lib/i18n'
   import {
     type DeviceTelemetryResponse,
     type AppConfig,
@@ -53,7 +54,7 @@
 
   function tsLabel(iso: string): string {
     const d = new Date(iso)
-    return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+    return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(activeLocale())
   }
 </script>
 

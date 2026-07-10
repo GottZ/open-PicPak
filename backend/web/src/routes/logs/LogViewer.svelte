@@ -5,6 +5,7 @@
   import { EventsClient } from '../../lib/events.svelte'
   import { conn } from '../../lib/conn.svelte'
   import DevicePicker from '../../lib/DevicePicker.svelte'
+  import { activeLocale } from '../../lib/i18n'
   import type { Device, DevicesResponse } from '../../lib/api/types'
   import {
     type LogLine,
@@ -161,7 +162,7 @@
 
   function tsLabel(iso: string): string {
     const d = new Date(iso)
-    return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString()
+    return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString(activeLocale())
   }
 
   onMount(() => {

@@ -18,12 +18,18 @@ import (
 //   - KINDS             ← templatestore.Kind* constants (compiled in, imported here)
 //   - PARAM_TYPES       ← templatestore.checkParamType switch cases (substitute.go) + the "string" pass-through
 //   - APPLY_ERROR_CODES ← templatestore.SubstituteError.Code literals (substitute.go) + apply's "berry_too_long"
+//   - FIELDS            ← templatestore.Template struct json tags (types.go) ↔ TS TemplateDetail interface fields
+//
+// The FIELDS surface (A34.4) binds the full-row wire SHAPE, not just its vocabulary arrays: a json field
+// on the Go Template struct that the TS TemplateDetail omits (or vice versa) is drift — e.g. adding the
+// multilingual `description` map to only one side goes red until both mirror it.
 //
 // Same setDiff discipline as internal/berry/parity_test.go. Red-proof: delete a kind from the KINDS
 // array in types.ts and re-run → this test fails in the Go\TS direction (documented in the wave report).
 const (
 	tsTypesFile  = "src/lib/templates/types.ts"
 	substituteGo = "../internal/templatestore/substitute.go"
+	typesGo      = "../internal/templatestore/types.go"
 )
 
 var (
@@ -33,7 +39,33 @@ var (
 	reSubstErr = regexp.MustCompile(`SubstituteError\{Code:\s*"([a-z_]+)"`)
 	// reTsToken captures a single-quoted lower_snake token inside a TS array literal.
 	reTsToken = regexp.MustCompile(`'([a-zA-Z_]+)'`)
+	// reGoJSONTag captures a struct field's json tag name (stops before ,omitempty and the closing quote).
+	reGoJSONTag = regexp.MustCompile(`json:"([a-z_]+)`)
+	// reTsField captures an interface field name at the start of a line (before an optional ? and the colon).
+	reTsField = regexp.MustCompile(`(?m)^\s*([a-z_]+)\??:`)
 )
+
+// goStructFields returns the set of json tag names declared inside the named Go struct block.
+func goStructFields(t *testing.T, src, structName string) map[string]bool {
+	t.Helper()
+	re := regexp.MustCompile(`(?s)type ` + regexp.QuoteMeta(structName) + ` struct \{(.*?)\n\}`)
+	m := re.FindStringSubmatch(src)
+	if m == nil {
+		t.Fatalf("could not locate the %s struct block in types.go — the golden regex drifted", structName)
+	}
+	return captures(reGoJSONTag, m[1])
+}
+
+// tsInterfaceFields returns the set of field names declared inside the named TS interface block.
+func tsInterfaceFields(t *testing.T, src, ifaceName string) map[string]bool {
+	t.Helper()
+	re := regexp.MustCompile(`(?s)interface ` + regexp.QuoteMeta(ifaceName) + ` \{(.*?)\n\}`)
+	m := re.FindStringSubmatch(src)
+	if m == nil {
+		t.Fatalf("could not locate the %s interface block in types.ts — the golden regex drifted", ifaceName)
+	}
+	return captures(reTsField, m[1])
+}
 
 func readGolden(t *testing.T, p string) string {
 	t.Helper()
@@ -125,6 +157,11 @@ func TestTemplateTypesGolden(t *testing.T) {
 	goCodes := captures(reSubstErr, sub)
 	goCodes["berry_too_long"] = true
 	assertParity(t, "APPLY_ERROR_CODES", goCodes, tsArrayValues(t, ts, "APPLY_ERROR_CODES"))
+
+	// FIELDS ← the full-row wire shape: templatestore.Template json tags ↔ TS TemplateDetail fields. The
+	// A34.4 drift anchor for the multilingual `description` map — a field on one side but not the other is red.
+	goTypes := readGolden(t, typesGo)
+	assertParity(t, "FIELDS", goStructFields(t, goTypes, "Template"), tsInterfaceFields(t, ts, "TemplateDetail"))
 }
 
 // TestTemplateTypesDiff_DetectsDrift is the negative probe: prove goldenDiff catches drift in BOTH
