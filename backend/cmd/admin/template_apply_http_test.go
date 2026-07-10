@@ -63,8 +63,10 @@ func TestTemplateApplyBerryOctet_DB(t *testing.T) {
 	h := testTemplateHandler(pool)
 	mustExec(t, pool, `INSERT INTO devices (serial, channel) VALUES ('octetsn','stable')`)
 
-	// stored source is tiny; {{v}} expands to 4000*'€' = 12000 bytes -> substituted > 8191.
-	id := createTemplate(t, h, `{"name":"octet-berry","kind":"berry_snippet","source":"x={{v}}"}`)
+	// stored source is tiny; {{v}} expands to 4000*'€' = 12000 bytes -> substituted > 8191. The param
+	// is declared in the schema (post-W6 world: undeclared params are a 422 unknown_param).
+	id := createTemplate(t, h, `{"name":"octet-berry","kind":"berry_snippet","source":"x={{v}}",`+
+		`"params":[{"name":"v","label":"Value","type":"string","required":true}]}`)
 	big := strings.Repeat("€", 4000)
 	body := `{"target_serials":["octetsn"],"params":{"v":"` + big + `"}}`
 	w := do(h, "POST", "/api/templates/"+itoa(id)+"/apply", "admin-tok", strings.NewReader(body), "application/json")
@@ -104,7 +106,8 @@ func TestTemplateApplyBerryDedup_DB(t *testing.T) {
 	h := testTemplateHandler(pool)
 	mustExec(t, pool, `INSERT INTO devices (serial, channel) VALUES ('dedupsn','stable')`)
 
-	id := createTemplate(t, h, `{"name":"dedup-berry","kind":"berry_snippet","source":"set_url({{u}})"}`)
+	id := createTemplate(t, h, `{"name":"dedup-berry","kind":"berry_snippet","source":"set_url({{u}})",`+
+		`"params":[{"name":"u","label":"URL slot","type":"string","required":true}]}`)
 	apply := func(params string) {
 		body := `{"target_serials":["dedupsn"],"params":` + params + `}`
 		w := do(h, "POST", "/api/templates/"+itoa(id)+"/apply", "admin-tok", strings.NewReader(body), "application/json")
@@ -152,8 +155,11 @@ func TestTemplateApplyRenderStamp_DB(t *testing.T) {
 	seedOperator(t, pool, "admin-tok", true)
 	h := testTemplateHandler(pool)
 
+	// The url param is DECLARED type:url (post-W6 world) — its host example.com sits on the template's
+	// egress_allow, so the K9 gate passes and the test stays about the trust-profile passthrough.
 	id := createTemplate(t, h, `{"name":"stamp-render","kind":"render_fn","source":"fetch({{url}})",`+
-		`"egress_allow":["example.com"],"secret_bindings":["API_KEY"],"trigger_config":{"mode":"sync","ttl_s":60}}`)
+		`"egress_allow":["example.com"],"secret_bindings":["API_KEY"],"trigger_config":{"mode":"sync","ttl_s":60},`+
+		`"params":[{"name":"url","label":"URL","type":"url","required":true}]}`)
 	w := do(h, "POST", "/api/templates/"+itoa(id)+"/apply", "admin-tok",
 		strings.NewReader(`{"params":{"url":"example.com/a"}}`), "application/json")
 	if w.Code != http.StatusOK {
@@ -233,6 +239,104 @@ func TestTemplateApplyRenderCollision_DB(t *testing.T) {
 	}
 	if code, _ := jsonBody(t, e2)["code"].(string); code != "function_name_taken" {
 		t.Errorf("explicit collision code = %q, want function_name_taken", code)
+	}
+}
+
+// T-apply-param-missing — W6 schema validation through /apply: a berry_snippet whose schema declares a
+// required param that the apply body omits → 422 missing_param, and nothing is enqueued. Red: the W4/W5
+// local splice helper ignored the schema entirely — an omitted required param substituted to nothing and
+// the (now malformed) script was enqueued silently.
+func TestTemplateApplyMissingParam_DB(t *testing.T) {
+	pool := dbPool(t)
+	seedOperator(t, pool, "admin-tok", true)
+	h := testTemplateHandler(pool)
+	mustExec(t, pool, `INSERT INTO devices (serial, channel) VALUES ('mpsn','stable')`)
+
+	id := createTemplate(t, h, `{"name":"mp-berry","kind":"berry_snippet","source":"set_url({{u}})",`+
+		`"params":[{"name":"u","label":"URL","type":"string","required":true}]}`)
+	w := do(h, "POST", "/api/templates/"+itoa(id)+"/apply", "admin-tok",
+		strings.NewReader(`{"target_serials":["mpsn"],"params":{}}`), "application/json")
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing required param apply = %d, want 422 (%s)", w.Code, truncBody(w.Body.String()))
+	}
+	if code, _ := jsonBody(t, w)["code"].(string); code != "missing_param" {
+		t.Errorf("missing param code = %q, want missing_param", code)
+	}
+	if n := pendingCount(t, pool, "mpsn"); n != 0 {
+		t.Errorf("rejected apply enqueued %d rows, want 0", n)
+	}
+}
+
+// T-apply-param-unresolved — a {{token}} the schema leaves optional-without-default and the body omits
+// stays in the substituted source → 422 unresolved_placeholder (fail-closed), nothing enqueued. Red: the
+// old helper shipped the un-substituted {{b}} to the C2 queue.
+func TestTemplateApplyUnresolved_DB(t *testing.T) {
+	pool := dbPool(t)
+	seedOperator(t, pool, "admin-tok", true)
+	h := testTemplateHandler(pool)
+	mustExec(t, pool, `INSERT INTO devices (serial, channel) VALUES ('unsn','stable')`)
+
+	id := createTemplate(t, h, `{"name":"un-berry","kind":"berry_snippet","source":"x={{a}}{{b}}",`+
+		`"params":[{"name":"a","type":"string","required":true},{"name":"b","type":"string"}]}`)
+	w := do(h, "POST", "/api/templates/"+itoa(id)+"/apply", "admin-tok",
+		strings.NewReader(`{"target_serials":["unsn"],"params":{"a":"1"}}`), "application/json")
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unresolved apply = %d, want 422 (%s)", w.Code, truncBody(w.Body.String()))
+	}
+	if code, _ := jsonBody(t, w)["code"].(string); code != "unresolved_placeholder" {
+		t.Errorf("unresolved code = %q, want unresolved_placeholder", code)
+	}
+	if n := pendingCount(t, pool, "unsn"); n != 0 {
+		t.Errorf("rejected apply enqueued %d rows, want 0", n)
+	}
+}
+
+// T-apply-url-ssrf — the K9 SSRF gate through /apply: a render_fn with a type:url param and a pinned
+// egress_allow rejects an off-allowlist host (422 egress_host_mismatch, no function minted) and accepts an
+// on-allowlist host (200, function minted with the substituted url). Red: without the host check the
+// off-allowlist url substitutes through and the function is minted — the apply "goes through" (the Rot-Probe).
+func TestTemplateApplyURLSSRF_DB(t *testing.T) {
+	pool := dbPool(t)
+	seedOperator(t, pool, "admin-tok", true)
+	h := testTemplateHandler(pool)
+
+	id := createTemplate(t, h, `{"name":"ssrf-render","kind":"render_fn","source":"fetch({{url}})",`+
+		`"egress_allow":["images.example.com:443"],`+
+		`"params":[{"name":"url","label":"Image URL","type":"url","required":true}]}`)
+	path := "/api/templates/" + itoa(id) + "/apply"
+
+	// off-allowlist host → 422 egress_host_mismatch, no function minted.
+	off := do(h, "POST", path, "admin-tok",
+		strings.NewReader(`{"params":{"url":"https://evil.example.net/x.png"}}`), "application/json")
+	if off.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("off-allowlist url apply = %d, want 422 (%s)", off.Code, truncBody(off.Body.String()))
+	}
+	if code, _ := jsonBody(t, off)["code"].(string); code != "egress_host_mismatch" {
+		t.Errorf("off-allowlist code = %q, want egress_host_mismatch", code)
+	}
+	var minted int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM faas_functions WHERE template_id = $1`, id).Scan(&minted); err != nil {
+		t.Fatalf("count functions: %v", err)
+	}
+	if minted != 0 {
+		t.Errorf("off-allowlist apply minted %d functions, want 0 (SSRF gate leaked)", minted)
+	}
+
+	// on-allowlist host → 200, function minted with the substituted url.
+	on := do(h, "POST", path, "admin-tok",
+		strings.NewReader(`{"params":{"url":"https://images.example.com:443/a.png"}}`), "application/json")
+	if on.Code != http.StatusOK {
+		t.Fatalf("on-allowlist url apply = %d, want 200 (%s)", on.Code, on.Body.String())
+	}
+	fnID := int64(jsonBody(t, on)["id"].(float64))
+	var source string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT source FROM faas_functions WHERE id = $1`, fnID).Scan(&source); err != nil {
+		t.Fatalf("read minted function: %v", err)
+	}
+	if source != "fetch(https://images.example.com:443/a.png)" {
+		t.Errorf("source = %q, want the substituted on-allowlist url", source)
 	}
 }
 

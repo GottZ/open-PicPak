@@ -82,7 +82,11 @@ func (h templateHandlers) applyBerry(w http.ResponseWriter, r *http.Request, t *
 		adminhttp.WriteErr(w, r, http.StatusBadRequest, "bad_request", "params must be a JSON object")
 		return
 	}
-	script := substitute(t.Source, params)
+	script, serr := templatestore.Substitute(t, params)
+	if serr != nil {
+		writeSubstituteErr(w, r, serr)
+		return
+	}
 	// octet_length, not codepoints: len() on a Go string is bytes, mirroring the firmware fetch cap. A
 	// multibyte param that pushes the substituted script past 8191 B is the poison pill this rejects (W18).
 	if len(script) > templatestore.BerryScriptMax {
@@ -136,7 +140,11 @@ func (h templateHandlers) applyRenderFn(w http.ResponseWriter, r *http.Request, 
 		adminhttp.WriteErr(w, r, http.StatusBadRequest, "bad_request", "params must be a JSON object")
 		return
 	}
-	source := substitute(t.Source, params)
+	source, serr := templatestore.Substitute(t, params)
+	if serr != nil {
+		writeSubstituteErr(w, r, serr)
+		return
+	}
 
 	explicit := body.FnName != ""
 	base := body.FnName
@@ -244,19 +252,17 @@ func decodeParams(raw json.RawMessage) (map[string]any, error) {
 	return m, nil
 }
 
-// substitute replaces every {{name}} token in source with its param value (pure string replacement, §4.4).
-// The param value goes in as data to code that is already treated as foreign (the C2 safe subset / the
-// worker sandbox) — the sandbox, not the substitution, is the isolation boundary. Full schema validation
-// (required / unknown / unresolved-token / url-host) is W6; this is the byte-exact splice W4/W5 need.
-func substitute(source string, params map[string]any) string {
-	if len(params) == 0 {
-		return source
+// writeSubstituteErr maps a templatestore.Substitute failure to a response. A *SubstituteError is a
+// defined client fault (unknown_param / missing_param / unresolved_placeholder / egress_host_mismatch /
+// invalid_param) → 422 with the store's wire code; anything else is a malformed stored schema → 500
+// config defect.
+func writeSubstituteErr(w http.ResponseWriter, r *http.Request, err error) {
+	var se *templatestore.SubstituteError
+	if errors.As(err, &se) {
+		adminhttp.WriteErr(w, r, http.StatusUnprocessableEntity, se.Code, se.Msg)
+		return
 	}
-	pairs := make([]string, 0, len(params)*2)
-	for name, val := range params {
-		pairs = append(pairs, "{{"+name+"}}", fmt.Sprint(val))
-	}
-	return strings.NewReplacer(pairs...).Replace(source)
+	adminhttp.WriteErr(w, r, http.StatusInternalServerError, "internal", "template substitution failed")
 }
 
 // deriveIdempotencyKey builds tmpl:{id}:{param-hash} (§4.3/E-A30-5). json.Marshal of a map sorts its keys,
