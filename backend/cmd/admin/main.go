@@ -8,6 +8,7 @@
 //	admin create-operator -label <name> [-admin]   # mint a key, print the token ONCE
 //	admin list-operators                           # list keys (never the token/hash)
 //	admin disable-operator -id <n>                 # soft-revoke a key (SEC-M1)
+//	admin create-user -username <name> [-admin]    # create a human admin_users account (password prompt)
 package main
 
 import (
@@ -33,6 +34,8 @@ func main() {
 		switch os.Args[1] {
 		case "create-operator", "list-operators", "disable-operator":
 			os.Exit(runOperatorCLI(os.Args[1], os.Args[2:]))
+		case "create-user":
+			os.Exit(runUserCLI(os.Args[1], os.Args[2:]))
 		case "-secret-decrypt", "secret-decrypt":
 			os.Exit(runSecretDecrypt(os.Stdin, os.Stdout, os.Stderr, stdoutIsTTY()))
 		}
@@ -128,6 +131,13 @@ func runServer() {
 	// retention of its own, so it would grow unbounded from reassembly without this.
 	registerLogRoutes(mux, pool)
 	startFragmentPrune(ctx, pool)
+
+	// Human session-login surface (A28 W3, design §4.3): POST /api/session (login, no auth) and DELETE
+	// /api/session (logout). The Basic carrier (delta-4) needs no wiring here — it lives inside
+	// adminhttp.Auth, already on every gated route. Plus the expired-session prune ticker (§3.2), the
+	// startFragmentPrune analogue for admin_sessions.
+	registerAuthRoutes(mux, pool)
+	startSessionPrune(ctx, pool)
 
 	// Telemetry dashboard read surface (A22): the enriched fleet list (the 22→17 seam — adds
 	// running_ver/batt/health), the per-device latest+history, and the non-secret SPA config (Grafana/

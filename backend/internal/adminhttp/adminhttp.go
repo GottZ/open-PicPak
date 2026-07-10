@@ -3,15 +3,18 @@
 //
 // Auth is server-authoritative: every gate here is mirrored by a route that mounts it, so a missing
 // wrapper is a visible 200 in the negatively-probed tests (T1/T2), not a silent hole. The middleware
-// normalises three carriers onto ONE Principal (design §4.1):
+// normalises four carriers onto ONE Principal (design §4.1 / delta-4), dispatched in this order:
 //
 //   - Authorization: Bearer ppk_<id>_<secret>  → an api_tokens machine identity (scoped, never admin)
 //   - Authorization: Bearer <operator-token>   → a legacy operator_keys identity (fallback; W7 gates
 //     this to the loopback listener, W2 keeps it as an ungated fallback)
-//   - Cookie: ppk_sid=<secret>                 → a human admin_sessions identity (implicitly full)
+//   - Authorization: Basic <b64>               → an admin_users identity (delta-4), verified identically
+//     to POST /api/session; NO WWW-Authenticate is ever set, keeping Basic a non-browser scheme
+//   - Cookie: ppk_sid=<secret>                 → a human admin_sessions identity (implicitly full);
+//     mutations additionally require X-Requested-With: picpak (CSRF second layer, design §4.1)
 //
 // Any missing / malformed / unknown / wrong / expired / revoked credential resolves to a uniform 401
-// with the same body — no enumeration signal (design §5). Basic auth is out of scope (W3).
+// with the same body — no enumeration signal (design §5).
 package adminhttp
 
 import (
@@ -46,6 +49,21 @@ const (
 // sessionCookie is the human-session carrier's cookie name (design §4.1 / §4.3).
 const sessionCookie = "ppk_sid"
 
+// The CSRF header every MUTATING cookie-authed request must carry (design §4.1): the session cookie
+// is an ambient credential the browser attaches automatically, so SameSite=Strict alone is one layer —
+// this header is the second. The SPA sets it on every mutation (api.ts); a cross-site <form> POST
+// cannot set a custom header. Only the cookie carrier enforces it: Bearer/Basic are not ambient and
+// stay CSRF-immune.
+const (
+	csrfHeader      = "X-Requested-With"
+	csrfHeaderValue = "picpak"
+)
+
+// csrfSafeMethod reports whether a method is read-only for CSRF purposes (no state change → no gate).
+func csrfSafeMethod(m string) bool {
+	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
+}
+
 // image scopes an api_token can carry; a session or operator Principal holds both implicitly.
 const (
 	ScopeImageRead  = "image:read"
@@ -61,6 +79,7 @@ const (
 	KindOperator PrincipalKind = "operator" // legacy operator_keys bearer
 	KindBearer   PrincipalKind = "bearer"   // api_tokens machine bearer (ppk_)
 	KindSession  PrincipalKind = "session"  // admin_sessions human cookie
+	KindBasic    PrincipalKind = "basic"    // admin_users HTTP Basic identity (delta-4)
 )
 
 // Principal is the single identity every carrier resolves to. Scopes is the effective set: an
@@ -232,7 +251,34 @@ func Auth(db *pgxpool.Pool) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Carrier 2: Cookie ppk_sid — the human path.
+			// Carrier 2: Authorization: Basic <b64> — human path for non-browser clients (curl -u,
+			// Home-Assistant, .netrc). Verified against admin_users identically to POST /api/session
+			// (dummy-verify, uniform 401), under the global argon2 semaphore + positive cache (delta-4).
+			// NO WWW-Authenticate is EVER set on the 401 — a challenge would make the browser cache Basic
+			// creds origin-wide and turn Basic into an ambient (CSRF-able) credential. Honoured on every
+			// listener incl. loopback (tunnel-local, harmless; delta-4 §Autonome Festlegungen).
+			if hasBasicScheme(r) {
+				user, pass, ok := r.BasicAuth()
+				if !ok {
+					unauthorized(w, r)
+					return
+				}
+				pr, status := resolveBasic(ctx, db, user, pass, RemoteIP(r))
+				switch status {
+				case http.StatusOK:
+					next.ServeHTTP(w, r.WithContext(setPrincipal(ctx, pr)))
+				case http.StatusTooManyRequests:
+					w.Header().Set("Retry-After", "1")
+					WriteErr(w, r, http.StatusTooManyRequests, "rate_limited", "authentication capacity exceeded; retry shortly")
+				case http.StatusInternalServerError:
+					WriteErr(w, r, http.StatusInternalServerError, "internal", "auth lookup failed")
+				default:
+					unauthorized(w, r)
+				}
+				return
+			}
+
+			// Carrier 3: Cookie ppk_sid — the human path.
 			if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
 				pr, ok, err := resolveSession(ctx, db, c.Value)
 				if err != nil {
@@ -243,11 +289,20 @@ func Auth(db *pgxpool.Pool) func(http.Handler) http.Handler {
 					unauthorized(w, r)
 					return
 				}
+				// CSRF gate — the second layer beside SameSite=Strict (design §4.1), cookie carrier ONLY.
+				// A miss is a 403 with its own code, NOT the uniform 401: the client IS authenticated —
+				// this is a request-shape failure, not a credential failure, and folding it into the 401
+				// family would only obscure a misconfigured legitimate client.
+				if !csrfSafeMethod(r.Method) && r.Header.Get(csrfHeader) != csrfHeaderValue {
+					WriteErr(w, r, http.StatusForbidden, "csrf_required",
+						"mutating session requests must send "+csrfHeader+": "+csrfHeaderValue)
+					return
+				}
 				next.ServeHTTP(w, r.WithContext(setPrincipal(ctx, pr)))
 				return
 			}
 
-			// Carrier 3: nothing.
+			// Carrier 4: nothing.
 			unauthorized(w, r)
 		})
 	}
