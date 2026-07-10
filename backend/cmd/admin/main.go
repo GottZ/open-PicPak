@@ -8,6 +8,7 @@
 //	admin create-operator -label <name> [-admin]   # mint a key, print the token ONCE
 //	admin list-operators                           # list keys (never the token/hash)
 //	admin disable-operator -id <n>                 # soft-revoke a key (SEC-M1)
+//	admin rotate-operator -id <n> [-expires-in d]  # mint a replacement, retire the old on a grace window
 //	admin create-user -username <name> [-admin]    # create a human admin_users account (password prompt)
 //	admin create-api-token -label <name> ...       # mint a machine api_token, print the token ONCE
 package main
@@ -33,7 +34,7 @@ import (
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "create-operator", "list-operators", "disable-operator":
+		case "create-operator", "list-operators", "disable-operator", "rotate-operator":
 			os.Exit(runOperatorCLI(os.Args[1], os.Args[2:]))
 		case "create-user":
 			os.Exit(runUserCLI(os.Args[1], os.Args[2:]))

@@ -93,6 +93,9 @@ func multipartFirmware(t *testing.T, version, sha string, blob []byte) (*bytes.B
 
 func do(h http.Handler, method, path, bearer string, body io.Reader, contentType string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, body)
+	// Operator-key requests reach admin over the SSH tunnel — the loopback listener. Tag the origin so
+	// the W7 operator gate (loopback-only) honours the bearer, mirroring production BaseContext.
+	r = r.WithContext(adminhttp.WithListenerOrigin(r.Context(), adminhttp.OriginLoopback))
 	if bearer != "" {
 		r.Header.Set("Authorization", "Bearer "+bearer)
 	}

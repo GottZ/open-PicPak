@@ -65,6 +65,22 @@ func runOperatorCLI(cmd string, args []string) int {
 			return 2
 		}
 		return disableOperator(ctx, pool, *id)
+	case "rotate-operator":
+		fs := flag.NewFlagSet("rotate-operator", flag.ContinueOnError)
+		id := fs.Int64("id", 0, "operator key id to rotate (required)")
+		grace := fs.Duration("expires-in", 24*time.Hour, "grace window before the OLD key expires (e.g. 24h, 30m)")
+		if err := fs.Parse(args); err != nil {
+			return 2
+		}
+		if *id <= 0 {
+			fmt.Fprintln(os.Stderr, "rotate-operator: -id is required")
+			return 2
+		}
+		if *grace < 0 {
+			fmt.Fprintln(os.Stderr, "rotate-operator: -expires-in must not be negative")
+			return 2
+		}
+		return rotateOperator(ctx, pool, *id, *grace)
 	}
 	return 2
 }
@@ -161,6 +177,94 @@ func disableOperator(ctx context.Context, pool *pgxpool.Pool, id int64) int {
 		return 0
 	}
 	fmt.Printf("operator key #%d revoked (rejected on its next request)\n", id)
+	return 0
+}
+
+// rotation is the result of a soft operator-key rotation: a freshly minted replacement plus the
+// grace expiry stamped on the retired key.
+type rotation struct {
+	OldID     int64
+	NewID     int64
+	Token     string
+	Label     string
+	IsAdmin   bool
+	OldExpiry time.Time
+}
+
+// rotateOperatorKey performs the DB side of a soft rotation (design §5 B8 / W7), separate from the
+// TTY-guarded CLI wrapper so the once-shown-token discipline is not in the tested path. It mints a
+// replacement carrying the SAME label + is_admin as the key being rotated (an equivalent-capability
+// successor), and stamps expires_at = now()+grace on the OLD key — a soft retirement on a window,
+// NOT a hard disable, so an in-flight client keeps working until the grace elapses (then the W7
+// expiry check in operator.Authenticate rejects it). Mint + stamp run in ONE transaction so a crash
+// never leaves the old key retired without a live replacement, nor an orphan replacement. The old
+// key must exist and be live (a revoked key is a mint, not a rotation).
+func rotateOperatorKey(ctx context.Context, pool *pgxpool.Pool, oldID int64, grace time.Duration) (rotation, error) {
+	var (
+		label      string
+		isAdmin    bool
+		disabledAt *time.Time
+	)
+	err := pool.QueryRow(ctx,
+		`SELECT label, is_admin, disabled_at FROM operator_keys WHERE id = $1`, oldID).
+		Scan(&label, &isAdmin, &disabledAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return rotation{}, fmt.Errorf("no operator key with id %d", oldID)
+	}
+	if err != nil {
+		return rotation{}, err
+	}
+	if disabledAt != nil {
+		return rotation{}, fmt.Errorf("operator key #%d is revoked; mint a fresh one with create-operator", oldID)
+	}
+
+	token, hash := newOperatorToken()
+	oldExpiry := time.Now().Add(grace)
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return rotation{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit
+
+	var newID int64
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO operator_keys (token_hash, label, is_admin) VALUES ($1, $2, $3) RETURNING id`,
+		hash, label, isAdmin).Scan(&newID); err != nil {
+		return rotation{}, err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE operator_keys SET expires_at = $1 WHERE id = $2`, oldExpiry, oldID); err != nil {
+		return rotation{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return rotation{}, err
+	}
+	return rotation{OldID: oldID, NewID: newID, Token: token, Label: label, IsAdmin: isAdmin, OldExpiry: oldExpiry}, nil
+}
+
+func rotateOperator(ctx context.Context, pool *pgxpool.Pool, oldID int64, grace time.Duration) int {
+	// COH2: as with create-operator, refuse to print a bearer to a non-TTY stdout BEFORE any mint or
+	// insert — a captured stdout would persist the replacement token as plaintext-at-rest, and the
+	// guard-before-write keeps a non-TTY run from retiring the old key with no token anyone ever saw.
+	if !stdoutIsTTY() {
+		fmt.Fprintln(os.Stderr, "rotate-operator: refusing to print a bearer token to a non-TTY stdout "+
+			"(it would persist in container logs); run it attached to an interactive terminal")
+		return 3
+	}
+	rot, err := rotateOperatorKey(ctx, pool, oldID, grace)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rotate-operator: %v\n", err)
+		return 1
+	}
+	role := "read-only"
+	if rot.IsAdmin {
+		role = "ADMIN"
+	}
+	fmt.Printf("operator key #%d rotated → new key #%d  (label=%q  role=%s)\n", rot.OldID, rot.NewID, rot.Label, role)
+	fmt.Printf("old key #%d stays valid until %s (grace window), then authenticates as absent\n",
+		rot.OldID, rot.OldExpiry.Format(time.RFC3339))
+	fmt.Printf("token (shown once — store it now, it cannot be recovered):\n  %s\n", rot.Token)
 	return 0
 }
 

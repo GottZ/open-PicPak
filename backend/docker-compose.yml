@@ -69,6 +69,8 @@ services:
       - /migrations/0012_playlist.up.sql
       - "-f"
       - /migrations/0014_admin_auth.up.sql
+      - "-f"
+      - /migrations/0015_operator_keys_expiry.up.sql
     volumes:
       - ./migrations:/migrations:ro
     networks: [dbnet]

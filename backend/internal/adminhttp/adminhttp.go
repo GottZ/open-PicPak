@@ -233,8 +233,21 @@ func Auth(db *pgxpool.Pool) func(http.Handler) http.Handler {
 					admitPrincipal(w, r, next, ctx, pr)
 					return
 				}
-				// Legacy operator_key bearer fallback. W7 gates this to the loopback listener via
-				// ListenerOriginFrom; W2 keeps it ungated (public hardening is not this wave).
+				// Legacy operator_key bearer fallback — W7 listener gate (design §4.1 / §5 B8). The
+				// operator_key carries is_admin and thus POST /api/command RCE; once the SSO removal (W8)
+				// makes admin public this carrier must not be reachable off-host. It is honoured ONLY on
+				// the loopback listener (the SSH-tunnel break-glass path). On the public listener — or any
+				// request whose origin is UNTAGGED (unknown provenance) — a non-ppk_ bearer is the uniform
+				// 401, indistinguishable from an unknown credential. Fail closed: only an explicit loopback
+				// origin admits the fallback, so a future listener wired without BaseContext rejects rather
+				// than silently exposing RCE. The origin comes from the bind address (BaseContext), never a
+				// client header, so it is not spoofable. This is a listener-policy denial, not a credential
+				// failure — mirroring the un-audited RequireAdmin/RequireScope/CSRF denials, it is not
+				// written to admin_audit (only credential-verification failures like basic.login_fail are).
+				if o, _ := ListenerOriginFrom(ctx); o != OriginLoopback {
+					unauthorized(w, r)
+					return
+				}
 				op, ok, err := operator.Authenticate(ctx, db, raw)
 				if err != nil {
 					WriteErr(w, r, http.StatusInternalServerError, "internal", "auth lookup failed")

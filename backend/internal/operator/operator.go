@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -51,14 +52,18 @@ var compare = subtle.ConstantTimeCompare
 // The secret is compared app-side in CONSTANT TIME (fetch-then-ConstantTimeCompare, the same S8
 // shape apitoken uses), and the not-found path still runs a compare against a dummy hash so an
 // unknown key costs the same as a live one — no early return before the compare (design §5 B2).
-// The auth result is byte-for-byte what the previous index-equality form produced.
+// Expiry is enforced after the compare (design §5 B8 / W7): a key past expires_at authenticates as
+// absent, so the SSO removal (W8) cannot leave a permanently-valid RCE-capable key standing on the
+// public boundary. expires_at IS NULL means no expiry (parity apitoken.Resolve). The auth result is
+// byte-for-byte what the previous index-equality form produced for a live, unexpired key.
 func Authenticate(ctx context.Context, q Querier, token string) (AuthResult, bool, error) {
 	h := HashToken(token)
 	var r AuthResult
 	var stored []byte
+	var expiresAt *time.Time
 	err := q.QueryRow(ctx,
-		`SELECT id, is_admin, label, token_hash FROM operator_keys WHERE token_hash = $1 AND disabled_at IS NULL`,
-		h).Scan(&r.KeyID, &r.IsAdmin, &r.Label, &stored)
+		`SELECT id, is_admin, label, token_hash, expires_at FROM operator_keys WHERE token_hash = $1 AND disabled_at IS NULL`,
+		h).Scan(&r.KeyID, &r.IsAdmin, &r.Label, &stored, &expiresAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		compare(h, dummyHash[:]) // run the compare on the miss path too — uniform timing, no early return
@@ -68,6 +73,9 @@ func Authenticate(ctx context.Context, q Querier, token string) (AuthResult, boo
 	}
 	if compare(h, stored) != 1 {
 		return AuthResult{}, false, nil
+	}
+	if expiresAt != nil && !expiresAt.After(time.Now()) {
+		return AuthResult{}, false, nil // expired key authenticates as absent (design §5 B8)
 	}
 	return r, true, nil
 }

@@ -21,6 +21,9 @@ func TestLogRoutes_ReadOnlyGate_Q5(t *testing.T) {
 
 	code := func(path, token string) int {
 		r := httptest.NewRequest(http.MethodGet, path, nil)
+		// Operator-key requests arrive over the loopback (SSH-tunnel) listener; tag the origin so the
+		// W7 operator gate honours the bearer, mirroring production BaseContext.
+		r = r.WithContext(adminhttp.WithListenerOrigin(r.Context(), adminhttp.OriginLoopback))
 		if token != "" {
 			r.Header.Set("Authorization", "Bearer "+token)
 		}
