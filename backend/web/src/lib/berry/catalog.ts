@@ -75,6 +75,18 @@ export function phaseOf(c: Capability): string {
   return 'a non-C2 phase'
 }
 
+/**
+ * A CM6 snippet template with a tab-stop placeholder per parameter (A33 §4.1.3):
+ *   set_url(${url}) · wifi_add(${ssid}, ${pass}, ${prio}) · reboot()
+ * Optionals are emitted as ordinary placeholders (the operator tabs through and deletes what they don't
+ * need) — bracket grouping is a display concern (signature()), not a snippet one. CM6-free so the
+ * template is node-testable; completion.ts wraps it into snippetCompletion.
+ */
+export function snippetTemplate(c: Capability): string {
+  const parts = c.params.map((p) => '${' + p.name + '}')
+  return `${c.name}(${parts.join(', ')})`
+}
+
 // ---- completion surface (kept here, CM6-free, so node tests can assert it without importing the
 // CodeMirror editor modules — completion.ts wraps this into the CM6 extension) ----
 
@@ -86,6 +98,8 @@ export interface CompletionOption {
   info: string
   class: string
   severing: boolean
+  /** CM6 snippet template with per-param placeholders (A33 §4.1.3); the bare label for builtins. */
+  snippet: string
 }
 
 /**
@@ -100,6 +114,7 @@ export function completionOptions(manifest: Manifest): CompletionOption[] {
     info: c.doc,
     class: c.class,
     severing: c.risk === RISK_SEVERING,
+    snippet: snippetTemplate(c),
   }))
   const builtins: CompletionOption[] = manifest.builtins.map((b) => ({
     label: b,
@@ -107,6 +122,7 @@ export function completionOptions(manifest: Manifest): CompletionOption[] {
     info: 'Berry builtin / keyword',
     class: 'builtin',
     severing: false,
+    snippet: b,
   }))
   return [...caps, ...builtins]
 }

@@ -20,6 +20,14 @@ export interface Finding {
   kind: LintKind
   /** 1-based line; the editor renders it as "line N". */
   line: number
+  /**
+   * 1-based column of the finding's start, when the pass knows it (calls() derives it from the match
+   * offset). Absent for whole-line findings (balance/string) — those fall back to the line start in
+   * findingRange, never a throw.
+   */
+  col?: number
+  /** 1-based column one past the finding's end (col + name length for calls()). */
+  endCol?: number
   message: string
 }
 
@@ -225,12 +233,18 @@ function calls(code: string, manifest: Manifest): Finding[] {
 
     const cap = known.get(name)
     const line = lineOf(code, at)
+    // the match offset is the callee's start → precise 1-based columns spanning the name, so the CM6
+    // linter underlines the call itself (A33 §4.1.2), not the whole line.
+    const col = colOf(code, at)
+    const endCol = col + name.length
     if (cap && cap.class !== 'forbidden') {
       if (cap.risk === RISK_SEVERING) {
         findings.push({
           severity: 'warning',
           kind: 'severing',
           line,
+          col,
+          endCol,
           message: `${name}() is severing — it can cut the device's own C2 path (USB recovery only).`,
         })
       }
@@ -241,6 +255,8 @@ function calls(code: string, manifest: Manifest): Finding[] {
         severity: 'warning',
         kind: 'forbidden',
         line,
+        col,
+        endCol,
         message:
           `${name}() is a ${phaseOf(cap)} capability — not in the C2 executor; it faults at runtime ` +
           `and the cursor still advances (no error surfaced).`,
@@ -253,6 +269,8 @@ function calls(code: string, manifest: Manifest): Finding[] {
       severity: 'warning',
       kind: 'unknown',
       line,
+      col,
+      endCol,
       message: hint
         ? `${name}() is not a C2 capability — did you mean ${hint}()?`
         : `${name}() is not a C2 capability.`,
@@ -307,4 +325,49 @@ function lineOf(code: string, index: number): number {
   let line = 1
   for (let i = 0; i < index && i < code.length; i++) if (code[i] === '\n') line++
   return line
+}
+
+/** 1-based column of `index` (offset from the start of its line). */
+function colOf(code: string, index: number): number {
+  let start = index
+  while (start > 0 && code[start - 1] !== '\n') start--
+  return index - start + 1
+}
+
+/** Absolute offset of the 1-based line's first character. Clamped to doc length. */
+function lineStartOffset(doc: string, line: number): number {
+  if (line <= 1) return 0
+  let seen = 1
+  for (let i = 0; i < doc.length; i++) {
+    if (doc[i] === '\n') {
+      seen++
+      if (seen === line) return i + 1
+    }
+  }
+  return doc.length
+}
+
+/** Absolute offset of the newline (or doc end) terminating the line that starts at `from`. */
+function lineEndOffset(doc: string, from: number): number {
+  let i = from
+  while (i < doc.length && doc[i] !== '\n') i++
+  return i
+}
+
+/**
+ * Map a Finding to an absolute {from,to} range for a CM6 diagnostic — the CM6-free half of the linter
+ * wiring (editor.ts adds the severity/message). A finding WITH col/endCol underlines exactly the callee
+ * span; a finding WITHOUT col (balance/string) falls back to the whole line from its start (§4.1.2:
+ * "ohne col → Zeilenanfang-Fallback") — never a throw or an out-of-range offset. All results are clamped
+ * into [0, doc.length] so CM6 never rejects a stale range mid-edit.
+ */
+export function findingRange(f: Finding, doc: string): { from: number; to: number } {
+  const len = doc.length
+  const lineStart = lineStartOffset(doc, f.line)
+  if (f.col === undefined) {
+    return { from: Math.min(lineStart, len), to: Math.min(lineEndOffset(doc, lineStart), len) }
+  }
+  const from = Math.min(lineStart + (f.col - 1), len)
+  const to = Math.min(lineStart + ((f.endCol ?? f.col) - 1), len)
+  return { from, to: Math.max(from, to) }
 }

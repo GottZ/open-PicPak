@@ -4,8 +4,9 @@
 
 import { describe, expect, it } from 'vitest'
 import berryEditorSrc from './BerryEditor.svelte?raw'
-import { type Manifest, completionOptions, signature } from '../../lib/berry/catalog'
-import { lint, suggest } from '../../lib/berry/lint'
+import { type Manifest, type Capability, completionOptions, signature, snippetTemplate } from '../../lib/berry/catalog'
+import { lint, suggest, findingRange } from '../../lib/berry/lint'
+import { hoverDoc } from '../../lib/berry/hover'
 
 // A representative manifest mirroring the real be_regfunc surface (the parity-tested Go manifest). It
 // carries the three Doc-13b-prose divergences' CORRECT names (device_sleep/wifi_add, no sleep/info/
@@ -23,9 +24,12 @@ const manifest: Manifest = {
     { name: 'dev_batt_pct', params: [], ret: 'int', class: 'dev', doc: 'Battery percent.' },
     { name: 'http_get', params: [], ret: '', class: 'forbidden', doc: 'Policy-phase (net, Wi-Fi up) capability — not in the C2 executor.' },
     { name: 'text', params: [], ret: '', class: 'forbidden', doc: 'Render-phase (fb drawing) capability — not in the C2 executor.' },
+    { name: 'fill', params: [{ name: 'color', type: 'int' }], ret: '', class: 'forbidden', doc: 'Render-phase (fb drawing) capability — not in the C2 executor.' },
   ],
   builtins: ['print', 'json', 'if', 'for', 'end', 'import', 'str', 'int'],
 }
+
+const cap = (name: string): Capability => manifest.capabilities.find((c) => c.name === name)!
 
 const names = (m: Manifest) => completionOptions(m).map((o) => o.label)
 
@@ -122,6 +126,84 @@ describe('severing mark + unknown/did-you-mean', () => {
     expect(f.some((x) => x.kind === 'unknown')).toBe(false)
     // member calls (json.load) are not bare globals → not flagged unknown.
     expect(lint('import json\nvar c = json.load("{}")\n', manifest).some((x) => x.kind === 'unknown')).toBe(false)
+  })
+})
+
+describe('W-A33.1 — hover docs (hover.ts)', () => {
+  it('(a) set_url hover shows the signature and the severing warning', () => {
+    // red: a hover source that didn't fold in risk would show the signature but hide that set_url can
+    // strand the device — the operator would hover the most dangerous call and see no warning.
+    const hd = hoverDoc('set_url', manifest)!
+    expect(hd).toBeTruthy()
+    expect(hd.signature).toBe('set_url(url)')
+    expect(hd.severing).toBe(true)
+    expect(hd.lines.join('\n')).toContain('severing')
+  })
+
+  it('(c) a forbidden render capability hover names the render phase', () => {
+    const hd = hoverDoc('fill', manifest)!
+    expect(hd.phase).toContain('render-phase')
+    expect(hd.lines.join('\n')).toContain('render-phase')
+  })
+
+  it('returns null for builtins/keywords and unknown identifiers (manifest is the only source)', () => {
+    expect(hoverDoc('print', manifest)).toBeNull()
+    expect(hoverDoc('nope', manifest)).toBeNull()
+  })
+})
+
+describe('W-A33.1 — lint column offsets + diagnostic ranges', () => {
+  it('a call finding carries 1-based col/endCol spanning the callee', () => {
+    const doc = '  set_wifi("a", "b")' // two-space indent → callee starts at column 3
+    const f = lint(doc, manifest).find((x) => x.kind === 'severing')!
+    expect(f.col).toBe(3)
+    expect(f.endCol).toBe(3 + 'set_wifi'.length)
+  })
+
+  it('(c) a forbidden render call yields a diagnostic range at the call, with a render-phase hint', () => {
+    const doc = 'fill(0)'
+    const f = lint(doc, manifest).find((x) => x.kind === 'forbidden')!
+    expect(f.message).toContain('render-phase')
+    const r = findingRange(f, doc)
+    expect(r.from).toBe(0)
+    expect(r.to).toBe('fill'.length) // underlines exactly the callee, not the whole line
+  })
+
+  it('(b) a finding without col falls back to the line start instead of throwing', () => {
+    const doc = 'if connected()\n  reboot()\n' // unclosed if → a balance finding with no column
+    const bal = lint(doc, manifest).find((x) => x.kind === 'balance')!
+    expect(bal.col).toBeUndefined()
+    // red: mapping such a finding by assuming col exists would NaN/throw; findingRange must degrade to
+    // the line start and return an in-range span.
+    const r = findingRange(bal, doc)
+    expect(r.from).toBe(0) // line 1 start (the 'if' opener's line)
+    expect(r.to).toBeGreaterThanOrEqual(r.from)
+    expect(r.to).toBeLessThanOrEqual(doc.length)
+  })
+
+  it('findingRange clamps into [0, doc.length]', () => {
+    const doc = 'reboot()'
+    for (const f of lint(doc + '\nset_wifi("a","b")', manifest)) {
+      const r = findingRange(f, doc) // deliberately map against a SHORTER doc (stale range mid-edit)
+      expect(r.from).toBeGreaterThanOrEqual(0)
+      expect(r.to).toBeLessThanOrEqual(doc.length)
+      expect(r.to).toBeGreaterThanOrEqual(r.from)
+    }
+  })
+})
+
+describe('W-A33.1 — snippet completion templates', () => {
+  it('builds a per-param placeholder template for a capability', () => {
+    expect(snippetTemplate(cap('set_url'))).toBe('set_url(${url})')
+    expect(snippetTemplate(cap('wifi_add'))).toBe('wifi_add(${ssid}, ${pass}, ${prio})')
+  })
+
+  it('a no-arg capability is just the call, no placeholders', () => {
+    expect(snippetTemplate(cap('reboot'))).toBe('reboot()')
+  })
+
+  it('every non-forbidden completion option carries a snippet template', () => {
+    for (const o of completionOptions(manifest)) expect(o.snippet.length).toBeGreaterThan(0)
   })
 })
 
