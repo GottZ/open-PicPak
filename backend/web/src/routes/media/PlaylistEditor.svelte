@@ -25,6 +25,7 @@
     playlistDirty,
     serializeDraft,
     parseDraft,
+    draftAction,
     type PlaylistDraft,
   } from '../../lib/media/playlist'
   import { ORDER_MODES } from '../../lib/media/types'
@@ -106,11 +107,17 @@
     return useDirtyGuard(() => dirty, m['media.playlist.unsaved_confirm']())
   })
 
-  // Draft persistence: mirror the FaaS editor — persist while dirty, clear when clean/saved.
+  // Draft persistence — persist while dirty, clear when clean/saved. Guarded by draftAction (the pure
+  // cross-id switch guard, lib/media/playlist.ts): during loadDetail(B)'s await window selectedId is
+  // already B while detail/baseline/edits still belong to A, and Svelte flushes effects inside that
+  // await — an unguarded effect would save A's draft under B's key (a later Save renames B — the lead
+  // finding on a2f1c68) or clear B's stored draft before loadDetail reads it. The key derives from
+  // detail.id (the LOADED playlist), never selectedId; the error path (detail=null) skips too.
   $effect(() => {
-    if (selectedId === null || baseline === null || currentDraft === null) return
-    if (playlistDirty(baseline, currentDraft)) saveDraft(`playlist:${selectedId}`, serializeDraft(currentDraft))
-    else clearDraft(`playlist:${selectedId}`)
+    const action = draftAction(detail?.id ?? null, selectedId, dirty)
+    if (action === 'skip' || detail === null || currentDraft === null) return
+    if (action === 'save') saveDraft(`playlist:${detail.id}`, serializeDraft(currentDraft))
+    else clearDraft(`playlist:${detail.id}`)
   })
 
   // reset the armed delete + bind target whenever the selection changes.

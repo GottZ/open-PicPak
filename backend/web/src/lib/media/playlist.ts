@@ -67,6 +67,25 @@ function sameOrder(a: readonly number[], b: readonly number[]): boolean {
   return true
 }
 
+/**
+ * Decide what the editor's draft-persistence effect may do — the cross-id guard
+ * (lead finding on a2f1c68). During a playlist switch, loadDetail(idB) sets
+ * selectedId=B synchronously and only THEN awaits the fetch; Svelte flushes
+ * effects inside that await, so an effect keyed on selectedId would read B while
+ * baseline/edits still belong to A — persisting A's draft under B's key (a save
+ * would rename B to A's name) or clearing B's stored draft before it is ever
+ * read. The effect must therefore act only when the LOADED playlist (detail.id)
+ * and the SELECTED id agree; in the switch window they differ → 'skip'.
+ */
+export function draftAction(
+  loadedId: number | null,
+  selectedId: number | null,
+  dirty: boolean,
+): 'save' | 'clear' | 'skip' {
+  if (loadedId === null || selectedId === null || loadedId !== selectedId) return 'skip'
+  return dirty ? 'save' : 'clear'
+}
+
 /** Serialise a draft for localStorage (draft.ts stores strings only). */
 export function serializeDraft(draft: PlaylistDraft): string {
   return JSON.stringify(draft)

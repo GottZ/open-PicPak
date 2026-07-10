@@ -13,6 +13,7 @@ import {
   playlistDirty,
   serializeDraft,
   parseDraft,
+  draftAction,
   type PlaylistDraft,
 } from './playlist'
 import type { PlaylistItem } from './types'
@@ -103,6 +104,28 @@ describe('playlistDirty', () => {
   it('is dirty on an added or removed item', () => {
     expect(playlistDirty(baseline, { ...baseline, item_ids: [11, 12, 13, 14] })).toBe(true)
     expect(playlistDirty(baseline, { ...baseline, item_ids: [11, 12] })).toBe(true)
+  })
+})
+
+describe('draftAction — the cross-id switch guard (lead finding on a2f1c68)', () => {
+  // The switch window: loadDetail(B) has set selectedId=B synchronously, but the
+  // await has not resolved — detail/baseline/edits still belong to A. An effect
+  // acting here would persist A's draft under B's key (a later Save renames B to
+  // A's name — the corruption path) or clear B's stored draft before it is read.
+  it("skips while the loaded playlist and the selection disagree (A loaded, B selected)", () => {
+    expect(draftAction(1, 2, true)).toBe('skip') // A dirty → must NOT save under B's key
+    expect(draftAction(1, 2, false)).toBe('skip') // A clean → must NOT clear B's draft
+  })
+
+  it('skips while nothing is loaded or selected (boot, post-delete, error path detail=null)', () => {
+    expect(draftAction(null, 2, true)).toBe('skip') // fetch in flight / failed: detail=null
+    expect(draftAction(1, null, false)).toBe('skip')
+    expect(draftAction(null, null, false)).toBe('skip')
+  })
+
+  it('saves a dirty and clears a clean draft once loaded and selected agree', () => {
+    expect(draftAction(2, 2, true)).toBe('save')
+    expect(draftAction(2, 2, false)).toBe('clear')
   })
 })
 
