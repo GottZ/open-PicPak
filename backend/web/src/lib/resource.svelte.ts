@@ -6,7 +6,21 @@ import { toApiError, type ApiError } from './api'
 
 export type ResourceStatus = 'idle' | 'loading' | 'ready' | 'error'
 
-export class Resource<T> {
+/**
+ * The three-stage contract StateView renders off (status / data / error / reload).
+ * Resource is the single-shot implementation; the paged accumulator
+ * (lib/media/paged.svelte.ts, design 29 §6/§7 W5) is a second implementation, so
+ * StateView takes this interface — not the concrete Resource — and both feed the
+ * one empty / loading / error convention (D19.13).
+ */
+export interface ResourceView<T> {
+  readonly status: ResourceStatus
+  readonly data: T | null
+  readonly error: ApiError | null
+  reload: () => Promise<void> | void
+}
+
+export class Resource<T> implements ResourceView<T> {
   status = $state<ResourceStatus>('idle')
   data = $state<T | null>(null)
   error = $state<ApiError | null>(null)

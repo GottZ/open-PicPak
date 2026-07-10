@@ -3,7 +3,7 @@
   // zero-data / in-flight / failed surface renders a consistent state instead of
   // an ambiguous blank. Feature lists (logs, functions, roster) render through it.
   import type { Snippet } from 'svelte'
-  import type { Resource } from './resource.svelte'
+  import type { ResourceView } from './resource.svelte'
   import { m } from '../paraglide/messages.js'
 
   let {
@@ -14,7 +14,7 @@
     loadingText = m['state.loading'](),
     emptyText = m['state.empty'](),
   }: {
-    resource: Resource<T>
+    resource: ResourceView<T>
     /** Rendered with the loaded data when ready and non-empty. */
     ready: Snippet<[T]>
     /** Optional custom empty state; falls back to emptyText. */

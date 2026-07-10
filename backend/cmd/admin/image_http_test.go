@@ -8,9 +8,11 @@ import (
 	"image/png"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -218,6 +220,77 @@ func TestImageRawServe_Headers_DB(t *testing.T) {
 	}
 	if !bytes.Equal(rw.Body.Bytes(), png) {
 		t.Errorf("raw body != uploaded bytes (%d vs %d)", rw.Body.Len(), len(png))
+	}
+}
+
+// TestImageThumbnail_DB — the design 29 §6 / E-A29-5 thumbnail probe. A GET on the thumbnail route
+// (a) downscales an 800×600 source to the 320×240 box (aspect preserved, longest edge == thumbMaxDim),
+// (b) serves it as an authoritative image/png with the B5 nosniff + tightest CSP, (c) carries a strong
+// ETag + `immutable` private cache so the grid fetches each tile once, (d) answers a matching
+// If-None-Match with 304, and (e) 404s an unknown id. Red belts: a raw passthrough (no downscale)
+// decodes back to 800×600; missing cache headers fail the immutable/ETag asserts; a missing
+// If-None-Match branch re-serves 200 instead of 304.
+func TestImageThumbnail_DB(t *testing.T) {
+	pool := dbPool(t)
+	tok := mintScoped(t, pool, "rw", []string{adminhttp.ScopeImageRead, adminhttp.ScopeImageWrite})
+	h := testImageHandler(pool, t.TempDir(), defaultMaxImageBytes)
+
+	// 800×600 source → the thumbnail must box-fit to 320×240 (never the source dims).
+	pw := do(h, "POST", "/api/images", tok, bytes.NewReader(pngBytes(t, 800, 600)), "image/png")
+	if pw.Code != http.StatusCreated {
+		t.Fatalf("POST = %d (%s)", pw.Code, pw.Body.String())
+	}
+	id := int64(jsonBody(t, pw)["id"].(float64))
+	path := "/api/images/" + strconv.FormatInt(id, 10) + "/thumbnail"
+
+	tw := do(h, "GET", path, tok, nil, "")
+	if tw.Code != http.StatusOK {
+		t.Fatalf("thumbnail = %d (%s)", tw.Code, tw.Body.String())
+	}
+	if got := tw.Header().Get("Content-Type"); got != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png", got)
+	}
+	if got := tw.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := tw.Header().Get("Content-Security-Policy"); got != "default-src 'none'" {
+		t.Errorf("Content-Security-Policy = %q, want default-src 'none'", got)
+	}
+	cc := tw.Header().Get("Cache-Control")
+	if !strings.Contains(cc, "immutable") || !strings.Contains(cc, "max-age=") || !strings.Contains(cc, "private") {
+		t.Errorf("Cache-Control = %q, want private + max-age + immutable", cc)
+	}
+	etag := tw.Header().Get("ETag")
+	if etag == "" {
+		t.Fatalf("ETag empty, want a strong content-address validator")
+	}
+
+	// The downscale is the load-bearing assert: the decoded body must be the 320×240 box, NOT the source.
+	cfg, err := png.DecodeConfig(bytes.NewReader(tw.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("thumbnail is not a decodable PNG: %v", err)
+	}
+	if cfg.Width != 320 || cfg.Height != 240 {
+		t.Errorf("thumbnail dims = %dx%d, want 320x240 (box-fit of an 800x600 source)", cfg.Width, cfg.Height)
+	}
+
+	// A matching If-None-Match → 304 (immutable revalidation), no body.
+	nr := httptest.NewRequest("GET", path, nil)
+	nr = nr.WithContext(adminhttp.WithListenerOrigin(nr.Context(), adminhttp.OriginLoopback))
+	nr.Header.Set("Authorization", "Bearer "+tok)
+	nr.Header.Set("If-None-Match", etag)
+	nw := httptest.NewRecorder()
+	h.ServeHTTP(nw, nr)
+	if nw.Code != http.StatusNotModified {
+		t.Errorf("conditional GET = %d, want 304", nw.Code)
+	}
+	if nw.Body.Len() != 0 {
+		t.Errorf("304 body = %d bytes, want empty", nw.Body.Len())
+	}
+
+	// Unknown id → uniform 404.
+	if uw := do(h, "GET", "/api/images/999999/thumbnail", tok, nil, ""); uw.Code != http.StatusNotFound {
+		t.Errorf("thumbnail unknown id = %d, want 404", uw.Code)
 	}
 }
 
