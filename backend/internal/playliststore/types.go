@@ -39,6 +39,22 @@ var orderModes = map[string]bool{"sequential": true, "shuffle": true}
 // ValidOrderMode reports whether m is a supported rotation order.
 func ValidOrderMode(m string) bool { return orderModes[m] }
 
+// fits / dithers are the closed sets the 0012 playlist_item CHECKs enforce (fit → sharp resize mode,
+// dither → per-item policy carried to the pack seam). Validated Go-side so a bad value on AddItem is a
+// clean 422, never a raw 23514 check-violation surfacing as a 500.
+var (
+	fits    = map[string]bool{"cover": true, "contain": true, "fill": true}
+	dithers = map[string]bool{"none": true, "floyd-steinberg": true, "atkinson": true, "ordered": true}
+)
+
+// ValidFit reports whether f is a supported resize fit. The empty string is accepted: AddItem falls
+// back to the 0012 default ("cover"), so a caller omitting fit is not a 422.
+func ValidFit(f string) bool { return f == "" || fits[f] }
+
+// ValidDither reports whether d is a supported dither policy. The empty string is accepted (AddItem
+// falls back to the 0012 default "none").
+func ValidDither(d string) bool { return d == "" || dithers[d] }
+
 var (
 	// ErrNotFound is returned when a playlist / item row does not exist.
 	ErrNotFound = errors.New("playliststore: not found")

@@ -38,6 +38,10 @@ func dbPool(t *testing.T) *pgxpool.Pool {
 		`TRUNCATE telemetry`,
 		`TRUNCATE logs`,
 		`UPDATE channels SET default_version = NULL`,
+		// A27 W3 render-anchor tables: device_playlist_binding (FK -> playlist, cascade-dropped by the
+		// playlist truncate below, but truncated explicitly so a stray binding never survives) + the FK-less
+		// playlist_cursor / frame_variant_cache (NOT reached by any cascade) — reset before the playlist rows.
+		`TRUNCATE device_playlist_binding, playlist_cursor, frame_variant_cache`,
 		// image/playlist before operator_keys: image.operator_key_id -> operator_keys is RESTRICT, and
 		// playlist_item.image_id -> image is RESTRICT (CASCADE clears the dependent rows in one shot).
 		`TRUNCATE image, playlist, playlist_item RESTART IDENTITY CASCADE`,

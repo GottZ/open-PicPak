@@ -176,6 +176,15 @@ func runServer() {
 	startOrphanBlobSweep(ctx, pool, imgBlobDir)
 	startVariantCacheGC(ctx, pool)
 
+	// Playlist CRUD + device-binding surface (A28 W5b, design 29 §Merge-Punkt A28 (f)/(g), design 27
+	// §4.2/§4.3): create/list/get/update/delete a playlist, add/remove/reorder items, and bind/unbind a
+	// device to a playlist. Reads gate on image:read, writes on image:write (the SAME media scopes the
+	// image surface uses); the device→playlist bind is admin-gated (mirror of the render bind). Mounts on
+	// the A27 playliststore + plrender packages and fires NotifyPlaylistChanged on every mutation/bind so
+	// the pre-pack warmer can warm variants before devices wake. Single wiring source
+	// (registerPlaylistRoutes); registered before the SPA catch-all.
+	registerPlaylistRoutes(mux, pool)
+
 	// Telemetry dashboard read surface (A22): the enriched fleet list (the 22→17 seam — adds
 	// running_ver/batt/health), the per-device latest+history, and the non-secret SPA config (Grafana/
 	// webhook base URLs). All auth-gated (read-only key reaches them); the verdict thresholds + caps are

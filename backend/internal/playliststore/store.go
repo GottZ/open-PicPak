@@ -51,6 +51,45 @@ func GetPlaylist(ctx context.Context, q Querier, id int64) (Playlist, error) {
 	return scanPlaylist(q.QueryRow(ctx, `SELECT `+playlistCols+` FROM playlist WHERE id = $1`, id))
 }
 
+// UpdateParams carries the partial fields a PATCH /api/playlists/{id} may change. A nil field is left
+// untouched (COALESCE), so a rename does not force the caller to resend the rotation policy and a policy
+// edit does not require resending the name. Distinct from SetPolicy (which sets BOTH interval + mode):
+// this is the partial-update primitive the HTTP layer needs so an operator can change one field at a
+// time.
+type UpdateParams struct {
+	Name      *string
+	IntervalS *int
+	OrderMode *string
+}
+
+// UpdatePlaylist applies a partial update (name / interval_s / order_mode) and bumps version + updated_at
+// in the SAME statement — the 0012 "version bumped on ANY playlist mutation" invariant holds even for a
+// pure rename (a benign cursor re-eval, never a wrong frame). It does NOT touch shuffle_epoch (that is
+// Reshuffle's job, §4.4). Fields are validated Go-side for a clean 422 before the DB round-trip; a
+// duplicate name surfaces as a unique violation (IsUniqueViolation → 409). Returns ErrNotFound if no row
+// matched.
+func UpdatePlaylist(ctx context.Context, q Querier, id int64, p UpdateParams) (Playlist, error) {
+	if p.Name != nil && !ValidName(*p.Name) {
+		return Playlist{}, ErrNameInvalid
+	}
+	if p.IntervalS != nil && *p.IntervalS <= 0 {
+		return Playlist{}, ErrPolicyInvalid
+	}
+	if p.OrderMode != nil && !ValidOrderMode(*p.OrderMode) {
+		return Playlist{}, ErrPolicyInvalid
+	}
+	return scanPlaylist(q.QueryRow(ctx, `
+		UPDATE playlist SET
+			name       = COALESCE($2, name),
+			interval_s = COALESCE($3, interval_s),
+			order_mode = COALESCE($4, order_mode),
+			version    = version + 1,
+			updated_at = now()
+		WHERE id = $1
+		RETURNING `+playlistCols,
+		id, p.Name, p.IntervalS, p.OrderMode))
+}
+
 // DeletePlaylist removes a playlist; its items go with it (ON DELETE CASCADE). Returns ErrNotFound
 // if no row matched.
 func DeletePlaylist(ctx context.Context, q Querier, id int64) error {

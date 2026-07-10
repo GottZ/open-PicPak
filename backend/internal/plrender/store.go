@@ -65,6 +65,17 @@ func BindPlaylist(ctx context.Context, pool Pool, serial string, playlistID int6
 	return tx.Commit(ctx)
 }
 
+// CountBindings returns how many devices are currently bound to a playlist — the DELETE /api/playlists/
+// {id} in-use guard (a bound playlist is a 409 rather than a silent ON DELETE CASCADE that blanks N
+// panels AND orphans their FK-less playlist_cursor rows; image-delete-in-use parity, §5). Reads the
+// device_playlist_binding(playlist_id) index.
+func CountBindings(ctx context.Context, q Querier, playlistID int64) (int, error) {
+	var n int
+	err := q.QueryRow(ctx,
+		`SELECT count(*) FROM device_playlist_binding WHERE playlist_id = $1`, playlistID).Scan(&n)
+	return n, err
+}
+
 // UnbindPlaylist drops a serial's playlist binding + cursor (falls back to "no binding"). Used by the
 // device-delete cascade (K2/W5) and an explicit unbind. Returns whether a binding row existed.
 func UnbindPlaylist(ctx context.Context, q Querier, serial string) (bool, error) {
