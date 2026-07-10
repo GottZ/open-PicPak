@@ -8,7 +8,7 @@
     ],
     "egress_allow": ["images.example.com:443"],
     "secret_bindings": [],
-    "trigger_config": { "mode": "sync", "ttl_s": 900 }
+    "trigger_config": { "dither": "atkinson", "mode": "sync", "ttl_s": 900, "serial_invariant": true }
   },
   {
     "name": "builtin/clock",

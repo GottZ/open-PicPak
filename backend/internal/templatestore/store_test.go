@@ -177,6 +177,34 @@ func TestBerryByteGuard(t *testing.T) {
 	}
 }
 
+// --- A31.6: the external-image builtin seeds with the COMPLETED trigger_config (dither + invariant).
+//     Locks the catalog contract the render-path e2e (cmd/faas-supervisor) then rides: RED against the
+//     A30-W1 placeholder ({"mode":"sync","ttl_s":900}), GREEN after the A31.6 completion. ---
+
+func TestSeedExternalImageTriggerConfig(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	if _, err := SeedBuiltins(ctx, pool); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	var raw []byte
+	if err := pool.QueryRow(ctx, `SELECT trigger_config FROM templates WHERE name='builtin/external-image'`).Scan(&raw); err != nil {
+		t.Fatalf("read external-image trigger_config: %v", err)
+	}
+	var cfg struct {
+		Dither          string `json:"dither"`
+		Mode            string `json:"mode"`
+		TTLSec          int    `json:"ttl_s"`
+		SerialInvariant bool   `json:"serial_invariant"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal trigger_config %q: %v", raw, err)
+	}
+	if cfg.Dither != "atkinson" || !cfg.SerialInvariant || cfg.Mode != "sync" || cfg.TTLSec != 900 {
+		t.Fatalf("external-image trigger_config not the A31.6 completion: %+v", cfg)
+	}
+}
+
 // --- SeedBuiltins idempotency: second boot on an unchanged catalog is a no-op (THE gate) ---
 
 func TestSeedIdempotent(t *testing.T) {
