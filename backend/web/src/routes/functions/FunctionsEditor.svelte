@@ -116,6 +116,10 @@
   let editorEl = $state<HTMLDivElement | null>(null)
   let handle: FaasEditorHandle | null = null
   let mountedNode: HTMLElement | null = null
+  // Editor TypeScript language service: 'off' until the editor mounts, then idle-loads (mirrors the WASM
+  // idle-load of the simulator, W-A33.3). 'unavailable' is the named fail-open state — the editor stays
+  // fully usable regardless.
+  let tsStatus = $state<'off' | 'loading' | 'ready' | 'unavailable'>('off')
 
   $effect(() => {
     const el = editorEl
@@ -124,7 +128,7 @@
     handle = null
     mountedNode = el
     if (el) {
-      handle = createFaasEditor({
+      const h = createFaasEditor({
         parent: el,
         doc: source,
         getBound: () => boundSecrets,
@@ -133,6 +137,20 @@
           source = d
           if (selectedId !== null) saveDraft(`faas:${selectedId}`, d)
         },
+      })
+      handle = h
+      // Idle-load the language service after first paint so the editor opens instantly; a failure just
+      // leaves it 'unavailable' (fail-open).
+      tsStatus = 'loading'
+      const idle =
+        typeof requestIdleCallback === 'function'
+          ? requestIdleCallback
+          : (cb: () => void) => setTimeout(cb, 200)
+      idle(() => {
+        h.enableTypeService().then(
+          (s) => (tsStatus = s),
+          () => (tsStatus = 'unavailable'),
+        )
       })
     }
   })
@@ -543,6 +561,13 @@
 
               <div class="editor-wrap">
                 <div class="editor" bind:this={editorEl}></div>
+                {#if tsStatus !== 'off'}
+                  <p class="muted small ts-status" class:ts-ready={tsStatus === 'ready'}>
+                    {#if tsStatus === 'loading'}{m['faas.typeservice.loading']()}
+                    {:else if tsStatus === 'ready'}{m['faas.typeservice.ready']()}
+                    {:else}{m['faas.typeservice.unavailable']()}{/if}
+                  </p>
+                {/if}
               </div>
 
               <div class="config">
