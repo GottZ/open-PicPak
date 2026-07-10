@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-picpak/backend/internal/adminhttp"
 	"github.com/open-picpak/backend/internal/devicestore"
 	"github.com/open-picpak/backend/internal/operator"
 	"github.com/open-picpak/backend/internal/telemetry"
@@ -362,6 +363,34 @@ func TestWhoamiFieldsGoldenShape(t *testing.T) {
 	}
 	if f["is_admin"] != false || f["key_id"] != int64(7) || f["label"] != "ro" {
 		t.Errorf("whoami fields mismatch: %+v", f)
+	}
+}
+
+// TestSSEWriterFlushesThroughIPRateLimit reproduces the exact W4-regression condition the suite missed
+// (lead review): main.go wraps the WHOLE mux in adminhttp.IPRateLimit, so the REAL newSSEWriter runs on
+// the middleware's status-recording ResponseWriter. Its per-frame ResponseController.Flush() finds the
+// Flusher only over the Unwrap() chain — without it the stream silently buffers (newSSEWriter logs and
+// degrades, and the fronting proxy 504s the unflushed stream). Red (no statusRecorder.Unwrap): the frame
+// flush errors and never reaches the recorder. Green: frames flush through the wrapper.
+func TestSSEWriterFlushesThroughIPRateLimit(t *testing.T) {
+	adminhttp.ConfigureRateLimitsFromEnv()
+	var frameErr error
+	h := adminhttp.IPRateLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		sw := newSSEWriter(w, time.Second)
+		frameErr = sw.event("snapshot", "1", []byte(`{"a":1}`))
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/events", nil))
+	if frameErr != nil {
+		t.Fatalf("SSE frame flush through IPRateLimit failed: %v", frameErr)
+	}
+	if !rec.Flushed {
+		t.Fatal("SSE frame never flushed through IPRateLimit's wrapper — statusRecorder must Unwrap()")
+	}
+	if !strings.Contains(rec.Body.String(), "event: snapshot") {
+		t.Fatalf("frame body missing: %q", rec.Body.String())
 	}
 }
 

@@ -34,6 +34,7 @@ func dbPool(t *testing.T) *pgxpool.Pool {
 		`TRUNCATE api_tokens, admin_sessions, admin_users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
+	resetRateLimitersForTest() // fresh, generous buckets so W1–W3 carrier tests never trip the W4 gates
 	return pool
 }
 

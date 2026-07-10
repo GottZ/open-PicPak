@@ -47,6 +47,8 @@ func dbPool(t *testing.T) *pgxpool.Pool {
 			t.Fatalf("reset %q: %v", stmt, err)
 		}
 	}
+	adminhttp.ConfigureRateLimitsFromEnv() // fresh W4 rate-limit buckets per test (the post-auth principal
+	// brake now lives inside adminhttp.Auth) — no cross-test carry-over into the gated handler suites.
 	return pool
 }
 

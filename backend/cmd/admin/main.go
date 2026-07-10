@@ -181,7 +181,12 @@ func runServer() {
 	// while all /api routes stay functional (D19.3).
 	mux.Handle("/", web.Handler())
 
-	handler := adminhttp.WithRequestID(mux)
+	// Pre-auth IP rate limit wraps the whole mux (design §4.4): an IP over the limit is 429'd before the
+	// mux dispatches, so a credential/login flood is stopped ahead of the argon2 verify it targets, and
+	// POST /api/session's brute-force surface is covered without a per-route hook. WithRequestID stays
+	// outermost so the 429 still carries an X-Request-ID. The post-auth per-principal brake lives inside
+	// adminhttp.Auth, already on every gated route.
+	handler := adminhttp.WithRequestID(adminhttp.IPRateLimit(mux))
 	log.Printf("admin listening on %s", addr)
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	// Tag every request with its listener origin (non-spoofable — it comes from the bind address, not

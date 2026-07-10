@@ -230,7 +230,7 @@ func Auth(db *pgxpool.Pool) func(http.Handler) http.Handler {
 					}
 					go func(id int64) { _ = apitoken.TouchLastUsed(context.Background(), db, id) }(tok.ID)
 					pr := Principal{Kind: KindBearer, ID: tok.TokenID, Label: tok.Label, Scopes: tok.Scopes}
-					next.ServeHTTP(w, r.WithContext(setPrincipal(ctx, pr)))
+					admitPrincipal(w, r, next, ctx, pr)
 					return
 				}
 				// Legacy operator_key bearer fallback. W7 gates this to the loopback listener via
@@ -247,7 +247,7 @@ func Auth(db *pgxpool.Pool) func(http.Handler) http.Handler {
 				go func() { _ = operator.TouchLastUsed(context.Background(), db, op.KeyID) }()
 				pr := Principal{Kind: KindOperator, ID: strconv.FormatInt(op.KeyID, 10), Label: op.Label, Scopes: implicitFullScopes(), IsAdmin: op.IsAdmin}
 				ctx = setOperator(ctx, op)
-				next.ServeHTTP(w, r.WithContext(setPrincipal(ctx, pr)))
+				admitPrincipal(w, r, next, ctx, pr)
 				return
 			}
 
@@ -266,7 +266,7 @@ func Auth(db *pgxpool.Pool) func(http.Handler) http.Handler {
 				pr, status := resolveBasic(ctx, db, user, pass, RemoteIP(r))
 				switch status {
 				case http.StatusOK:
-					next.ServeHTTP(w, r.WithContext(setPrincipal(ctx, pr)))
+					admitPrincipal(w, r, next, ctx, pr)
 				case http.StatusTooManyRequests:
 					w.Header().Set("Retry-After", "1")
 					WriteErr(w, r, http.StatusTooManyRequests, "rate_limited", "authentication capacity exceeded; retry shortly")
@@ -298,7 +298,7 @@ func Auth(db *pgxpool.Pool) func(http.Handler) http.Handler {
 						"mutating session requests must send "+csrfHeader+": "+csrfHeaderValue)
 					return
 				}
-				next.ServeHTTP(w, r.WithContext(setPrincipal(ctx, pr)))
+				admitPrincipal(w, r, next, ctx, pr)
 				return
 			}
 

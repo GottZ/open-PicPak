@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -198,4 +199,44 @@ func TestSession_DummyVerify_UniformLatency(t *testing.T) {
 		t.Fatalf("dummy-verify timing oracle: unknown-user median %v << wrong-password median %v", unknown, wrongPw)
 	}
 	_ = ctx
+}
+
+// TestSession_LoginFlood_RateLimited is the W4 flood gate on the REAL POST /api/session, wired exactly as
+// main.go wires it (WithRequestID(IPRateLimit(mux))). After N wrong-password attempts from one IP the
+// next is 429 WITH Retry-After, and — the load-bearing assertion — it is blocked BEFORE the login handler
+// runs: the handler writes a session.login_fail audit row on every failed verify, so the blocked request
+// leaving the audit count at N (not N+1) proves it never reached the argon2 verify. Red (no IPRateLimit
+// wrap): the sixth attempt is another 401 with a sixth audit row, no 429.
+func TestSession_LoginFlood_RateLimited(t *testing.T) {
+	pool := dbPool(t)
+	resetAuthTables(t, pool)
+	ctx := context.Background()
+	if _, err := adminuser.Create(ctx, pool, "mallory", "pw-mallory", false); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Pin the pre-auth IP limit small and deterministic; restore the defaults afterwards.
+	os.Setenv("ADMIN_RATELIMIT_IP_PER_MIN", "5")
+	adminhttp.ConfigureRateLimitsFromEnv()
+	defer func() { os.Unsetenv("ADMIN_RATELIMIT_IP_PER_MIN"); adminhttp.ConfigureRateLimitsFromEnv() }()
+
+	mux := http.NewServeMux()
+	registerAuthRoutes(mux, pool)
+	h := adminhttp.WithRequestID(adminhttp.IPRateLimit(mux)) // exactly main.go's wiring
+
+	for i := 1; i <= 5; i++ {
+		if rec := postSession(h, `{"username":"mallory","password":"wrong"}`, nil); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: want 401, got %d (%s)", i, rec.Code, rec.Body)
+		}
+	}
+	rec := postSession(h, `{"username":"mallory","password":"wrong"}`, nil)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("6th attempt: want 429, got %d (%s)", rec.Code, rec.Body)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("login 429 without Retry-After header")
+	}
+	if n := sessionAuditCount(t, pool, "session.login_fail", "mallory"); n != 5 {
+		t.Fatalf("session.login_fail rows = %d, want 5 — the 6th (429) must be blocked before the login handler (argon2)", n)
+	}
 }
