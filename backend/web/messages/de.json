@@ -27,5 +27,16 @@
   "media.title": "Medien",
   "media.subtitle": "Bilder hochladen, als BWRY-Panel prüfen und in Playlisten ordnen.",
   "media.library.heading": "Bibliothek",
-  "media.library.empty": "Noch keine Bilder. Lade eins hoch, um zu beginnen."
+  "media.library.empty": "Noch keine Bilder. Lade eins hoch, um zu beginnen.",
+  "media.upload.heading": "Bild hochladen",
+  "media.upload.dropzone": "Bild hierher ziehen oder eine Datei wählen (PNG, JPEG, GIF).",
+  "media.upload.choose": "Datei wählen",
+  "media.upload.uploading": "Wird hochgeladen … {pct}%",
+  "media.upload.preview_caption": "Vorschau (annähernd) — {name}",
+  "media.upload.success": "Bild {id} hochgeladen.",
+  "media.upload.error.too_large": "Datei zu groß — höchstens 24 MiB.",
+  "media.upload.error.over_dimension": "Bildabmessungen zu groß — höchstens 24 Megapixel.",
+  "media.upload.error.unsupported": "Nicht unterstütztes Format. Bitte PNG, JPEG oder GIF verwenden.",
+  "media.upload.error.not_an_image": "Datei ist kein lesbares Bild.",
+  "media.upload.error.failed": "Upload fehlgeschlagen."
 }

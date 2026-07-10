@@ -9,12 +9,19 @@
   import { onMount } from 'svelte'
   import StateView from '../../lib/StateView.svelte'
   import { Resource } from '../../lib/resource.svelte'
+  import { apiFetch } from '../../lib/api'
+  import Uploader from '../../lib/media/Uploader.svelte'
+  import type { Image, ImagesResponse } from '../../lib/media/types'
   import { m } from '../../paraglide/messages.js'
 
-  // Placeholder row until lib/media/types.ts (design 29 §7 W4) lands the real
-  // Image wire type; the paged list state (§6/§7 W5) then replaces the Resource.
-  type LibraryRow = { id: number }
-  const library = new Resource<LibraryRow[]>(async () => [])
+  // W4 lands the real Image wire type + a single-shot GET /api/images Resource so an
+  // upload can refresh the library; W5 (§6/§7) swaps this for the paged accumulator
+  // (lib/media/paged.svelte.ts) that the target-scale grid needs. Only the first
+  // cursor page is read here — the paged grid is out of W4 scope.
+  const library = new Resource<Image[]>(async () => {
+    const res = await apiFetch<ImagesResponse>('/api/images')
+    return res.images
+  })
   onMount(() => library.load())
 </script>
 
@@ -24,13 +31,18 @@
     <p class="subtitle">{m['media.subtitle']()}</p>
   </header>
 
+  <Uploader onUploaded={() => library.reload()} />
+
   <section class="library" aria-label={m['media.library.heading']()}>
     <h2>{m['media.library.heading']()}</h2>
     <StateView resource={library} emptyText={m['media.library.empty']()}>
       {#snippet ready(images)}
         <ul class="grid">
           {#each images as image (image.id)}
-            <li class="tile">{image.id}</li>
+            <li class="tile">
+              <span class="dims">{image.width}×{image.height}</span>
+              <span class="mime">{image.mime}</span>
+            </li>
           {/each}
         </ul>
       {/snippet}
@@ -81,8 +93,16 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     aspect-ratio: 4 / 3;
-    display: grid;
-    place-items: center;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 0.25rem;
     color: var(--fg-muted);
+    font-size: 0.8rem;
+  }
+  .tile .mime {
+    font-size: 0.7rem;
+    opacity: 0.75;
   }
 </style>

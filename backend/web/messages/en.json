@@ -27,5 +27,16 @@
   "media.title": "Media",
   "media.subtitle": "Upload images, verify them as a BWRY panel, and arrange them into playlists.",
   "media.library.heading": "Library",
-  "media.library.empty": "No images yet. Upload one to get started."
+  "media.library.empty": "No images yet. Upload one to get started.",
+  "media.upload.heading": "Upload an image",
+  "media.upload.dropzone": "Drag an image here or choose a file (PNG, JPEG, GIF).",
+  "media.upload.choose": "Choose file",
+  "media.upload.uploading": "Uploading … {pct}%",
+  "media.upload.preview_caption": "Preview (approximate) — {name}",
+  "media.upload.success": "Uploaded image {id}.",
+  "media.upload.error.too_large": "File too large — 24 MiB maximum.",
+  "media.upload.error.over_dimension": "Image dimensions too large — 24 megapixels maximum.",
+  "media.upload.error.unsupported": "Unsupported format. Please use PNG, JPEG, or GIF.",
+  "media.upload.error.not_an_image": "File is not a readable image.",
+  "media.upload.error.failed": "Upload failed."
 }
