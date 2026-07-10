@@ -16,12 +16,13 @@ type templateHandlers struct {
 	pool *pgxpool.Pool
 }
 
-// registerTemplateRoutes mounts the 5 template-store CRUD routes (§4.2). Reads are auth-gated (any valid
-// key — a read-only operator may browse the catalog and load a template into the editor); mutations
-// require admin, the exact gating main.go applies to the function/OTA routes — /apply is RCE-equivalent
-// (it enqueues a device script / mints a runnable function) and lands in a later wave (W4/W5). Single
-// source of the wiring so main.go and the gating test can never drift (mirror of registerFaasRoutes).
-// The source is foreign code at rest, never eval'd here (only the worker / the C2 VM runs it, D24.7).
+// registerTemplateRoutes mounts the 5 template-store CRUD routes (§4.2) plus the /apply dispatch. Reads are
+// auth-gated (any valid key — a read-only operator may browse the catalog and load a template into the
+// editor); mutations require admin, the exact gating main.go applies to the function/OTA routes. /apply is
+// RCE-equivalent (it enqueues a device script / mints a runnable function), so it carries the same
+// RequireAdmin gate as POST /api/command. Single source of the wiring so main.go and the gating test can
+// never drift (mirror of registerFaasRoutes). The source is foreign code at rest, never eval'd here (only
+// the worker / the C2 VM runs it, D24.7).
 func registerTemplateRoutes(mux *http.ServeMux, pool *pgxpool.Pool) {
 	h := templateHandlers{pool: pool}
 	mux.Handle("GET /api/templates", adminhttp.Auth(pool)(http.HandlerFunc(h.list)))
@@ -29,6 +30,7 @@ func registerTemplateRoutes(mux *http.ServeMux, pool *pgxpool.Pool) {
 	mux.Handle("POST /api/templates", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(h.create))))
 	mux.Handle("PUT /api/templates/{id}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(h.update))))
 	mux.Handle("DELETE /api/templates/{id}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(h.delete))))
+	mux.Handle("POST /api/templates/{id}/apply", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(h.apply))))
 }
 
 // list — GET /api/templates (auth): the list-view projection (no source, no params, no trust profile —
