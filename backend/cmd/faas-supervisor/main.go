@@ -64,6 +64,9 @@ type supervisor struct {
 	imgBlobDir     string             // imgblobs volume, :ro (source-image reads for the built-in source)
 	jitterFrac     float64            // X-Next-Wake jitter fraction (K12); 0 → default 0.15
 	rng            func() float64     // jitter randomness; nil → math/rand (tests inject determinism)
+
+	// A27 W4 pre-pack warmer.
+	warmLimit int // max concurrent pre-pack variant renders (K5 staffel); < 1 → 1
 }
 
 func main() {
@@ -97,10 +100,17 @@ func main() {
 		plFlight:      newSingleFlight(),
 		imgBlobDir:    env("IMG_BLOB_DIR", "/var/lib/picpak/imgblobs"),
 		jitterFrac:    0.15,
+		warmLimit:     envInt("FAAS_WARM_LIMIT", 2),
 	}
 	s.render = s.doRender                 // the real M4 render drive (tests inject a stub)
 	s.renderPlaylist = s.doRenderPlaylist // the built-in __playlist M4 drive (tests inject a stub)
 	go s.runScheduler(ctx)
+	// A27 W4: the pre-pack warmer + direct-display refresh fan-out ride a LISTEN on playlist_changed.
+	// DEFAULT-OFF (K10/HOTP) — nothing warms or fans out until FAAS_PLAYLIST_PUSH is armed.
+	if playlistPushEnabled() {
+		go s.runPlaylistWarmer(ctx)
+		log.Printf("faas-supervisor: playlist push (pre-pack warmer + refresh fan-out) enabled")
+	}
 
 	renderSock := env("RENDER_SOCK", "/run/faas/render.sock")
 	_ = os.Remove(renderSock)
