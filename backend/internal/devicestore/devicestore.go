@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/open-picpak/backend/internal/faasstore"
+	"github.com/open-picpak/backend/internal/plrender"
 )
 
 var serialRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,31}$`)
@@ -213,6 +214,11 @@ func Delete(ctx context.Context, pool *pgxpool.Pool, serial string, purgeTimeSer
 		return false, err
 	}
 	if err := faasstore.DeleteDeviceBindings(ctx, tx, serial); err != nil {
+		return false, err
+	}
+	// A27 K2/W5: the 0013 playlist binding + rotation cursor carry no FK to devices — drop them here so
+	// a deleted serial leaves no orphan (the FaaS half's playlist twin). Always, not flag-gated.
+	if _, err := plrender.UnbindPlaylist(ctx, tx, serial); err != nil {
 		return false, err
 	}
 	if purgeTimeSeries {

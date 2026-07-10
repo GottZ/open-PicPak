@@ -8,9 +8,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/open-picpak/backend/internal/plrender"
 	"github.com/open-picpak/backend/internal/rollout"
 )
 
@@ -79,6 +81,8 @@ func dbPool(t *testing.T) *pgxpool.Pool {
 		`TRUNCATE logs`,
 		`UPDATE channels SET default_version = NULL`,
 		`DELETE FROM faas_functions`, // FK CASCADE drops device_render_binding + faas_frame_lastgood
+		`DELETE FROM playlist_cursor`, // no FK to devices — cleared explicitly
+		`DELETE FROM playlist`,        // FK CASCADE drops device_playlist_binding + playlist_items
 		`DELETE FROM devices`,
 		`DELETE FROM firmware_versions`,
 	} {
@@ -236,5 +240,65 @@ func TestDelete_CascadesFaasBindings_T11del(t *testing.T) {
 	}
 	if fnStill != 1 {
 		t.Errorf("the bound function was wrongly deleted (%d rows, want 1)", fnStill)
+	}
+}
+
+// W5 (A27 K2) — deleting a device clears its playlist binding AND per-serial rotation cursor IN THE
+// SAME control-plane tx, ALWAYS (like the FaaS binding half: a playlist binding is control-plane
+// state, not retention time-series). Red: the 0013 rows carry no FK to devices → binding + cursor
+// survive as orphans, and a re-onboarded same serial silently inherits the old device's playlist and
+// stale rotation step (the D17.4 re-bond bleed, playlist half). The bound playlist itself and OTHER
+// devices' rows must survive — the delete is serial-scoped, not a playlist purge. Fixtures are seeded
+// through the production write path (BindPlaylist + ResolveCursor), not hand-inserted (W10).
+func TestDelete_CascadesPlaylistBinding_K2W5(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+
+	var plID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO playlist (name) VALUES ('pl-del') RETURNING id`).Scan(&plID); err != nil {
+		t.Fatalf("insert playlist: %v", err)
+	}
+	for _, serial := range []string{"dev-gone", "dev-stay"} {
+		mustExec(t, pool, `INSERT INTO devices (serial, channel) VALUES ($1,'stable')`, serial)
+		if err := plrender.BindPlaylist(ctx, pool, serial, plID); err != nil {
+			t.Fatalf("bind %s: %v", serial, err)
+		}
+		if _, err := plrender.ResolveCursor(ctx, pool, serial, plID, time.Hour, 1, time.Now()); err != nil {
+			t.Fatalf("cursor %s: %v", serial, err)
+		}
+	}
+
+	found, err := Delete(ctx, pool, "dev-gone", false)
+	if err != nil || !found {
+		t.Fatalf("delete dev-gone: found=%v err=%v", found, err)
+	}
+
+	count := func(table, serial string) int {
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE serial=$1`, serial).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		return n
+	}
+	if n := count("device_playlist_binding", "dev-gone"); n != 0 {
+		t.Errorf("deleted device's playlist binding survived (%d rows)", n)
+	}
+	if n := count("playlist_cursor", "dev-gone"); n != 0 {
+		t.Errorf("deleted device's rotation cursor survived (%d rows)", n)
+	}
+	// serial-scoped: the other device's binding + cursor AND the playlist itself all survive.
+	if n := count("device_playlist_binding", "dev-stay"); n != 1 {
+		t.Errorf("bystander device's playlist binding was wrongly cleared (%d rows, want 1)", n)
+	}
+	if n := count("playlist_cursor", "dev-stay"); n != 1 {
+		t.Errorf("bystander device's rotation cursor was wrongly cleared (%d rows, want 1)", n)
+	}
+	var plStill int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM playlist WHERE id=$1`, plID).Scan(&plStill); err != nil {
+		t.Fatal(err)
+	}
+	if plStill != 1 {
+		t.Errorf("the bound playlist was wrongly deleted (%d rows, want 1)", plStill)
 	}
 }
