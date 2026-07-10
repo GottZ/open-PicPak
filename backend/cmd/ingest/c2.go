@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/open-picpak/backend/internal/commandstore"
 )
 
 // c2MaxWaitS caps the long-poll hold budget a device may request via ?wait=<secs> (Design 16).
@@ -67,6 +69,14 @@ func (s *server) handleC2(w http.ResponseWriter, r *http.Request) {
 		serial, ack).Scan(&applied)
 	if err != nil {
 		http.NotFound(w, r) // FK violation (unknown device) or transient -> noise; device retries
+		return
+	}
+
+	// The advanced cursor is this device's ack: clear the enqueue-dedup flag on its now-applied keyed
+	// commands so an identical command may be re-enqueued (K4 re-entry). '*' rows are untouched (applied
+	// per device) -> the fleet dedup persists while any device lags. In-tx with the cursor advance.
+	if err := commandstore.MarkApplied(ctx, tx, serial, applied); err != nil {
+		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 

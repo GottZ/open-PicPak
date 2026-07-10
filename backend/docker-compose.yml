@@ -73,6 +73,8 @@ services:
       - /migrations/0014_admin_auth.up.sql
       - "-f"
       - /migrations/0015_operator_keys_expiry.up.sql
+      - "-f"
+      - /migrations/0017_command_dedup.up.sql
     volumes:
       - ./migrations:/migrations:ro
     networks: [dbnet]

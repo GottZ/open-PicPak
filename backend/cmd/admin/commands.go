@@ -19,9 +19,10 @@ type commandHandlers struct{ pool *pgxpool.Pool }
 // is stamped with the authenticated operator (SEC-M2 / D17.9).
 func (h commandHandlers) enqueue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Serial string  `json:"serial"`
-		Script string  `json:"script"`
-		Note   *string `json:"note"`
+		Serial         string  `json:"serial"`
+		Script         string  `json:"script"`
+		Note           *string `json:"note"`
+		IdempotencyKey *string `json:"idempotency_key"` // optional: dedup an identical still-pending command (K4)
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, commandstore.ScriptMax+1024)).Decode(&body); err != nil {
 		adminhttp.WriteErr(w, r, http.StatusBadRequest, "bad_request", "malformed JSON body")
@@ -38,7 +39,7 @@ func (h commandHandlers) enqueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	op, _ := adminhttp.Operator(r.Context())
-	seq, err := commandstore.Enqueue(r.Context(), h.pool, serial, body.Script, body.Note, op.KeyID)
+	seq, err := commandstore.Enqueue(r.Context(), h.pool, serial, body.Script, body.Note, op.KeyID, body.IdempotencyKey)
 	if err != nil {
 		switch {
 		case errors.Is(err, commandstore.ErrScriptEmpty), errors.Is(err, commandstore.ErrScriptTooLong):
