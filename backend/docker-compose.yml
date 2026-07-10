@@ -65,6 +65,8 @@ services:
       - /migrations/0010_device_log_cursor_last_seq.up.sql
       - "-f"
       - /migrations/0011_image.up.sql
+      - "-f"
+      - /migrations/0012_playlist.up.sql
     volumes:
       - ./migrations:/migrations:ro
     networks: [dbnet]
