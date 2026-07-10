@@ -191,3 +191,49 @@ func TestResolveDitherStr(t *testing.T) {
 		}
 	}
 }
+
+// --- A31.2 follow-up (lead finding #9): the playlist per-item dither is TRUSTED operator policy ---
+
+// renderPlaylistWith drives the PRODUCTION playlist render primitive (s.doRenderPlaylist → renderOnce)
+// over a fake M4 worker. item.Dither originates in the DB column playlist_item.dither, operator-set via
+// the W5b API — the SAME trust class as trigger_config.dither (Policy=Data), so it must ride the
+// TRUSTED tier of the pack-time resolution, not the default tier below the untrusted worker return.
+func renderPlaylistWith(t *testing.T, itemDither, workerReturn string) []byte {
+	t.Helper()
+	sock := fakeWorker(t, workerReturn, gradientRGB())
+	s := ditherProbeSup(sock)
+	res := s.doRenderPlaylist(context.Background(), playlistSource("cover"), []byte{1, 2, 3}, itemDither)
+	if res.Err != nil {
+		t.Fatalf("doRenderPlaylist err: %+v", res.Err)
+	}
+	if len(res.Packed) != bwry.PackedSize {
+		t.Fatalf("packed %d != %d", len(res.Packed), bwry.PackedSize)
+	}
+	return res.Packed
+}
+
+// Probe (d) — playlist PRECEDENCE: item.Dither="none" (trusted, DB/W5b) AND the worker return
+// dither="atkinson" (untrusted). The operator policy must WIN → none bytes. RED while doRenderPlaylist
+// passed the item dither as DitherDefault (tier 3, BELOW the untrusted return — the latent Policy=Data
+// gap: today's server-authored __playlist source returns no dither, but any future source/slot-runner
+// change would silently activate the override); GREEN with the item dither on the trusted tier.
+func TestPlaylistDither_TrustedItemBeatsWorkerReturn(t *testing.T) {
+	none, atkinson := ditherRefs(t)
+	got := renderPlaylistWith(t, "none", "atkinson")
+	if bytes.Equal(got, atkinson) {
+		t.Fatal("untrusted worker return overrode trusted playlist_item.dither — latent Policy=Data gap (lead finding #9)")
+	}
+	if !bytes.Equal(got, none) {
+		t.Fatal("trusted playlist_item.dither=none was not honoured")
+	}
+}
+
+// Probe (e) — playlist back-compat: no worker return dither + item.Dither="atkinson" → Atkinson bytes,
+// exactly as before the tier move (the value is parsable, so it wins tier 1 now as it won tier 3 then).
+func TestPlaylistDither_ItemAtkinsonBackCompat(t *testing.T) {
+	_, atkinson := ditherRefs(t)
+	got := renderPlaylistWith(t, "atkinson", "")
+	if !bytes.Equal(got, atkinson) {
+		t.Fatal("playlist item.Dither=atkinson no longer produces Atkinson bytes — back-compat regression")
+	}
+}

@@ -50,16 +50,22 @@ func (s *supervisor) doRender(ctx context.Context, fn *faasstore.Function, rctx 
 // the request's `input` field (A27 W3). The synthetic function has no secrets and no egress, so it
 // resolves nothing and provisions nothing; renderOnce packs the worker's raw RGB to the 30000-byte
 // frame exactly as for an operator render (one render primitive, K7).
+//
+// dither is playlist_item.dither — DB-persisted, operator-set via the W5b API — i.e. TRUSTED policy of
+// the same class as trigger_config.dither (Policy=Data), so it rides RenderOpts.Dither (the trusted
+// tier of the pack-time resolution, A31.2), NOT DitherDefault: on the default tier an untrusted worker
+// return would outrank it. Today's server-authored __playlist source returns no dither, but the trust
+// ordering must not depend on that staying true (lead finding #9).
 func (s *supervisor) doRenderPlaylist(ctx context.Context, source string, input []byte, dither string) RenderResult {
 	fn := &faasstore.Function{Source: source}
 	rctx := faasproto.RequestCtx{Trigger: faasproto.Trigger{Type: "render"}, Now: nowOrDefault("")}
 	return renderOnce(ctx, s.pool, s.box, fn, rctx, RenderOpts{
-		Secrets:       SecretsReal,
-		Limits:        s.limits,
-		DitherDefault: dither,
-		M4Sock:        s.m4Sock,
-		Timeout:       time.Duration(s.limits.TimeoutMs)*time.Millisecond + 10*time.Second,
-		Input:         input,
+		Secrets: SecretsReal,
+		Limits:  s.limits,
+		Dither:  dither, // trusted per-item operator policy (playlist_item.dither)
+		M4Sock:  s.m4Sock,
+		Timeout: time.Duration(s.limits.TimeoutMs)*time.Millisecond + 10*time.Second,
+		Input:   input,
 	})
 }
 
