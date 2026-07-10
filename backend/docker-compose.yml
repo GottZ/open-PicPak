@@ -63,6 +63,8 @@ services:
       - /migrations/0009_faas.up.sql
       - "-f"
       - /migrations/0010_device_log_cursor_last_seq.up.sql
+      - "-f"
+      - /migrations/0011_image.up.sql
     volumes:
       - ./migrations:/migrations:ro
     networks: [dbnet]
@@ -268,6 +270,10 @@ volumes:
   tsdata:
   grafanadata:
   fwblobs:                                      # firmware blobs: admin writes (:rw), ingest serves (:ro)
+  imgblobs:                                     # A27 W1: content-addressed source images (sha256.bin). The
+                                                # service mounts land with their consumers: admin :rw (upload,
+                                                # A28/§9) + a chown init (parity fwblobs-init), supervisor :ro
+                                                # (render read, W3). W1 only reserves the volume + migration 0011.
   faas-render-sock:                             # ingest↔supervisor render-request UDS
   faas-m4-sock:                                 # supervisor↔worker M4 UDS (the ONLY worker-shared volume)
   faas-egress-sock:                             # supervisor↔egress control UDS
