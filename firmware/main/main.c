@@ -38,6 +38,7 @@
 #include "screens.h"   /* baked-in 400x300 BWRY setup screens (onboarding / console) */
 #include "berry.h"
 #include "fb.h"         /* Berry graphics stdlib -> the 30000-byte framebuffer */
+#include "present_core.h"   /* A32 W2: present-gate decision (present only on a valid frame) */
 #include "dev.h"        /* Berry device stdlib: mac/serial/chip/uptime/battery + nvs_str */
 #include "lowbatt.h"    /* smart low-battery gate (timer-poll + voltage-rise charge detect) */
 #include "cmd.h"        /* C2 Berry command executor + poll (Wave 3a/3b) */
@@ -340,9 +341,15 @@ static uint32_t run_cycle_inner(const picpak_cfg_t *cfg, bool keep_online)
             net_wifi_stop();
             vTaskDelay(pdMS_TO_TICKS(SETTLE_MS));
         }
-        if (!berry_render())
-            ESP_LOGW(TAG, "render failed -> displaying current framebuffer contents");
-        display_framebuffer_if_changed();   /* Wave-2 content-change gate (shared fingerprint) */
+        /* A32 W2 present-gate hardening: present ONLY on a valid, fully-populated frame.
+         * s_fb is plain .bss (fb.c:16), zeroed on every deep-sleep wake, so presenting after
+         * a failed render pushes an all-zero framebuffer through the content gate and blanks
+         * the panel (palette 0 = BLACK). On render-fail keep the last frame -- E-paper is
+         * bistable, the last frame physically survives (design 32, Naht B / W-A32.2). */
+        if (present_gate_allows(berry_render()))
+            display_framebuffer_if_changed();   /* Wave-2 content-change gate (shared fingerprint) */
+        else
+            ESP_LOGW(TAG, "render failed -> keeping last frame (no present)");
     } else {
         if (!berry_render())
             ESP_LOGW(TAG, "render failed -> displaying current framebuffer contents");
