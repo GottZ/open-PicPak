@@ -137,4 +137,23 @@ describe('Paged — cursor accumulator', () => {
     expect(ids(p)).toEqual([1, 2]) // the stale {id:99} was discarded, not appended
     expect(p.hasMore).toBe(true)
   })
+
+  it('remove() drops one row + its dedup key without a reload (W6 list-invalidate)', async () => {
+    const fetch = async (): Promise<CursorPage<Row, number>> => ({
+      items: [{ id: 1 }, { id: 2 }, { id: 3 }],
+      next: null,
+    })
+    const p = new Paged<Row>(fetch, (r) => r.id)
+    await p.reload()
+
+    p.remove(2)
+    expect(ids(p)).toEqual([1, 3]) // exactly the deleted tile is gone
+    expect(p.status).toBe('ready') // no reload → no loading flicker
+    p.remove(999) // unknown key → no-op
+    expect(ids(p)).toEqual([1, 3])
+
+    // The dedup key was freed: a re-uploaded id 2 re-appears on the next absorb.
+    p.remove(1)
+    expect(ids(p)).toEqual([3])
+  })
 })

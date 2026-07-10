@@ -112,6 +112,20 @@ export class Paged<T, C = number> implements ResourceView<T[]> {
     }
   }
 
+  /**
+   * Targeted removal of one accumulated row by key — the delete-flow's
+   * list-invalidate (design 29 §6/§7 W6). A successful DELETE drops exactly the
+   * one tile WITHOUT a reload(), so the grid never flickers through a loading
+   * state or refetches every page (the W6 gate: 200 ⇒ the row vanishes, no full
+   * reload). Frees the dedup key too, so a later re-upload of the same id can
+   * re-appear. A no-op for an unknown key.
+   */
+  remove = (key: string | number): void => {
+    if (!this.#keys.has(key)) return
+    this.#keys.delete(key)
+    this.items = this.items.filter((item) => this.#keyOf(item) !== key)
+  }
+
   // Append only rows whose key is new (dedup → "genau einmal" even if pages overlap),
   // then advance the cursor / edge from the page. One array reassignment per page.
   #absorb(page: CursorPage<T, C>): void {

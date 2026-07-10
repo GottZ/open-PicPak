@@ -8,10 +8,14 @@
   // surface shows the StateView empty state, never an ambiguous blank (D19.13).
   import { onMount } from 'svelte'
   import StateView from '../../lib/StateView.svelte'
-  import { apiFetch } from '../../lib/api'
+  import { apiFetch, toApiError } from '../../lib/api'
   import { Paged } from '../../lib/media/paged.svelte'
+  import { VisibilityPool } from '../../lib/media/visibilitypool.svelte'
   import Uploader from '../../lib/media/Uploader.svelte'
   import type { Image, ImagesResponse } from '../../lib/media/types'
+  import { session } from '../../lib/auth.svelte'
+  import { mutationAffordance } from '../../lib/readonly'
+  import { notify } from '../../lib/toasts.svelte'
   import { m } from '../../paraglide/messages.js'
 
   // W5 (§6/§7): the paged accumulator the target-scale grid needs. Keyset over
@@ -29,7 +33,83 @@
     },
     (image) => image.id,
   )
-  onMount(() => library.reload())
+
+  // W6 (§6/§7): virtualisation. At target scale (500+ tiles) mounting every
+  // thumbnail <img> holds 500 decoded bitmaps in RAM → the OOM the gate forbids.
+  // One IntersectionObserver drives the whole grid: each tile's <li> registers via
+  // the observe() action, and crossing the viewport (+200px overscan) mounts /
+  // unmounts its <img> through the pool. Only the visibility window keeps a live
+  // node; the pool's hard cap recycles the oldest so even an observer misfire can
+  // never mount all 500.
+  const pool = new VisibilityPool()
+  let observer: IntersectionObserver | null = null
+
+  function tileId(node: Element): number {
+    return Number((node as HTMLElement).dataset.imageId)
+  }
+
+  // Svelte action: register a tile <li> with the shared observer for its lifetime.
+  // On unmount it both un-observes and exits the pool, so a deleted tile leaves no
+  // stale live id behind.
+  function observe(node: HTMLElement) {
+    observer?.observe(node)
+    return {
+      destroy() {
+        observer?.unobserve(node)
+        const id = tileId(node)
+        if (!Number.isNaN(id)) pool.exit(id)
+      },
+    }
+  }
+
+  // W6 delete: two-step armed confirm per tile (the shipped FunctionsEditor
+  // pattern — confirmation is mandatory, no direct delete). A 409 image_in_use
+  // (FK RESTRICT, §9(e)) keeps the row and surfaces the in-use reason; the backend
+  // carries no numeric refcount, only the in-use signal. A 200 removes exactly the
+  // one tile via the accumulator — no reload(), so the grid never flickers.
+  let armed = $state<number | null>(null)
+  let deleting = $state(false)
+  const affordance = $derived(mutationAffordance(session.is_admin))
+
+  async function doDelete(id: number): Promise<void> {
+    if (!session.is_admin || deleting) return
+    if (armed !== id) {
+      armed = id // first click arms; a second click on the same tile commits.
+      return
+    }
+    deleting = true
+    try {
+      await apiFetch(`/api/images/${id}`, { method: 'DELETE' })
+      library.remove(id) // targeted list-invalidate, no full-reload flicker
+      notify.success(m['media.library.delete_success']({ id }))
+    } catch (e) {
+      const err = toApiError(e)
+      if (err.status === 409 || err.code === 'image_in_use') {
+        notify.error(m['media.library.delete_in_use']({ id })) // row stays
+      } else {
+        notify.error(err)
+      }
+    } finally {
+      deleting = false
+      armed = null
+    }
+  }
+
+  onMount(() => {
+    observer = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const id = tileId(e.target)
+          if (Number.isNaN(id)) continue
+          if (e.isIntersecting) pool.enter(id)
+          else pool.exit(id)
+        }
+      },
+      { rootMargin: '200px' },
+    )
+    void library.reload()
+    return () => observer?.disconnect()
+  })
 </script>
 
 <section class="media">
@@ -46,16 +126,43 @@
       {#snippet ready(images)}
         <ul class="grid">
           {#each images as image (image.id)}
-            <li class="tile">
-              <img
-                class="thumb"
-                src={`/api/images/${image.id}/thumbnail`}
-                alt={m['media.library.thumb_alt']({ id: image.id })}
-                loading="lazy"
-                width="160"
-                height="120"
-              />
+            <li class="tile" data-image-id={image.id} use:observe>
+              {#if pool.isLive(image.id)}
+                <img
+                  class="thumb"
+                  src={`/api/images/${image.id}/thumbnail`}
+                  alt={m['media.library.thumb_alt']({ id: image.id })}
+                  loading="lazy"
+                  width="160"
+                  height="120"
+                />
+              {:else}
+                <!-- Off-screen: a cheap aspect-ratio placeholder holds the tile's
+                     scroll geometry without a decoded bitmap (the virtualisation). -->
+                <div class="thumb placeholder" aria-hidden="true"></div>
+              {/if}
               <span class="dims">{image.width}×{image.height}</span>
+              {#if session.is_admin}
+                <div class="tile-actions">
+                  <button
+                    type="button"
+                    class="tile-delete"
+                    class:armed={armed === image.id}
+                    disabled={affordance.disabled || deleting}
+                    title={affordance.disabled ? affordance.title : ''}
+                    onclick={() => doDelete(image.id)}
+                  >
+                    {armed === image.id
+                      ? m['media.library.delete_confirm']()
+                      : m['media.library.delete']()}
+                  </button>
+                  {#if armed === image.id}
+                    <button type="button" class="tile-cancel" onclick={() => (armed = null)}>
+                      {m['media.library.delete_cancel']()}
+                    </button>
+                  {/if}
+                </div>
+              {/if}
             </li>
           {/each}
         </ul>
@@ -129,6 +236,10 @@
     /* The panel is a hard-pixel medium; keep the downscaled preview crisp. */
     image-rendering: pixelated;
   }
+  .thumb.placeholder {
+    /* No bitmap while off-screen — just the muted tile surface at the same size. */
+    background: transparent;
+  }
   .tile .dims {
     position: absolute;
     right: 0.25rem;
@@ -139,6 +250,37 @@
     color: #fff;
     font-size: 0.7rem;
     line-height: 1.4;
+  }
+  .tile-actions {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    display: flex;
+    gap: 0.25rem;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .tile:hover .tile-actions,
+  .tile:focus-within .tile-actions {
+    opacity: 1;
+  }
+  .tile-delete,
+  .tile-cancel {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.7rem;
+    cursor: pointer;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+  }
+  .tile-delete:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .tile-delete.armed {
+    background: var(--danger);
+    border-color: var(--danger);
   }
   .load-more {
     align-self: flex-start;
