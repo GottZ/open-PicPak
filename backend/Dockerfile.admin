@@ -8,8 +8,12 @@
 # --- frontend stage: build the SPA ---
 FROM oven/bun:1-alpine AS frontend
 WORKDIR /web
-# deps first (cache layer): only re-installs when package.json / bun.lock move.
+# deps first (cache layer): only re-installs when package.json / bun.lock / project.inlang move.
+# project.inlang must ride this layer: the paraglide-js postinstall hook compiles the inlang
+# project on install, so a deps-only layer without it fails the whole build (pre-existing
+# since the A34.1 paraglide setup — surfaced by the W-A33.8 image gate, lead finding #12).
 COPY web/package.json web/bun.lock ./
+COPY web/project.inlang ./project.inlang
 RUN bun install --frozen-lockfile
 COPY web/ ./
 # svelte-check (bun run check) BEFORE vite build — a type error fails the image.
