@@ -39,19 +39,15 @@ func FromRGB(pix []byte) (image.Image, error) {
 	return &rgbImage{pix: pix}, nil
 }
 
-// Pack renders a 400x300 image into the 30000-byte BWRY panel buffer. Off-size input
-// is a render error (the supervisor falls back, D24.6), never a silent re-fit — the
-// worker already guarantees 400x300 (D24.3), so the size gate is a belt assertion.
+// Pack renders a 400x300 image into the 30000-byte BWRY panel buffer using the
+// historical UNdithered nearest quantize. Off-size input is a render error (the
+// supervisor falls back, D24.6), never a silent re-fit — the worker already
+// guarantees 400x300 (D24.3), so the size gate is a belt assertion.
+//
+// Pack is exactly PackWithDither(img, DitherNone): the two share the DitherNone
+// branch, so the golden_none fleet contract cannot drift between them (A31-E2).
 func Pack(img image.Image) ([]byte, error) {
-	b := img.Bounds()
-	if b.Dx() != Width || b.Dy() != Height {
-		return nil, fmt.Errorf("bwry: image %dx%d != %dx%d (no resize)", b.Dx(), b.Dy(), Width, Height)
-	}
-	out := pack2bpp(quantizeFlipped(img))
-	if len(out) != PackedSize {
-		return nil, fmt.Errorf("bwry: packed %d != %d", len(out), PackedSize)
-	}
-	return out, nil
+	return PackWithDither(img, DitherNone)
 }
 
 // quantizeFlipped applies the panel Y-mirror (transpose FLIP_TOP_BOTTOM, on-device
