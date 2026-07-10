@@ -186,12 +186,24 @@ func TestCSPOnHTMLOnly(t *testing.T) {
 	}
 }
 
-// TestCSPHasNoWorkerSrc pins D19.10/O3: D19 ships tight, no worker-src is
-// granted here — a feature doc that needs it (Doc 25/26) widens the CSP in its
-// own doc after measuring. Red if a worker-src directive creeps back in.
-func TestCSPHasNoWorkerSrc(t *testing.T) {
-	if strings.Contains(csp, "worker-src") {
-		t.Errorf("csp contains worker-src; D19 ships tight (O3) — widen in the feature doc that needs it, not here")
+// TestCSPWorkerAndWasmPolicy pins the A33 CSP posture (design/33 S1, board
+// decision E-A33-2) — the deliberate successor of the old "no worker-src" pin,
+// which encoded exactly the widen-in-the-feature-doc process that A33 followed.
+// Pins: worker-src is granted at EXACTLY 'self' (never blob:, never wider),
+// script-src carries 'wasm-unsafe-eval' for the Berry simulator, and
+// 'unsafe-eval' stays banned. Red if any of the three drifts.
+func TestCSPWorkerAndWasmPolicy(t *testing.T) {
+	if !strings.Contains(csp, "worker-src 'self';") {
+		t.Errorf("csp lacks exact \"worker-src 'self';\" (A33/E-A33-2): %q", csp)
+	}
+	if strings.Contains(csp, "blob:") {
+		t.Errorf("csp grants blob: — not granted anywhere (Doc 25/26 must widen in their own doc): %q", csp)
+	}
+	if !strings.Contains(csp, "'wasm-unsafe-eval'") {
+		t.Errorf("csp lacks 'wasm-unsafe-eval' (Berry WASM simulator, design/33 S1): %q", csp)
+	}
+	if strings.Contains(csp, "'unsafe-eval'") {
+		t.Errorf("csp contains 'unsafe-eval' — never granted; 'wasm-unsafe-eval' is the ONLY eval-class keyword allowed")
 	}
 }
 
