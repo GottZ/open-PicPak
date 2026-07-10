@@ -353,15 +353,21 @@ func TestEventsReAuthEndsStream(t *testing.T) {
 
 // --- T9: whoami golden field name (is_admin, snake_case) ---
 
+// After W8 whoami is Principal-based (design §4.3, shape {kind, is_admin, scopes, label}) so a cookie
+// session reports its real identity, not the empty operator the legacy bearer carrier populated. The
+// golden contract is unchanged: is_admin snake_case present, ctxd's `admin` absent.
 func TestWhoamiFieldsGoldenShape(t *testing.T) {
-	f := whoamiFields(operator.AuthResult{KeyID: 7, IsAdmin: false, Label: "ro"})
+	f := whoamiFields(adminhttp.Principal{
+		Kind: adminhttp.KindSession, ID: "7", IsAdmin: false, Label: "ro",
+		Scopes: []string{adminhttp.ScopeImageRead, adminhttp.ScopeImageWrite},
+	})
 	if _, ok := f["is_admin"]; !ok {
 		t.Error("whoami must expose is_admin (snake_case) — the SPA read-only badge depends on it (D19.6)")
 	}
 	if _, ok := f["admin"]; ok {
 		t.Error("whoami must NOT use ctxd's `admin` field name")
 	}
-	if f["is_admin"] != false || f["key_id"] != int64(7) || f["label"] != "ro" {
+	if f["is_admin"] != false || f["label"] != "ro" || f["kind"] != adminhttp.KindSession {
 		t.Errorf("whoami fields mismatch: %+v", f)
 	}
 }

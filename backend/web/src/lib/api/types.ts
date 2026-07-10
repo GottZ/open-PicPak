@@ -1,13 +1,15 @@
 // Hand-maintained wire types (design 19 §2). No OpenAPI spec exists; the Go-side
 // JSON golden tests are the drift anchor. One source comment per type.
 
-// Source: cmd/admin/main.go whoami() + adminhttp.WriteOK — {success:true, key_id,
-// is_admin, label}. The field is **is_admin** (snake_case) — NOT ctxd's `admin`
-// (design 19 §2); the read-only badge derives off this. Pinned by T9 golden-shape.
+// Source: cmd/admin/main.go whoami() + adminhttp.WriteOK — {success:true, kind,
+// is_admin, scopes, label} (design 28 §4.3, Principal-based so a cookie session
+// reports its real identity). The field is **is_admin** (snake_case) — NOT ctxd's
+// `admin`; the read-only badge derives off this. Pinned by T9 golden-shape.
 export interface WhoamiResponse {
   success: true
-  key_id: number
+  kind: string
   is_admin: boolean
+  scopes: string[]
   label: string
 }
 

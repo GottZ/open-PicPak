@@ -1,7 +1,11 @@
-// Typed fetch wrapper (design 19 §4.3): injects the Bearer key, normalizes every
+// Typed fetch wrapper (design 28 §4.3): the admin API authenticates via the
+// httpOnly ppk_sid cookie (credentials: 'same-origin') after W8 — the Bearer key
+// no longer lives in the JS heap (the XSS-exfil win). Every MUTATING request
+// carries X-Requested-With: picpak, the CSRF second layer the server enforces
+// with 403 csrf_required beside SameSite=Strict (design §4.1). Normalizes every
 // failure shape into ApiError and carries the X-Request-ID so a browser error
 // stays greppable in the cmd/admin logs (D17.5). The 401 interceptor routes a
-// rejected STORED key back to the login screen via the configured hook.
+// non-probe rejection back to the login screen via the configured hook.
 
 /** Normalized API failure. `status` 0 means the request never got a response. */
 export class ApiError extends Error {
@@ -38,14 +42,11 @@ export function toApiError(err: unknown): ApiError {
 }
 
 interface ApiHooks {
-  /** Returns the session key injected as `Authorization: Bearer`. */
-  getKey: () => string | null
-  /** Fired when the STORED key is rejected (401) — session teardown. */
+  /** Fired when a non-probe request is rejected (401) — cookie session expired/revoked → teardown. */
   onUnauthorized: () => void
 }
 
 const hooks: ApiHooks = {
-  getKey: () => null,
   onUnauthorized: () => {},
 }
 
@@ -56,10 +57,22 @@ export function configureApi(next: Partial<ApiHooks>): void {
 
 export interface ApiFetchOptions {
   /**
-   * Explicit key override (login/restore probe). A 401 with an explicit key
-   * does NOT fire the unauthorized hook — the caller owns that failure.
+   * Marks a boot/login probe (session.restore, the login-time whoami). A 401 on a
+   * probe does NOT fire the unauthorized hook — a signed-out visitor is a normal
+   * 401, not a mid-session revoke — the caller owns that outcome.
    */
-  key?: string
+  probe?: boolean
+}
+
+// The CSRF header every mutating request carries (design §4.1) — the server enforces it with 403
+// csrf_required on cookie-authed mutations; a cross-site <form> POST cannot set a custom header.
+const CSRF_HEADER = 'X-Requested-With'
+const CSRF_VALUE = 'picpak'
+
+/** Read-only methods take no CSRF header (mirror of adminhttp.csrfSafeMethod). */
+function isSafeMethod(method: string): boolean {
+  const m = method.toUpperCase()
+  return m === 'GET' || m === 'HEAD' || m === 'OPTIONS'
 }
 
 /**
@@ -73,16 +86,17 @@ export async function apiFetch<T>(
   init: RequestInit = {},
   opts: ApiFetchOptions = {},
 ): Promise<T> {
-  const key = opts.key ?? hooks.getKey()
   const headers = new Headers(init.headers)
-  if (key) headers.set('Authorization', `Bearer ${key}`)
+  const method = init.method ?? 'GET'
+  if (!isSafeMethod(method)) headers.set(CSRF_HEADER, CSRF_VALUE)
   if (init.body !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
 
   let res: Response
   try {
-    res = await fetch(path, { ...init, headers })
+    // credentials: 'same-origin' rides the httpOnly ppk_sid cookie along — the cookie IS the carrier.
+    res = await fetch(path, { ...init, headers, credentials: 'same-origin' })
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause)
     throw new ApiError(0, 'network', `admin API unreachable: ${detail}`)
@@ -94,10 +108,16 @@ export async function apiFetch<T>(
   const details = asRecord(body)
 
   if (res.status === 401) {
-    if (opts.key === undefined) hooks.onUnauthorized()
-    throw new ApiError(401, 'unauthorized', serverError ?? 'invalid or revoked API key', requestId, details)
+    if (!opts.probe) hooks.onUnauthorized()
+    throw new ApiError(401, 'unauthorized', serverError ?? 'session expired or not signed in', requestId, details)
   }
   if (!res.ok) {
+    if (res.status === 403 && details?.['code'] === 'csrf_required') {
+      // Regression signal: isSafeMethod adds X-Requested-With to every mutation above, so a
+      // csrf_required should be unreachable. Logged (not swallowed) so a future missing-header path is
+      // caught rather than silently 403ing a legitimate client (design §4.1).
+      console.error(`api.ts: csrf_required on ${method} ${path} — X-Requested-With was not sent`)
+    }
     const message = serverError ?? `request failed (HTTP ${res.status})`
     throw new ApiError(res.status, codeFor(res.status), message, requestId, details)
   }

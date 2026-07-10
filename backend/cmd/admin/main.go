@@ -25,7 +25,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/open-picpak/backend/internal/adminhttp"
-	"github.com/open-picpak/backend/internal/operator"
 	"github.com/open-picpak/backend/internal/sealbox"
 	"github.com/open-picpak/backend/internal/secrets"
 	"github.com/open-picpak/backend/web"
@@ -204,13 +203,59 @@ func runServer() {
 	// outermost so the 429 still carries an X-Request-ID. The post-auth per-principal brake lives inside
 	// adminhttp.Auth, already on every gated route.
 	handler := adminhttp.WithRequestID(adminhttp.IPRateLimit(mux))
-	log.Printf("admin listening on %s", addr)
-	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
-	// Tag every request with its listener origin (non-spoofable — it comes from the bind address, not
-	// a header). W2 only sets the tag; W7 reads it to gate the operator_key bearer fallback to the
-	// loopback listener before the SSO removal makes admin public (design §4.1 / §5 B8).
-	srv.BaseContext = adminhttp.ListenerBaseContext(ctx, originForAddr(addr))
-	log.Fatal(srv.ListenAndServe())
+
+	// Bind one http.Server per listener spec (design §4.1 / §5 B8, W8). The ADMIN_ADDR listener is
+	// tagged by its own origin; once ADMIN_ADDR is PUBLIC (the post-W8 flip state, when the reversed
+	// SSO label is gone) a second loopback listener on ADMIN_LOOPBACK_ADDR is added so the operator_key
+	// break-glass + Basic tunnel path stays reachable off the public socket — its OriginLoopback tag is
+	// what opens the W7-gated operator_key bearer fallback. When ADMIN_ADDR is itself loopback (dev) one
+	// listener already IS the loopback zone, so adminListeners collapses to a single bind (no double
+	// bind on the same semantics). Each server tags every request on it with its listener origin —
+	// non-spoofable, from the bind address, never a client header (§4.1 / §5 B8).
+	specs := adminListeners(addr, env("ADMIN_LOOPBACK_ADDR", "127.0.0.1:8081"))
+	srvCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	servers := make([]*http.Server, 0, len(specs))
+	errc := make(chan error, len(specs))
+	for _, sp := range specs {
+		srv := &http.Server{Addr: sp.addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+		srv.BaseContext = adminhttp.ListenerBaseContext(srvCtx, sp.origin)
+		servers = append(servers, srv)
+		log.Printf("admin listening on %s (%s)", sp.addr, sp.origin)
+		go func(s *http.Server) { errc <- s.ListenAndServe() }(srv)
+	}
+	// The first server to return (a bind failure or a closed listener) tears the others down so the
+	// process exits as a unit rather than limping on a half-open control plane. Shutdown drains the
+	// still-serving listeners before the fatal exit (clean shutdown of both, W8 deliverable 3).
+	exitErr := <-errc
+	cancel()
+	shutCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	for _, s := range servers {
+		_ = s.Shutdown(shutCtx)
+	}
+	log.Fatalf("admin server exited: %v", exitErr)
+}
+
+// listenerSpec is one socket the admin process binds: its bind address and the non-spoofable origin
+// tag every request arriving on it carries (design §4.1). The origin drives the W7 operator_key gate.
+type listenerSpec struct {
+	addr   string
+	origin adminhttp.ListenerOrigin
+}
+
+// adminListeners resolves the set of sockets to bind (design §4.1 / §5 B8, W8). The ADMIN_ADDR listener
+// is always present, tagged by its own origin. A second loopback listener on loopbackAddr is added ONLY
+// when ADMIN_ADDR is PUBLIC — that is the post-flip state where the operator_key break-glass + Basic
+// tunnel path must stay reachable off the public socket (OriginLoopback opens the W7-gated fallback).
+// When ADMIN_ADDR is itself loopback (dev), or loopbackAddr is empty or identical to it, one listener
+// already covers the loopback semantics and no second bind is made.
+func adminListeners(addr, loopbackAddr string) []listenerSpec {
+	primary := listenerSpec{addr: addr, origin: originForAddr(addr)}
+	if primary.origin == adminhttp.OriginLoopback || loopbackAddr == "" || loopbackAddr == addr {
+		return []listenerSpec{primary}
+	}
+	return []listenerSpec{primary, {addr: loopbackAddr, origin: adminhttp.OriginLoopback}}
 }
 
 // originForAddr classifies a bind address as loopback or public. A loopback IP (or "localhost")
@@ -231,15 +276,23 @@ func originForAddr(addr string) adminhttp.ListenerOrigin {
 }
 
 func whoami(w http.ResponseWriter, r *http.Request) {
-	op, _ := adminhttp.Operator(r.Context())
-	adminhttp.WriteOK(w, r, whoamiFields(op))
+	pr, _ := adminhttp.PrincipalFrom(r.Context())
+	adminhttp.WriteOK(w, r, whoamiFields(pr))
 }
 
-// whoamiFields is the GET /api/whoami payload (sans the envelope's success).
-// The field name is **is_admin** (snake_case) — the SPA's read-only badge
-// (design 19 D19.6) derives off it; a rename breaks T9, not silently the UI.
-func whoamiFields(op operator.AuthResult) map[string]any {
-	return map[string]any{"key_id": op.KeyID, "is_admin": op.IsAdmin, "label": op.Label}
+// whoamiFields is the GET /api/whoami payload (sans the envelope's success), built from the normalised
+// Principal so it answers identically for every carrier (design §4.3): the SPA's human login is a
+// cookie session after W8, and it must report the session's real identity + admin flag, not the empty
+// operator that only the legacy bearer carrier populated. Shape is {kind, is_admin, scopes, label}
+// (design §4.3). The field is **is_admin** (snake_case) — the SPA read-only badge (D19.6) derives off
+// it; a rename breaks T9, not silently the UI. NOT ctxd's `admin` field name.
+func whoamiFields(pr adminhttp.Principal) map[string]any {
+	return map[string]any{
+		"kind":     pr.Kind,
+		"is_admin": pr.IsAdmin,
+		"label":    pr.Label,
+		"scopes":   pr.Scopes,
+	}
 }
 
 func env(k, def string) string {

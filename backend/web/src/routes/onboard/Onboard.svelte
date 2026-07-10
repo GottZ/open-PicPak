@@ -69,13 +69,11 @@
   const enrollAllowed = $derived(canEnroll(session.is_admin, pubkeyHex !== ''))
 
   // --- helpers -------------------------------------------------------------------------------------------
-  const authHeaders = (): Record<string, string> =>
-    session.key ? { Authorization: `Bearer ${session.key}` } : {}
-
   /** Fetch a firmware artifact by manifest path from the same-origin /onboard-fw/ mount (D26.9). Binary, so
-   *  a raw fetch (not apiFetch, which is JSON-only) with the session bearer. */
+   *  a raw fetch (not apiFetch, which is JSON-only); the httpOnly ppk_sid cookie authenticates it via
+   *  credentials: 'same-origin' (design 28 §4.3). A GET, so no CSRF header. */
   async function fetchPart(path: string): Promise<Uint8Array> {
-    const res = await fetch('/onboard-fw/' + path, { headers: authHeaders(), cache: 'no-store' })
+    const res = await fetch('/onboard-fw/' + path, { credentials: 'same-origin', cache: 'no-store' })
     if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`)
     return new Uint8Array(await res.arrayBuffer())
   }

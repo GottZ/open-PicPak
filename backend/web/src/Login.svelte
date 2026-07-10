@@ -1,12 +1,15 @@
 <script lang="ts">
   import { session } from './lib/auth.svelte'
   import { toApiError, type ApiError } from './lib/api'
+  import { errorText } from './lib/errors'
+  import { m } from './paraglide/messages.js'
 
-  let key = $state('')
+  let username = $state('')
+  let password = $state('')
   let busy = $state(false)
   let error = $state<ApiError | null>(null)
 
-  const submittable = $derived(!busy && key.trim() !== '')
+  const submittable = $derived(!busy && username.trim() !== '' && password !== '')
 
   async function submit(event: SubmitEvent): Promise<void> {
     event.preventDefault()
@@ -14,8 +17,8 @@
     busy = true
     error = null
     try {
-      await session.login(key)
-      key = ''
+      await session.login(username.trim(), password)
+      password = ''
     } catch (err) {
       error = toApiError(err)
     } finally {
@@ -28,42 +31,41 @@
   <form class="card" onsubmit={submit}>
     <header>
       <h1>open-picpak</h1>
-      <p class="tagline">operator control plane</p>
+      <p class="tagline">{m['login.tagline']()}</p>
     </header>
 
     {#if session.notice}
       <p class="notice" role="status">{session.notice}</p>
     {/if}
 
-    <label class="field-label" for="api-key">Operator key</label>
-    <!-- eslint-disable-next-line -->
+    <label class="field-label" for="username">{m['login.username']()}</label>
     <input
-      id="api-key"
-      type="password"
-      autocomplete="off"
+      id="username"
+      type="text"
+      autocomplete="username"
+      autocapitalize="none"
       spellcheck="false"
-      placeholder="paste an operator key"
-      bind:value={key}
+      bind:value={username}
       {@attach (node) => node.focus()}
     />
 
+    <label class="field-label" for="password">{m['login.password']()}</label>
+    <input id="password" type="password" autocomplete="current-password" spellcheck="false" bind:value={password} />
+
     <button type="submit" disabled={!submittable}>
-      {busy ? 'Checking key…' : 'Sign in'}
+      {busy ? m['login.submitting']() : m['login.submit']()}
     </button>
 
     {#if error}
       <div class="error" role="alert">
-        <p>{error.message}</p>
+        <p>{errorText(error)}</p>
         {#if error.requestId}
           <p class="request-id">request {error.requestId}</p>
         {/if}
       </div>
     {/if}
 
-    <p class="hint">
-      The key is held for this tab only (sessionStorage) and sent as a
-      <code>Bearer</code> token to <code>/api/*</code>.
-    </p>
+    <p class="hint">{m['login.hint']()}</p>
   </form>
 </div>
 
@@ -161,8 +163,5 @@
     color: var(--fg-muted);
     font-size: 0.78rem;
     line-height: 1.45;
-  }
-  code {
-    font-family: monospace;
   }
 </style>

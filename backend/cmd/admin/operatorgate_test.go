@@ -126,6 +126,52 @@ func TestW7_RotateOperator(t *testing.T) {
 	}
 }
 
+// TestW8_AdminListeners covers the dual-listener resolution logic (design §4.1, W8 deliverable 3): a
+// PUBLIC ADMIN_ADDR yields two listeners (public + a loopback break-glass socket); a loopback ADMIN_ADDR
+// (dev) collapses to one; an empty or identical loopbackAddr also collapses. No network binding — the
+// origin tagging + dedup is the unit under test.
+func TestW8_AdminListeners(t *testing.T) {
+	// Public ADMIN_ADDR + a distinct loopback address → two listeners, public first then loopback.
+	specs := adminListeners("0.0.0.0:8081", "127.0.0.1:9091")
+	if len(specs) != 2 {
+		t.Fatalf("public admin + distinct loopback: want 2 listeners, got %d (%+v)", len(specs), specs)
+	}
+	if specs[0].origin != adminhttp.OriginPublic || specs[1].origin != adminhttp.OriginLoopback {
+		t.Fatalf("origins not [public, loopback]: %+v", specs)
+	}
+	if specs[1].addr != "127.0.0.1:9091" {
+		t.Fatalf("loopback listener addr: want 127.0.0.1:9091, got %q", specs[1].addr)
+	}
+	// Loopback ADMIN_ADDR (dev): one listener already IS the loopback zone — no second bind.
+	if s := adminListeners("127.0.0.1:8081", "127.0.0.1:8081"); len(s) != 1 || s[0].origin != adminhttp.OriginLoopback {
+		t.Fatalf("dev loopback admin: want single loopback listener, got %+v", s)
+	}
+	// Public ADMIN_ADDR, no loopback configured → single public listener.
+	if s := adminListeners("0.0.0.0:8081", ""); len(s) != 1 || s[0].origin != adminhttp.OriginPublic {
+		t.Fatalf("public admin, empty loopback: want single public listener, got %+v", s)
+	}
+}
+
+// TestW8_DualListenerOperatorGate proves the resolved specs carry the right trust: driving the SAME live
+// operator_key bearer through Auth with each listener's origin, the loopback break-glass listener admits
+// it (200) while the public listener rejects it (401, the W7 gate). This is the dual-listener half of the
+// W8 gate — the public admin socket cannot authenticate an RCE-capable operator_key, only the tunnel can.
+func TestW8_DualListenerOperatorGate(t *testing.T) {
+	pool := dbPool(t)
+	seedOperator(t, pool, "op-tok", true)
+
+	specs := adminListeners("0.0.0.0:8081", "127.0.0.1:9091")
+	for _, sp := range specs {
+		want := http.StatusUnauthorized
+		if sp.origin == adminhttp.OriginLoopback {
+			want = http.StatusOK
+		}
+		if c := authProbe(pool, sp.origin, true, "Bearer op-tok"); c != want {
+			t.Fatalf("listener %s (%s): operator bearer want %d, got %d", sp.addr, sp.origin, want, c)
+		}
+	}
+}
+
 // TestW7_OtherCarriersUnchangedOnPublic is the non-regression guard: the ppk_ api-token carrier stays
 // 200 on the PUBLIC listener (the gate only touches the operator fallback), and an unknown ppk_ token
 // stays a uniform 401.

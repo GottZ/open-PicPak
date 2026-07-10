@@ -1,6 +1,12 @@
 {
   "$schema": "https://inlang.com/schema/inlang-message-format",
   "app.language": "Sprache",
+  "login.tagline": "Operator-Steuerungsebene",
+  "login.username": "Benutzername",
+  "login.password": "Passwort",
+  "login.submit": "Anmelden",
+  "login.submitting": "Anmeldung läuft …",
+  "login.hint": "Ein sicheres Session-Cookie hält dich in diesem Browser angemeldet.",
   "errors.network": "Die Admin-API ist nicht erreichbar.",
   "errors.internal": "Ein interner Fehler ist aufgetreten.",
   "errors.unauthorized": "Nicht angemeldet oder Schlüssel ungültig.",

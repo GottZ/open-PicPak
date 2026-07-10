@@ -45,7 +45,7 @@
         <span class="badge" class:admin={session.is_admin}>
           {session.is_admin ? 'admin' : 'read-only'}
         </span>
-        <span class="key-label">{session.label || `key #${session.keyId}`}</span>
+        <span class="key-label">{session.label}</span>
         <button class="logout" onclick={() => session.logout()}>sign out</button>
       </div>
     </header>

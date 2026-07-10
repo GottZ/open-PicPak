@@ -401,7 +401,10 @@
       )
       const res = await fetch('/api/functions/test-run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.key ?? ''}` },
+        // Cookie session (design 28 §4.3): credentials rides the httpOnly ppk_sid cookie; a mutation, so
+        // it carries X-Requested-With: picpak (the CSRF header the server enforces, §4.1).
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'picpak' },
+        credentials: 'same-origin',
         body: bodyText,
       })
       if (!res.ok) {

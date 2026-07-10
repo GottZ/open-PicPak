@@ -1,6 +1,12 @@
 {
   "$schema": "https://inlang.com/schema/inlang-message-format",
   "app.language": "Language",
+  "login.tagline": "operator control plane",
+  "login.username": "Username",
+  "login.password": "Password",
+  "login.submit": "Sign in",
+  "login.submitting": "Signing in…",
+  "login.hint": "A secure session cookie keeps you signed in on this browser.",
   "errors.network": "The admin API is unreachable.",
   "errors.internal": "An internal error occurred.",
   "errors.unauthorized": "Not signed in, or the key is invalid.",

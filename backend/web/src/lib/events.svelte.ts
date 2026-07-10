@@ -74,7 +74,7 @@ export function dispatchEvent(
   }
 }
 
-/** EventsClient binds an SseClient to the live session's Bearer key + the teardown. */
+/** EventsClient binds an SseClient to the live cookie session + the teardown. */
 export class EventsClient {
   #sse: SseClient
 
@@ -86,7 +86,9 @@ export class EventsClient {
           close: () => this.#sse.close(),
           invalidate: (reason) => session.invalidate(reason),
         }),
-      () => (session.key ? { headers: { Authorization: `Bearer ${session.key}` } } : {}),
+      // The httpOnly ppk_sid cookie authenticates the stream — credentials: 'same-origin' rides it
+      // along (design 28 §4.3). A GET, so no CSRF header; a revoked cookie 401s → terminal error.
+      () => ({ credentials: 'same-origin' }),
     )
   }
 

@@ -2,8 +2,8 @@
 // `status` is reactive in consuming components (the ConnIndicator, W5).
 //
 // fetch + ReadableStream + eventsource-parser, NOT native EventSource: the
-// latter cannot send an Authorization header (admin auth is Bearer; `?token=`
-// would land in proxy logs) and is GET-only. This client streams named events
+// latter cannot carry a caller-supplied RequestInit (credentials, headers) or be
+// aborted cleanly, and is GET-only. This client streams named events
 // (snapshot | devices | telemetry | log | error) to an onEvent dispatcher and
 // reconnects with exponential backoff + jitter (cap 30s) after any non-clean
 // end, until close() is called. The status field drives a page's poll fallback:

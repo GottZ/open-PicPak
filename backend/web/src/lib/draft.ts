@@ -2,9 +2,10 @@
 // the dirty-state guard, kept free of any sv-router import so it loads in the
 // vitest node env (dirtyGuard.svelte.ts adds the sv-router blockNavigation hook).
 //
-// SECURITY: the bearer key stays in sessionStorage (D19.9); ONLY non-secret
-// editor content is drafted to localStorage here — never a key, token, or secret
-// value. Callers must pass editor source only.
+// SECURITY: after W8 the human session is an httpOnly ppk_sid cookie — no key
+// lives in web storage at all (design 28 §4.3). ONLY non-secret editor content is
+// drafted to localStorage here — never a key, token, or secret value. Callers
+// must pass editor source only.
 
 const DRAFT_PREFIX = 'picpak.draft.'
 
