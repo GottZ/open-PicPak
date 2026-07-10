@@ -55,6 +55,16 @@ export function configureApi(next: Partial<ApiHooks>): void {
   Object.assign(hooks, next)
 }
 
+/**
+ * Fire the unauthorized teardown hook. The non-JSON transports (api-binary.ts,
+ * design 29 §4.2) call this on a 401 so a rejected cookie session tears down the
+ * same way as on the apiFetch path (§5 S6). Uploads/frame reads are never boot
+ * probes, so this is always the non-probe teardown — no probe branch here.
+ */
+export function fireUnauthorized(): void {
+  hooks.onUnauthorized()
+}
+
 export interface ApiFetchOptions {
   /**
    * Marks a boot/login probe (session.restore, the login-time whoami). A 401 on a
@@ -66,11 +76,12 @@ export interface ApiFetchOptions {
 
 // The CSRF header every mutating request carries (design §4.1) — the server enforces it with 403
 // csrf_required on cookie-authed mutations; a cross-site <form> POST cannot set a custom header.
-const CSRF_HEADER = 'X-Requested-With'
-const CSRF_VALUE = 'picpak'
+// Exported so the non-JSON transports (api-binary.ts) stamp the identical header (design 29 §4.2).
+export const CSRF_HEADER = 'X-Requested-With'
+export const CSRF_VALUE = 'picpak'
 
 /** Read-only methods take no CSRF header (mirror of adminhttp.csrfSafeMethod). */
-function isSafeMethod(method: string): boolean {
+export function isSafeMethod(method: string): boolean {
   const m = method.toUpperCase()
   return m === 'GET' || m === 'HEAD' || m === 'OPTIONS'
 }
@@ -132,16 +143,13 @@ export async function apiFetch<T>(
 }
 
 /**
- * Parse the body as JSON, tolerating leading whitespace (RFC 8259 allows it;
- * JSON.parse skips it). Returns undefined for empty or non-JSON bodies.
+ * Parse a body text as JSON, tolerating leading whitespace (RFC 8259 allows it;
+ * JSON.parse skips it). Returns undefined for empty or non-JSON text. Exported
+ * so the non-JSON transports (api-binary.ts) parse an error envelope — the XHR
+ * upload path holds only a `responseText` string, not a Response — with the
+ * exact same JSON-parse policy as apiFetch (one contract, no second parser).
  */
-async function parseBody(res: Response): Promise<unknown> {
-  let text: string
-  try {
-    text = await res.text()
-  } catch {
-    return undefined
-  }
+export function parseJson(text: string): unknown {
   if (text.trim() === '') return undefined
   try {
     return JSON.parse(text) as unknown
@@ -150,13 +158,24 @@ async function parseBody(res: Response): Promise<unknown> {
   }
 }
 
-/** A parsed JSON object body, else null (kept on ApiError.details). */
-function asRecord(body: unknown): Record<string, unknown> | null {
+/** Parse a Response body as JSON, else undefined (empty/non-JSON). */
+async function parseBody(res: Response): Promise<unknown> {
+  let text: string
+  try {
+    text = await res.text()
+  } catch {
+    return undefined
+  }
+  return parseJson(text)
+}
+
+/** A parsed JSON object body, else null (kept on ApiError.details). Shared with api-binary.ts. */
+export function asRecord(body: unknown): Record<string, unknown> | null {
   return typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null
 }
 
-/** Extract the error of a `{success:false, error}` envelope, else null. */
-function envelopeError(body: unknown): string | null {
+/** Extract the error of a `{success:false, error}` envelope, else null. Shared with api-binary.ts. */
+export function envelopeError(body: unknown): string | null {
   if (typeof body !== 'object' || body === null) return null
   const envelope = body as { success?: unknown; error?: unknown }
   if (envelope.success !== false) return null

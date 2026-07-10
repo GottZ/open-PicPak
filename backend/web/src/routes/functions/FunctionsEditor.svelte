@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte'
   import { Resource } from '../../lib/resource.svelte'
   import { apiFetch, toApiError } from '../../lib/api'
+  import { apiBinary } from '../../lib/api-binary'
   import StateView from '../../lib/StateView.svelte'
   import DevicePicker from '../../lib/DevicePicker.svelte'
   import { session } from '../../lib/auth.svelte'
@@ -399,27 +400,16 @@
         },
         { serial: testSerial.trim(), trigger: fn.trigger_type, now: testNow.trim() || undefined, payload },
       )
-      const res = await fetch('/api/functions/test-run', {
+      // apiBinary (design 29 §4.2) owns the cookie + CSRF injection and the {success:false}
+      // envelope parsing this call used to inline: it rides the httpOnly ppk_sid cookie
+      // (credentials: 'same-origin'), stamps X-Requested-With: picpak on the POST, tears down
+      // the session on a 401 (§5 S6), and returns the raw framed bytes on success.
+      const buf = await apiBinary('/api/functions/test-run', {
         method: 'POST',
-        // Cookie session (design 28 §4.3): credentials rides the httpOnly ppk_sid cookie; a mutation, so
-        // it carries X-Requested-With: picpak (the CSRF header the server enforces, §4.1).
-        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'picpak' },
-        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
         body: bodyText,
       })
-      if (!res.ok) {
-        let msg = `test-run failed (HTTP ${res.status})`
-        try {
-          const j = (await res.json()) as { error?: string }
-          if (j?.error) msg = j.error
-        } catch {
-          /* non-JSON error body */
-        }
-        testError = msg
-        notify.error(msg)
-        return
-      }
-      testResult = parseTestFrame(await res.arrayBuffer())
+      testResult = parseTestFrame(buf)
       if (!testResult.meta.ok && testResult.meta.err) {
         notify.warn(`test-run: ${testResult.meta.err.kind} — see the log below`)
       }
