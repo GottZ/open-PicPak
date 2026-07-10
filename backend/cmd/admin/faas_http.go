@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/open-picpak/backend/internal/adminhttp"
+	"github.com/open-picpak/backend/internal/bwry"
 	"github.com/open-picpak/backend/internal/devicestore"
 	"github.com/open-picpak/backend/internal/faasstore"
 )
@@ -351,6 +352,15 @@ func validTriggerConfig(tt faasstore.TriggerType, raw json.RawMessage) (code, ms
 	}
 	if tt == faasstore.TriggerRender && c.Mode != "" && c.Mode != "sync" && c.Mode != "prerender" {
 		return "invalid_trigger_config", `render mode must be "sync" or "prerender"`, false
+	}
+	// dither must name an implemented mode — bwry.ParseDither is the single source of truth (A31.3), so a
+	// typo ("atknson") or reserved-but-unbuilt mode ("floyd-steinberg"/"ordered") is a 422 here, never a
+	// silent downstream no-op on the render path. Absent dither ("") stays valid (back-compat: functions
+	// predating A31.2 carry no dither field).
+	if c.Dither != "" {
+		if _, ok := bwry.ParseDither(c.Dither); !ok {
+			return "invalid_dither", "dither must be none|atkinson", false
+		}
 	}
 	// TODO(cron): validate the 5-field cron string for schedule triggers once the supervisor scheduler
 	// parses it (faas-supervisor tickSchedule uses interval_s in M1, so cron is a documented no-op here).

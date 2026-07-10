@@ -137,6 +137,12 @@ func TestFaasValidation_DB(t *testing.T) {
 		{"bad config shape", `{"name":"ok","source":"x","trigger_config":[1,2]}`, 422},
 		{"bad render mode", `{"name":"ok","source":"x","trigger_config":{"mode":"weird"}}`, 422},
 		{"neg ttl", `{"name":"ok","source":"x","trigger_config":{"ttl_s":-1}}`, 422},
+		// A31.3 — dither is enum-validated against bwry.ParseDither. A typo must be a 422, never a silent
+		// downstream no-op; the implemented modes and an absent dither pass.
+		{"bad dither typo", `{"name":"ok","source":"x","trigger_config":{"dither":"atknson"}}`, 422},
+		{"bad dither reserved", `{"name":"ok","source":"x","trigger_config":{"dither":"floyd-steinberg"}}`, 422},
+		{"ok dither atkinson", `{"name":"dith-atk","source":"x","trigger_config":{"dither":"atkinson"}}`, 200},
+		{"ok dither none", `{"name":"dith-none","source":"x","trigger_config":{"dither":"none"}}`, 200},
 		{"ok create", `{"name":"good-fn","source":"x"}`, 200},
 	}
 	for _, c := range cases {
@@ -144,6 +150,26 @@ func TestFaasValidation_DB(t *testing.T) {
 		if w.Code != c.want {
 			t.Errorf("%s: create = %d, want %d (%s)", c.name, w.Code, c.want, w.Body.String())
 		}
+	}
+	// the dither typo must carry the specific invalid_dither code (not the generic invalid_trigger_config)
+	// so the editor can point the operator at the dither field — and the same edge holds on UPDATE.
+	if w := do(h, "POST", "/api/functions", "admin-tok",
+		strings.NewReader(`{"name":"x","source":"x","trigger_config":{"dither":"atknson"}}`), "application/json"); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("dither typo create = %d, want 422 (%s)", w.Code, w.Body.String())
+	} else if code, _ := jsonBody(t, w)["code"].(string); code != "invalid_dither" {
+		t.Errorf("dither typo create code = %q, want invalid_dither", code)
+	}
+	cr := do(h, "POST", "/api/functions", "admin-tok",
+		strings.NewReader(`{"name":"dith-upd","source":"x","trigger_config":{"dither":"none"}}`), "application/json")
+	if cr.Code != http.StatusOK {
+		t.Fatalf("seed function for update = %d (%s)", cr.Code, cr.Body.String())
+	}
+	updID := int64(jsonBody(t, cr)["id"].(float64))
+	if w := do(h, "PUT", "/api/functions/"+itoa(updID), "admin-tok",
+		strings.NewReader(`{"source":"x","trigger_config":{"dither":"atknson"}}`), "application/json"); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("dither typo update = %d, want 422 (%s)", w.Code, w.Body.String())
+	} else if code, _ := jsonBody(t, w)["code"].(string); code != "invalid_dither" {
+		t.Errorf("dither typo update code = %q, want invalid_dither", code)
 	}
 	// duplicate name → 409.
 	if w := do(h, "POST", "/api/functions", "admin-tok", strings.NewReader(`{"name":"good-fn","source":"y"}`), "application/json"); w.Code != http.StatusConflict {
