@@ -66,6 +66,13 @@ const FALLBACK: Locale = 'en'
 export const localeLabels: Record<Locale, string> = {
   de: 'Deutsch',
   en: 'English',
+  fr: 'Français',
+  it: 'Italiano',
+  es: 'Español',
+  ru: 'Русский',
+  zh: '中文',
+  ko: '한국어',
+  ja: '日本語',
 }
 
 /** Detection cascade (§2): stored choice → browser preference → English. */
