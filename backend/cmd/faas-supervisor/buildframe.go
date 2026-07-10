@@ -37,6 +37,7 @@ func (s *supervisor) doRender(ctx context.Context, fn *faasstore.Function, rctx 
 		Secrets:          SecretsReal,
 		Limits:           s.limits,
 		Force:            force,
+		Dither:           parseTriggerConfig(fn.TriggerConfig).Dither, // trusted per-function policy (A31.2)
 		DitherDefault:    s.ditherDefault,
 		M4Sock:           s.m4Sock,
 		Timeout:          time.Duration(s.limits.TimeoutMs)*time.Millisecond + 10*time.Second,

@@ -30,10 +30,15 @@ const (
 // (K7). EgressRegister/EgressUnregister, when set, bind this call's egress_allow to a per-call
 // credential at the proxy (least privilege, D24.8); no-egress functions leave them nil.
 type RenderOpts struct {
-	Secrets          SecretMode
-	Limits           faasproto.Limits
-	WantRaw          bool
-	Force            bool
+	Secrets SecretMode
+	Limits  faasproto.Limits
+	WantRaw bool
+	Force   bool
+	// Dither is the TRUSTED per-function dither selector — the operator's trigger_config.dither
+	// (Policy=Data, A31.2). It is resolved at pack time and, when it parses, WINS over the worker's
+	// echoed return value (see resolveDitherStr). Empty for callers with no per-function policy, which
+	// then fall through to the worker return and finally DitherDefault (A31-E2 back-compat).
+	Dither           string
 	DitherDefault    string
 	M4Sock           string
 	Timeout          time.Duration
@@ -76,6 +81,25 @@ func resolveSecrets(ctx context.Context, q secrets.Querier, box *sealbox.Box, na
 		}
 	}
 	return out, nil
+}
+
+// resolveDitherStr selects the pack-time dither mode by TRUST-ORDERED precedence (A31.2, design 31
+// §4.2/§7) and returns its canonical token. trigger is the trusted per-function trigger_config.dither
+// (operator policy, Policy=Data); ret is the worker's echoed dither (UNTRUSTED — it originates in the
+// sandboxed function JS, ResponseMeta.Dither); def is the global DITHER_DEFAULT. The trusted trigger
+// wins whenever it parses. The untrusted return is tolerated ONLY as a fallback below it, NEVER as an
+// override: letting the worker's return beat trigger_config would let untrusted code overwrite trusted
+// operator policy (a Policy=Data breach). That fallback is safe only because ParseDither is fail-closed
+// and the selector space is a fixed set of deterministic, secret-free pack algorithms — an unparsable
+// value at any tier simply falls through. The final tier reproduces today's byte-exact frame when
+// DITHER_DEFAULT is "none"/unset (A31-E2 back-compat: no per-function dither ⇒ "" ⇒ none).
+func resolveDitherStr(trigger, ret, def string) string {
+	for _, s := range []string{trigger, ret, def} {
+		if _, ok := bwry.ParseDither(s); ok {
+			return s // ParseDither only accepts canonical tokens, so s is already canonical
+		}
+	}
+	return "none"
 }
 
 // renderOnce is the shared, persistence-free primitive: resolve secrets → drive the worker over M4 →
@@ -127,11 +151,16 @@ func renderOnce(ctx context.Context, q secrets.Querier, box *sealbox.Box, fn *fa
 		re := &faasproto.RenderErr{Kind: "pack", Msg: ferr.Error()}
 		return RenderResult{Meta: meta, Err: re}
 	}
-	packed, perr := bwry.Pack(img)
+	// Pack-time dither resolution (A31.2): the trusted trigger_config selector (opts.Dither) wins over
+	// the untrusted worker return (meta.Dither), which is itself only a fallback above DITHER_DEFAULT.
+	dith := resolveDitherStr(opts.Dither, meta.Dither, opts.DitherDefault)
+	dmode, _ := bwry.ParseDither(dith) // always ok — resolveDitherStr returns a canonical token
+	packed, perr := bwry.PackWithDither(img, dmode)
 	if perr != nil {
 		re := &faasproto.RenderErr{Kind: "pack", Msg: perr.Error()}
 		return RenderResult{Meta: meta, Err: re}
 	}
+	meta.Dither = dith // report the mode ACTUALLY packed (trusted-resolved), not the untrusted echo
 	res := RenderResult{Packed: packed, Meta: meta}
 	if opts.WantRaw {
 		res.Raw = raw

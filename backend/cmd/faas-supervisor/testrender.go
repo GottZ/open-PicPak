@@ -100,16 +100,14 @@ func (s *supervisor) handleTestRender(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// effective dither: the operator's chosen knob (ad-hoc req.Dither or the saved fn's config), fallback
-	// to the global default.
-	// TODO(perfn-dither): production doRender passes s.ditherDefault (global), NOT the fn's
-	// trigger_config.dither — wire per-function dither into build_frame so test-run fidelity fully holds.
-	dither := body.Dither
-	if body.ID != nil {
-		dither = parseTriggerConfig(fn.TriggerConfig).Dither
-	}
-	if dither == "" {
-		dither = s.ditherDefault
+	// effective test-run dither knob (trusted): body.Dither is the ad-hoc top tier (the operator's
+	// test-UI knob, D25.3 — no new privilege), then the saved fn's trigger_config.dither. renderOnce
+	// resolves this trusted knob against the worker return and DITHER_DEFAULT with the SAME precedence
+	// as production build_frame (A31.2 / resolveDitherStr), so the preview is faithful to what a device
+	// would be served — the perfn-dither gap is closed: production doRender now wires trigger_config too.
+	trusted := body.Dither
+	if trusted == "" && body.ID != nil {
+		trusted = parseTriggerConfig(fn.TriggerConfig).Dither
 	}
 
 	lim := clampLimits(s.limits, body.Limits)
@@ -124,9 +122,10 @@ func (s *supervisor) handleTestRender(w http.ResponseWriter, r *http.Request) {
 	res := renderOnce(ctx, s.pool, s.box, fn, rctx, RenderOpts{
 		Secrets:          SecretsStub, // D25.12a — never a plaintext value leaves the DB
 		Limits:           lim,
-		WantRaw:          true, // the pre-pack RGB for the side-by-side preview (D25.5)
-		Force:            true, // no cache short-circuit (D25.4)
-		DitherDefault:    dither,
+		WantRaw:          true,    // the pre-pack RGB for the side-by-side preview (D25.5)
+		Force:            true,    // no cache short-circuit (D25.4)
+		Dither:           trusted, // trusted knob; renderOnce resolves precedence exactly as production
+		DitherDefault:    s.ditherDefault,
 		M4Sock:           s.m4Sock,
 		Timeout:          time.Duration(lim.TimeoutMs)*time.Millisecond + 10*time.Second,
 		EgressRegister:   s.egress.register, // the SAME egress guard as prod (T10 — a denial surfaces)
@@ -142,7 +141,7 @@ func (s *supervisor) handleTestRender(w http.ResponseWriter, r *http.Request) {
 		OK:     res.Err == nil,
 		Status: statusOf(res.Err),
 		Wake:   s.wakeFor(res.Meta),
-		Dither: dither,
+		Dither: res.Meta.Dither, // the mode ACTUALLY packed (trusted-resolved by renderOnce), not the raw request knob
 		Log:    res.Meta.Log,
 		Err:    res.Err,
 	}
