@@ -38,6 +38,9 @@ func dbPool(t *testing.T) *pgxpool.Pool {
 		`TRUNCATE telemetry`,
 		`TRUNCATE logs`,
 		`UPDATE channels SET default_version = NULL`,
+		// image/playlist before operator_keys: image.operator_key_id -> operator_keys is RESTRICT, and
+		// playlist_item.image_id -> image is RESTRICT (CASCADE clears the dependent rows in one shot).
+		`TRUNCATE image, playlist, playlist_item RESTART IDENTITY CASCADE`,
 		`DELETE FROM api_tokens`, // before operator_keys: created_by -> operator_keys is RESTRICT
 		`DELETE FROM operator_keys`,
 		`DELETE FROM faas_functions`, // FK CASCADE drops device_render_binding + faas_frame_lastgood

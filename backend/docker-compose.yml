@@ -87,6 +87,16 @@ services:
     networks: [dbnet]
     restart: "no"
 
+  # A28 W5: one-shot chown for the content-addressed image volume — admin writes uploads as 65534
+  # (nobody), same as fwblobs-init. Idempotent + fast on restart. A28 §4.2 / §9.
+  imgblobs-init:
+    image: alpine:3
+    command: ["chown", "-R", "65534:65534", "/imgblobs"]
+    volumes:
+      - imgblobs:/imgblobs
+    networks: [dbnet]
+    restart: "no"
+
   grafana:
     image: grafana/grafana:11.3.0
     depends_on:
@@ -161,6 +171,8 @@ services:
         condition: service_completed_successfully
       fwblobs-init:
         condition: service_completed_successfully
+      imgblobs-init:                            # A28 W5: chown the image volume before admin writes uploads
+        condition: service_completed_successfully
       faas-sock-init:                           # A25: prep the test-sock volume ownership before admin dials
         condition: service_completed_successfully
     environment:
@@ -170,9 +182,11 @@ services:
       PGHOST: timescaledb:5432
       ADMIN_ADDR: ":8081"                       # listen on all container interfaces; host publishes loopback only
       FW_BLOB_DIR: /fwblobs                     # A20: firmware register writes the blob here (:ro in ingest)
+      IMG_BLOB_DIR: /imgblobs                   # A28 W5: image upload writes the content-addressed blob here (:ro at render)
       FAAS_TEST_SOCK: /run/test/test.sock       # A25: admin→supervisor test-render seam (this process connects)
     volumes:
       - fwblobs:/fwblobs:rw
+      - imgblobs:/imgblobs:rw                   # A28 W5: admin writes source-image blobs (§4.2/§9)
       - faas-test-sock:/run/test                # A25 test-render UDS (admin↔supervisor; dbnet, co-trusted)
     ports:
       # loopback ONLY — the operator plane is privileged (RCE-capable enqueue). NEVER INGEST_BIND,

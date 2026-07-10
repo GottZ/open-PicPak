@@ -149,6 +149,13 @@ func runServer() {
 	// so this test-gated mount and main.go never drift. Registered before the SPA catch-all below.
 	registerTokenRoutes(mux, pool)
 
+	// Image CRUD surface (A28 W5, design §4.2): upload (content-addressed, idempotent) / keyset list /
+	// meta + raw byte serve (B5 mime-hardened) / delete + audit. Writes gate on image:write, reads on
+	// image:read (RequireScope). Blobs live in the content-addressed imgblobs volume (:rw here, supervisor
+	// :ro at render, A27/§9). Single wiring source (registerImageRoutes); registered before the SPA
+	// catch-all. ADMIN_MAX_IMAGE_BYTES is the compressed-blob cap (Policy=Data, E28.3).
+	registerImageRoutes(mux, pool, env("IMG_BLOB_DIR", "/imgblobs"), int64(envIntOr("ADMIN_MAX_IMAGE_BYTES", defaultMaxImageBytes)))
+
 	// Telemetry dashboard read surface (A22): the enriched fleet list (the 22→17 seam — adds
 	// running_ver/batt/health), the per-device latest+history, and the non-secret SPA config (Grafana/
 	// webhook base URLs). All auth-gated (read-only key reaches them); the verdict thresholds + caps are

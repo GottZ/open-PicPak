@@ -124,6 +124,17 @@ func WriteOK(w http.ResponseWriter, r *http.Request, fields map[string]any) {
 	writeJSON(w, r, http.StatusOK, body)
 }
 
+// WriteCreated is WriteOK with a 201 — the content-addressed image upload returns it when a NEW row
+// was reserved (a re-POST of identical bytes is a dedup hit and stays WriteOK/200, design §4.2). Same
+// golden envelope, so a 201 body parses identically to a 200 for the SPA.
+func WriteCreated(w http.ResponseWriter, r *http.Request, fields map[string]any) {
+	body := map[string]any{"success": true}
+	for k, v := range fields {
+		body[k] = v
+	}
+	writeJSON(w, r, http.StatusCreated, body)
+}
+
 // WriteErr writes {"success":false,"error":msg,"code":code} with the given status.
 func WriteErr(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
 	writeJSON(w, r, status, map[string]any{"success": false, "error": msg, "code": code})
