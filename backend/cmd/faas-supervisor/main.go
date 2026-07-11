@@ -215,6 +215,17 @@ func (s *supervisor) handleRender(w http.ResponseWriter, r *http.Request) {
 		Trigger: faasproto.Trigger{Type: triggerOrRender(body.Trigger)},
 		Now:     nowOrDefault(body.Now),
 	}
+	// K15 — unified enabled semantics: enabled=false = frozen. A disabled function is served its
+	// durable last-good flagged stale WITHOUT rendering inline and WITHOUT driving the worker (no
+	// last-good → error frame + retry-wake). This aligns the sync render path with the webhook-409 and
+	// scheduler-skip, which already gate on fn.Enabled; before K15 this path rendered disabled
+	// functions regardless. Checked here, immediately after LoadFunction, so neither buildFrame nor
+	// serveLastGood can drive the worker for a frozen function.
+	if !fn.Enabled {
+		packed, status, stale, wake := s.serveFrozen(ctx, fn, rctx)
+		s.writeFrame(w, packed, status, stale, wake)
+		return
+	}
 	// Trigger routing (D24.2/D24.12): render/sync renders inline (TTL cache + fallback); every other
 	// trigger (render/prerender, schedule, webhook) serves the last-good the timer/cron wrote — the
 	// device request never drives the worker inline.

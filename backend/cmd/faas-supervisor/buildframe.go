@@ -209,6 +209,23 @@ func (s *supervisor) buildFrame(ctx context.Context, fn *faasstore.Function, rct
 	return errorFrame, "error", true, s.retryWake // (3) embedded error frame, never calls the worker
 }
 
+// serveFrozen is the K15 path for a DISABLED (frozen) function on the sync render seam: enabled=false
+// means the function is frozen, so the device request neither renders inline nor drives the worker —
+// it is served whatever durable last-good already exists, flagged stale (a frozen function is by
+// definition not producing fresh frames). It reads ONLY faasstore.LastGoodGet — the durable
+// per-(serial, function) frame the last successful render/fan-out persisted — never the buildFrame TTL
+// path (which renders on a miss) and never the in-memory hot cache (which is populated only by a live
+// render). A pure DB read can never produce a new frame, satisfying the "nothing new" requirement. No
+// last-good yet → the embedded error frame, exactly the buildFrame stage-3 / serveLastGood tail. Both
+// branches wake on retryWake, mirroring buildFrame's stale/error fallbacks (the frozen state clears
+// only when an operator re-enables the function).
+func (s *supervisor) serveFrozen(ctx context.Context, fn *faasstore.Function, rctx faasproto.RequestCtx) (packed []byte, status string, stale bool, wake int) {
+	if lg, err := faasstore.LastGoodGet(ctx, s.pool, rctx.Serial, fn.ID); err == nil && lg != nil {
+		return lg.Packed, "stale", true, s.retryWake
+	}
+	return errorFrame, "error", true, s.retryWake
+}
+
 // serveLastGood is the non-sync path (prerender/schedule/webhook): the device request always serves
 // the durable last-good (written by the timer/cron), never driving the worker inline (D24.12).
 func (s *supervisor) serveLastGood(ctx context.Context, fn *faasstore.Function, rctx faasproto.RequestCtx) (packed []byte, status string, stale bool, wake int) {

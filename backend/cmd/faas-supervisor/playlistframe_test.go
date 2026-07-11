@@ -280,11 +280,15 @@ func TestHandleRenderPlaylistFirst(t *testing.T) {
 	s := h.supervisor()
 	ctx := context.Background()
 
-	// fn-only device: the render path is unchanged — serves the fn stub frame (0xFF).
+	// fn-only device: the render path is unchanged — serves the fn stub frame (0xFF). Enabled so the
+	// sync path renders inline (K15: a disabled function is frozen and would serve last-good/error).
 	fnID, err := faasstore.Create(ctx, h.pool, faasstore.CreateParams{
 		Name: "fn", Source: "x", TriggerType: faasstore.TriggerRender, TriggerConfig: json.RawMessage(`{"mode":"sync"}`)})
 	if err != nil {
 		t.Fatalf("create fn: %v", err)
+	}
+	if _, err := faasstore.SetEnabled(ctx, h.pool, fnID, true); err != nil {
+		t.Fatalf("enable fn: %v", err)
 	}
 	if err := faasstore.BindDevice(ctx, h.pool, "FN-ONLY", fnID); err != nil {
 		t.Fatalf("bind fn: %v", err)
