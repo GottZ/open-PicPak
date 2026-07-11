@@ -11,7 +11,7 @@ export const { p, navigate, isActive, route } = createRouter({
   ...areaRoutes,
   hooks: {
     beforeLoad({ pathname }) {
-      // `/` canonicalizes to /fleet (documented sv-router redirect idiom:
+      // `/` canonicalizes to /gallery (documented sv-router redirect idiom:
       // navigate() queues the new navigation, the throw aborts this one).
       const landing = entryRedirect(pathname)
       if (landing !== null) throw navigate(landing, { replace: true })

@@ -214,6 +214,7 @@
   "nav.onboard": "Mise en service",
   "nav.settings": "Paramètres",
   "nav.media": "Médias",
+  "nav.advanced": "Avancé",
   "nav.ota.ships": "Doc 20 — distribution OTA + déploiement",
   "nav.settings.ships": "Doc 18 — formulaire KV de secrets",
   "conn.title": "flux d'événements en direct",

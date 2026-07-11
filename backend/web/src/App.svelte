@@ -3,7 +3,7 @@
   import { Router, isActiveLink } from 'sv-router'
   import './router' // side effect: instantiate createRouter before <Router/> mounts
   import { session } from './lib/auth.svelte'
-  import { AREAS } from './routes'
+  import { advancedAreas, coreAreas } from './routes'
   import Login from './Login.svelte'
   import Toaster from './lib/Toaster.svelte'
   import ConnIndicator from './lib/ConnIndicator.svelte'
@@ -11,6 +11,18 @@
   import { locales, localeLabels, activeLocale, switchLocale, navLabel, type Locale } from './lib/i18n'
 
   onMount(() => void session.restore())
+
+  // Progressive disclosure (design 33 §4.6, E-A33-5): advanced areas sit behind
+  // a disclosure that defaults collapsed; the power-user's one expand click is
+  // persisted so it is paid once. Deep links to advanced areas keep working
+  // regardless of this state — the disclosure only groups the nav, routing is
+  // flat (router.ts / routes/index.ts).
+  const ADVANCED_OPEN_KEY = 'picpak.nav.advanced'
+  let advancedOpen = $state(localStorage.getItem(ADVANCED_OPEN_KEY) === '1')
+  function toggleAdvanced() {
+    advancedOpen = !advancedOpen
+    localStorage.setItem(ADVANCED_OPEN_KEY, advancedOpen ? '1' : '0')
+  }
 </script>
 
 {#if session.restoring}
@@ -24,9 +36,24 @@
     <header class="topbar">
       <span class="brand">open-picpak</span>
       <nav>
-        {#each AREAS as a (a.path)}
+        {#each coreAreas() as a (a.path)}
           <a href={a.path} {@attach isActiveLink()}>{navLabel(a.path)}</a>
         {/each}
+        <div class="advanced" class:open={advancedOpen}>
+          <button
+            type="button"
+            class="disclosure"
+            aria-expanded={advancedOpen}
+            onclick={toggleAdvanced}
+          >
+            {m['nav.advanced']()}
+          </button>
+          {#if advancedOpen}
+            {#each advancedAreas() as a (a.path)}
+              <a href={a.path} {@attach isActiveLink()}>{navLabel(a.path)}</a>
+            {/each}
+          {/if}
+        </div>
       </nav>
       <div class="identity">
         <select
@@ -102,6 +129,39 @@
   nav a:global(.is-active) {
     color: var(--fg);
     background: rgba(122, 162, 247, 0.14);
+  }
+  /* Progressive disclosure (design 33 §4.6): advanced areas group behind a
+     toggle that reads as one more nav item; expanded, its areas flow inline. */
+  .advanced {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .disclosure {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--fg-muted);
+    padding: 0.3rem 0.7rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-family: inherit;
+  }
+  .disclosure:hover {
+    color: var(--fg);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  /* Caret rotates from ▸ (collapsed) to ▾ (open) — pure decoration, no text. */
+  .disclosure::before {
+    content: '▸';
+    font-size: 0.7em;
+    transition: transform 0.12s ease;
+  }
+  .advanced.open .disclosure::before {
+    transform: rotate(90deg);
   }
   .identity {
     display: flex;

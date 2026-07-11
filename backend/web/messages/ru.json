@@ -214,6 +214,7 @@
   "nav.onboard": "Ввод в работу",
   "nav.settings": "Настройки",
   "nav.media": "Медиа",
+  "nav.advanced": "Расширенные",
   "nav.ota.ships": "Doc 20 — раздача OTA + развёртывание",
   "nav.settings.ships": "Doc 18 — форма секретов KV",
   "conn.title": "поток событий в реальном времени",

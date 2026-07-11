@@ -214,6 +214,7 @@
   "nav.onboard": "Inbetriebnahme",
   "nav.settings": "Einstellungen",
   "nav.media": "Medien",
+  "nav.advanced": "Erweitert",
   "nav.ota.ships": "Doc 20 — OTA-Auslieferung + Rollout",
   "nav.settings.ships": "Doc 18 — Secrets-KV-Formular",
   "conn.title": "Live-Event-Stream",

@@ -214,6 +214,7 @@
   "nav.onboard": "Onboarding",
   "nav.settings": "Impostazioni",
   "nav.media": "Media",
+  "nav.advanced": "Avanzate",
   "nav.ota.ships": "Doc 20 — distribuzione OTA + rollout",
   "nav.settings.ships": "Doc 18 — modulo KV dei secret",
   "conn.title": "stream di eventi live",

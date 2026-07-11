@@ -214,6 +214,7 @@
   "nav.onboard": "オンボード",
   "nav.settings": "設定",
   "nav.media": "メディア",
+  "nav.advanced": "詳細設定",
   "nav.ota.ships": "Doc 20 — OTA配信 + ロールアウト",
   "nav.settings.ships": "Doc 18 — SecretsのKVフォーム",
   "conn.title": "ライブイベントストリーム",

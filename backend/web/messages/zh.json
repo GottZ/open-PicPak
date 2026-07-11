@@ -214,6 +214,7 @@
   "nav.onboard": "接入",
   "nav.settings": "设置",
   "nav.media": "媒体",
+  "nav.advanced": "高级",
   "nav.ota.ships": "Doc 20 —— OTA 分发 + 推出",
   "nav.settings.ships": "Doc 18 —— secrets KV 表单",
   "conn.title": "实时事件流",

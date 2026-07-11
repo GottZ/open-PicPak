@@ -214,6 +214,7 @@
   "nav.onboard": "Onboard",
   "nav.settings": "Settings",
   "nav.media": "Media",
+  "nav.advanced": "Advanced",
   "nav.ota.ships": "Doc 20 — OTA serving + rollout",
   "nav.settings.ships": "Doc 18 — secrets KV form",
   "conn.title": "live event stream",
