@@ -1,4 +1,4 @@
-package main
+package faascore
 
 import (
 	"bytes"
@@ -72,8 +72,8 @@ func fakeWorker(t *testing.T, workerReturn string, raw []byte) string {
 // ditherProbeSup builds the minimal supervisor doRender needs: a fake worker socket, DITHER_DEFAULT
 // "none", and a non-nil egress client (never called — the probe function binds no egress). pool/box stay
 // nil because the probe function binds no secrets, so resolveSecrets never touches them.
-func ditherProbeSup(sock string) *supervisor {
-	return &supervisor{
+func ditherProbeSup(sock string) *Supervisor {
+	return &Supervisor{
 		ditherDefault: "none",
 		limits:        faasproto.Limits{TimeoutMs: 8000, MemMB: 256},
 		m4Sock:        sock,

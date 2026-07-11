@@ -1,4 +1,4 @@
-package main
+package faascore
 
 import (
 	"bytes"
@@ -69,8 +69,8 @@ func TestRedactSecretValues(t *testing.T) {
 
 // --- e2e: the REAL Bun worker (startWorker skips without bun) + optionally the DB ---
 
-func newTestSup(sock string, pool *pgxpool.Pool) *supervisor {
-	return &supervisor{
+func newTestSup(sock string, pool *pgxpool.Pool) *Supervisor {
+	return &Supervisor{
 		pool:          pool,
 		box:           nil, // stub secrets never open the box
 		wake:          WakeConfig{NightStartHour: 23, NightEndHour: 6, DayInterval: 3600, MaxWake: 8 * 3600},
@@ -83,7 +83,7 @@ func newTestSup(sock string, pool *pgxpool.Pool) *supervisor {
 	}
 }
 
-func doTestRender(t *testing.T, s *supervisor, jsonBody string) (testMeta, []byte, []byte, *httptest.ResponseRecorder) {
+func doTestRender(t *testing.T, s *Supervisor, jsonBody string) (testMeta, []byte, []byte, *httptest.ResponseRecorder) {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/test-render", strings.NewReader(jsonBody))
 	w := httptest.NewRecorder()

@@ -1,4 +1,4 @@
-package main
+package faascore
 
 import (
 	"bytes"
@@ -33,8 +33,8 @@ func faasPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func testSupervisor(pool *pgxpool.Pool, render renderFunc) *supervisor {
-	return &supervisor{
+func testSupervisor(pool *pgxpool.Pool, render renderFunc) *Supervisor {
+	return &Supervisor{
 		pool:      pool,
 		cache:     newFrameCache(),
 		wake:      WakeConfig{NightStartHour: 23, NightEndHour: 6, DayInterval: 3600, MaxWake: 8 * 3600},

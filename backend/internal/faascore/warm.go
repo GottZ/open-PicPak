@@ -1,4 +1,4 @@
-package main
+package faascore
 
 import (
 	"context"
@@ -31,7 +31,7 @@ func playlistPushEnabled() bool { return os.Getenv("FAAS_PLAYLIST_PUSH") == "tru
 // simultaneous renders). Distinct variants only: the same image at the same policy packs identically
 // fleet-wide (content-addressed), so warming it once suffices. Best-effort: a per-variant failure is
 // logged and skipped (the /frame single-flight remains the correctness backstop).
-func (s *supervisor) warmPlaylist(ctx context.Context, playlistID int64) {
+func (s *Supervisor) warmPlaylist(ctx context.Context, playlistID int64) {
 	items, err := playliststore.RotationItems(ctx, s.pool, playlistID)
 	if err != nil {
 		log.Printf("faas-supervisor: warm playlist %d items: %v", playlistID, err)
@@ -88,7 +88,7 @@ func (s *supervisor) warmPlaylist(ctx context.Context, playlistID int64) {
 // warms the playlist's variants then fans out the refresh (warm THEN wake, so the pre-pack lands
 // before the device polls). Mirrors cmd/ingest's c2Notifier.listenLoop: reconnect-on-error, one DB
 // connection for the process lifetime. Started only when playlistPushEnabled() (default-off).
-func (s *supervisor) runPlaylistWarmer(ctx context.Context) {
+func (s *Supervisor) runPlaylistWarmer(ctx context.Context) {
 	for ctx.Err() == nil {
 		if err := s.warmListenOnce(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("faas-supervisor: playlist warmer listen: %v (reconnect in 1s)", err)
@@ -101,7 +101,7 @@ func (s *supervisor) runPlaylistWarmer(ctx context.Context) {
 	}
 }
 
-func (s *supervisor) warmListenOnce(ctx context.Context) error {
+func (s *Supervisor) warmListenOnce(ctx context.Context) error {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return err

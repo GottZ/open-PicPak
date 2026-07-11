@@ -1,4 +1,4 @@
-package main
+package faascore
 
 import (
 	"bytes"
@@ -77,8 +77,8 @@ func (h *plHarness) callCount() int {
 	return h.calls
 }
 
-func (h *plHarness) supervisor() *supervisor {
-	return &supervisor{
+func (h *plHarness) supervisor() *Supervisor {
+	return &Supervisor{
 		pool:           h.pool,
 		cache:          newFrameCache(),
 		wake:           WakeConfig{NightStartHour: 23, NightEndHour: 6, DayInterval: 3600, MaxWake: 8 * 3600},
@@ -238,7 +238,7 @@ func TestPlaylistSingleFlight(t *testing.T) {
 // via an injected rng) and clamped to [60, MaxWake], and it never exceeds the intended cadence/advance
 // boundary (jitter only pulls earlier).
 func TestPlaylistWakeJitter(t *testing.T) {
-	s := &supervisor{wake: WakeConfig{DayInterval: 3600, MaxWake: 8 * 3600}, jitterFrac: 0.15}
+	s := &Supervisor{wake: WakeConfig{DayInterval: 3600, MaxWake: 8 * 3600}, jitterFrac: 0.15}
 
 	s.rng = func() float64 { return 0 }
 	if got := s.jitter(1000); got != 1000 {
@@ -313,7 +313,7 @@ func TestHandleRenderPlaylistFirst(t *testing.T) {
 }
 
 // postRender drives handleRender via httptest and returns the served frame's first (marker) byte.
-func postRender(t *testing.T, s *supervisor, serial string) byte {
+func postRender(t *testing.T, s *Supervisor, serial string) byte {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"serial": serial})
 	req := httptest.NewRequest(http.MethodPost, "/render", bytes.NewReader(body))

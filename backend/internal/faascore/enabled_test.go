@@ -1,4 +1,4 @@
-package main
+package faascore
 
 import (
 	"bytes"
@@ -33,7 +33,7 @@ func neverWorker(t *testing.T, calls *int) renderFunc {
 }
 
 // postRenderResp drives handleRender via httptest and returns the recorder (body + X-Faas-* headers).
-func postRenderResp(t *testing.T, s *supervisor, serial string) *httptest.ResponseRecorder {
+func postRenderResp(t *testing.T, s *Supervisor, serial string) *httptest.ResponseRecorder {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"serial": serial})
 	req := httptest.NewRequest(http.MethodPost, "/render", bytes.NewReader(body))
@@ -42,7 +42,7 @@ func postRenderResp(t *testing.T, s *supervisor, serial string) *httptest.Respon
 	return rec
 }
 
-func mkDisabledSyncFn(t *testing.T, s *supervisor, serial string) int64 {
+func mkDisabledSyncFn(t *testing.T, s *Supervisor, serial string) int64 {
 	t.Helper()
 	ctx := context.Background()
 	// Create defaults enabled=false (store.go:36) — leave it disabled: this IS the frozen function.

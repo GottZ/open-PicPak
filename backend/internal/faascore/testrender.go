@@ -1,4 +1,4 @@
-package main
+package faascore
 
 import (
 	"encoding/binary"
@@ -74,7 +74,7 @@ func clampLimits(prod faasproto.Limits, req *faasproto.Limits) faasproto.Limits 
 
 // handleTestRender executes one test render and writes u32be metaLen | meta JSON | packed(30000) | raw
 // (raw on success only). It NEVER writes cache/last-good/DB (D25.4).
-func (s *supervisor) handleTestRender(w http.ResponseWriter, r *http.Request) {
+func (s *Supervisor) handleTestRender(w http.ResponseWriter, r *http.Request) {
 	var body testRenderReq
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&body); err != nil {
 		http.Error(w, "bad test-render request", http.StatusBadRequest)

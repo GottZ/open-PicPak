@@ -1,4 +1,4 @@
-package main
+package faascore
 
 import (
 	"bytes"
@@ -104,7 +104,7 @@ func TestExternalImage_SeededCatalogDrivesAtkinsonAndSingleDrive(t *testing.T) {
 	// the serial_invariant single-drive gate is observable end-to-end from the catalog value.
 	var drives atomic.Int64
 	sock := multiWorker(t, gradientRGB(), &drives)
-	s := &supervisor{
+	s := &Supervisor{
 		pool:          pool,
 		cache:         newFrameCache(),
 		wake:          WakeConfig{NightStartHour: 23, NightEndHour: 6, DayInterval: 3600, MaxWake: 8 * 3600},

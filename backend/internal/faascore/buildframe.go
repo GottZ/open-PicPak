@@ -1,4 +1,4 @@
-package main
+package faascore
 
 import (
 	"context"
@@ -46,7 +46,7 @@ func parseTriggerConfig(raw json.RawMessage) triggerConfig {
 // a stub so build_frame's cache/last-good/fallback and the fan-out are exercised without a worker.
 type renderFunc func(ctx context.Context, fn *faasstore.Function, rctx faasproto.RequestCtx, force bool) RenderResult
 
-func (s *supervisor) doRender(ctx context.Context, fn *faasstore.Function, rctx faasproto.RequestCtx, force bool) RenderResult {
+func (s *Supervisor) doRender(ctx context.Context, fn *faasstore.Function, rctx faasproto.RequestCtx, force bool) RenderResult {
 	return renderOnce(ctx, s.pool, s.box, fn, rctx, RenderOpts{
 		Secrets:          SecretsReal,
 		Limits:           s.limits,
@@ -70,7 +70,7 @@ func (s *supervisor) doRender(ctx context.Context, fn *faasstore.Function, rctx 
 // tier of the pack-time resolution, A31.2), NOT DitherDefault: on the default tier an untrusted worker
 // return would outrank it. Today's server-authored __playlist source returns no dither, but the trust
 // ordering must not depend on that staying true (lead finding #9).
-func (s *supervisor) doRenderPlaylist(ctx context.Context, source string, input []byte, dither string) RenderResult {
+func (s *Supervisor) doRenderPlaylist(ctx context.Context, source string, input []byte, dither string) RenderResult {
 	fn := &faasstore.Function{Source: source}
 	rctx := faasproto.RequestCtx{Trigger: faasproto.Trigger{Type: "render"}, Now: nowOrDefault("")}
 	return renderOnce(ctx, s.pool, s.box, fn, rctx, RenderOpts{
@@ -152,14 +152,14 @@ func s_now() time.Time { return time.Now() }
 
 // syncInline reports whether a device GET /frame renders inline (render/sync) vs serves last-good
 // (render/prerender, schedule, webhook) — D24.2/D24.12.
-func (s *supervisor) syncInline(fn *faasstore.Function) bool {
+func (s *Supervisor) syncInline(fn *faasstore.Function) bool {
 	if fn.TriggerType != faasstore.TriggerRender {
 		return false
 	}
 	return parseTriggerConfig(fn.TriggerConfig).Mode != "prerender"
 }
 
-func (s *supervisor) ttlFor(fn *faasstore.Function) time.Duration {
+func (s *Supervisor) ttlFor(fn *faasstore.Function) time.Duration {
 	if c := parseTriggerConfig(fn.TriggerConfig); c.TTLSec > 0 {
 		return time.Duration(c.TTLSec) * time.Second
 	}
@@ -169,7 +169,7 @@ func (s *supervisor) ttlFor(fn *faasstore.Function) time.Duration {
 // buildFrame is the sync render path: hot-cache short-circuit (K7 version-keyed) → renderOnce →
 // durable last-good + cache on success → the 3-stage fallback on failure (warm cache → DB last-good →
 // embedded error frame). It NEVER crashes the response and always returns a valid 30000-byte frame.
-func (s *supervisor) buildFrame(ctx context.Context, fn *faasstore.Function, rctx faasproto.RequestCtx, force bool) (packed []byte, status string, stale bool, wake int) {
+func (s *Supervisor) buildFrame(ctx context.Context, fn *faasstore.Function, rctx faasproto.RequestCtx, force bool) (packed []byte, status string, stale bool, wake int) {
 	invariant := parseTriggerConfig(fn.TriggerConfig).SerialInvariant
 	if !force {
 		if e, ok := s.cache.get(rctx.Serial, fn.ID); ok && e.version == fn.Version && time.Since(e.renderedAt) < s.ttlFor(fn) {
@@ -219,7 +219,7 @@ func (s *supervisor) buildFrame(ctx context.Context, fn *faasstore.Function, rct
 // last-good yet → the embedded error frame, exactly the buildFrame stage-3 / serveLastGood tail. Both
 // branches wake on retryWake, mirroring buildFrame's stale/error fallbacks (the frozen state clears
 // only when an operator re-enables the function).
-func (s *supervisor) serveFrozen(ctx context.Context, fn *faasstore.Function, rctx faasproto.RequestCtx) (packed []byte, status string, stale bool, wake int) {
+func (s *Supervisor) serveFrozen(ctx context.Context, fn *faasstore.Function, rctx faasproto.RequestCtx) (packed []byte, status string, stale bool, wake int) {
 	if lg, err := faasstore.LastGoodGet(ctx, s.pool, rctx.Serial, fn.ID); err == nil && lg != nil {
 		return lg.Packed, "stale", true, s.retryWake
 	}
@@ -228,7 +228,7 @@ func (s *supervisor) serveFrozen(ctx context.Context, fn *faasstore.Function, rc
 
 // serveLastGood is the non-sync path (prerender/schedule/webhook): the device request always serves
 // the durable last-good (written by the timer/cron), never driving the worker inline (D24.12).
-func (s *supervisor) serveLastGood(ctx context.Context, fn *faasstore.Function, rctx faasproto.RequestCtx) (packed []byte, status string, stale bool, wake int) {
+func (s *Supervisor) serveLastGood(ctx context.Context, fn *faasstore.Function, rctx faasproto.RequestCtx) (packed []byte, status string, stale bool, wake int) {
 	if lg, err := faasstore.LastGoodGet(ctx, s.pool, rctx.Serial, fn.ID); err == nil && lg != nil {
 		return lg.Packed, lg.Status, lg.Status != "ok", s.wakeDefault()
 	}
@@ -238,7 +238,7 @@ func (s *supervisor) serveLastGood(ctx context.Context, fn *faasstore.Function, 
 // fanOut renders a function for EVERY serial bound to it (D24.12), each with that serial as ctx.serial,
 // writing per-(serial, function) last-good. This is the writer for prerender/schedule/webhook triggers.
 // A per-serial failure leaves that serial's prior last-good intact (never overwrites good with error).
-func (s *supervisor) fanOut(ctx context.Context, fn *faasstore.Function, trigger faasproto.Trigger) (ok, failed int) {
+func (s *Supervisor) fanOut(ctx context.Context, fn *faasstore.Function, trigger faasproto.Trigger) (ok, failed int) {
 	serials, err := faasstore.BoundSerials(ctx, s.pool, fn.ID)
 	if err != nil {
 		log.Printf("faas: fanOut bound serials fn %d: %v", fn.ID, err)
@@ -289,10 +289,10 @@ func (s *supervisor) fanOut(ctx context.Context, fn *faasstore.Function, trigger
 }
 
 // channelOf reads a device's operator-owned channel (server-side, D20.5). Empty if unknown/absent.
-func (s *supervisor) channelOf(ctx context.Context, serial string) string {
+func (s *Supervisor) channelOf(ctx context.Context, serial string) string {
 	var ch string
 	_ = s.pool.QueryRow(ctx, `SELECT channel FROM devices WHERE serial = $1`, serial).Scan(&ch)
 	return ch
 }
 
-func (s *supervisor) wakeDefault() int { return s.wake.NextWakeSeconds(time.Now()) }
+func (s *Supervisor) wakeDefault() int { return s.wake.NextWakeSeconds(time.Now()) }

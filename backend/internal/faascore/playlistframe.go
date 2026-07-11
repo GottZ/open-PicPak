@@ -1,4 +1,4 @@
-package main
+package faascore
 
 import (
 	"context"
@@ -89,7 +89,7 @@ func (sf *singleFlight) do(key string, fn func() ([]byte, error)) (packed []byte
 // packed variant on a cache hit, or renders once (single-flighted) on a miss and persists the variant.
 // It ALWAYS returns a valid 30000-byte frame; a fail-closed case (empty playlist, missing item/image,
 // render failure with no cached fallback) serves the embedded error frame + a retry wake.
-func (s *supervisor) buildPlaylistFrame(ctx context.Context, serial string, playlistID int64, now time.Time) (packed []byte, status string, stale bool, wake int) {
+func (s *Supervisor) buildPlaylistFrame(ctx context.Context, serial string, playlistID int64, now time.Time) (packed []byte, status string, stale bool, wake int) {
 	pl, err := playliststore.GetPlaylist(ctx, s.pool, playlistID)
 	if err != nil {
 		log.Printf("faas: playlist %d get %s: %v", playlistID, serial, err)
@@ -136,7 +136,7 @@ func (s *supervisor) buildPlaylistFrame(ctx context.Context, serial string, play
 // fleet-shared cache hit serves without touching the worker (pack once, serve N); a miss renders ONCE
 // through the single-flight, then persists the variant. The single-flight key IS the cache key, so
 // concurrent misses on the same variant collapse to one worker drive.
-func (s *supervisor) packedVariant(ctx context.Context, img imgstore.Image, item playliststore.PlaylistItem) ([]byte, error) {
+func (s *Supervisor) packedVariant(ctx context.Context, img imgstore.Image, item playliststore.PlaylistItem) ([]byte, error) {
 	if packed, err := plrender.VariantGet(ctx, s.pool, img.Sha256, item.Fit, item.Dither); err == nil {
 		return packed, nil // fleet-shared hit — no worker drive (§4.3 step 3)
 	}
@@ -168,7 +168,7 @@ func (s *supervisor) packedVariant(ctx context.Context, img imgstore.Image, item
 // cadence and the time left until the next rotation advance, jittered per device to break the
 // thundering herd (K12), then clamped to [60, MaxWake]. A device thus wakes near its rotation
 // boundary, never below the 60s floor, and never all at the same instant fleet-wide.
-func (s *supervisor) playlistWake(now time.Time, interval time.Duration, cur plrender.Cursor) int {
+func (s *Supervisor) playlistWake(now time.Time, interval time.Duration, cur plrender.Cursor) int {
 	base := s.wake.NextWakeSeconds(now)
 	if toNext := int((interval - now.Sub(cur.AdvancedAt)).Seconds()); toNext > 0 && toNext < base {
 		base = toNext
@@ -179,7 +179,7 @@ func (s *supervisor) playlistWake(now time.Time, interval time.Duration, cur plr
 // jitter spreads a wake EARLIER by up to jitterFrac (default 15%) of its value, seeded from the
 // supervisor's rng (tests inject a deterministic source). Spreading only earlier keeps the wake within
 // the intended cadence / night sleep (never later), while decorrelating fleet-synchronised wakes.
-func (s *supervisor) jitter(secs int) int {
+func (s *Supervisor) jitter(secs int) int {
 	frac := s.jitterFrac
 	if frac <= 0 {
 		frac = 0.15
