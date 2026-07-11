@@ -1,4 +1,4 @@
-package main
+package ingestcore
 
 import (
 	"context"
@@ -19,11 +19,11 @@ import (
 // run in the e2e gate). Each test states the bug its red would be. dbPool / mustExec / seedServeable /
 // fwReq / strongKey are shared with ota_test.go (same package).
 
-func logServer(pool *pgxpool.Pool, maxFrame int64) *server {
+func logServer(pool *pgxpool.Pool, maxFrame int64) *Server {
 	if maxFrame == 0 {
 		maxFrame = 65536
 	}
-	return &server{pool: pool, logFrameMax: maxFrame}
+	return &Server{pool: pool, logFrameMax: maxFrame}
 }
 
 func seedDevice(t *testing.T, pool *pgxpool.Pool, serial string) {
@@ -33,7 +33,7 @@ func seedDevice(t *testing.T, pool *pgxpool.Pool, serial string) {
 
 // pushLogErr runs one reassembly push in its own committed tx — the real /pp log step. Returns the error
 // so it is safe to call from goroutines (T8); pushLog is the t.Fatal-on-error convenience wrapper.
-func pushLogErr(s *server, serial string, bc, off int64, payload string) (int64, bool, error) {
+func pushLogErr(s *Server, serial string, bc, off int64, payload string) (int64, bool, error) {
 	ctx := context.Background()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -50,7 +50,7 @@ func pushLogErr(s *server, serial string, bc, off int64, payload string) (int64,
 	return ackOff, acked, nil
 }
 
-func pushLog(t *testing.T, s *server, serial string, bc, off int64, payload string) (int64, bool) {
+func pushLog(t *testing.T, s *Server, serial string, bc, off int64, payload string) (int64, bool) {
 	t.Helper()
 	ackOff, acked, err := pushLogErr(s, serial, bc, off, payload)
 	if err != nil {
@@ -88,7 +88,7 @@ func ppReq(serial string, bc, off int64, logPayload string) *http.Request {
 	return r
 }
 
-// T1 — no loss on a failed ack: a push whose tx ROLLS BACK (server 500 / drop) does NOT advance the
+// T1 — no loss on a failed ack: a push whose tx ROLLS BACK (Server 500 / drop) does NOT advance the
 // durable cursor, and the same delta re-pushed lands in full. Red: the cursor advanced before COMMIT.
 func TestReassemble_NoLossOnFailedAck_T1(t *testing.T) {
 	pool := dbPool(t)

@@ -1,4 +1,4 @@
-package main
+package ingestcore
 
 // C2 command channel (Doc 13 Wave 3c): the device polls GET /<token>/c2?sn=<serial>&ack=<seq>; the
 // backend advances the device's cursor (the ack proves it applied up to <seq>) and serves the next
@@ -26,7 +26,7 @@ import (
 // c2MaxWaitS caps the long-poll hold budget a device may request via ?wait=<secs> (Design 16).
 const c2MaxWaitS = 25
 
-func (s *server) handleC2(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleC2(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	serial := q.Get("sn")
 	if serial == "" {
@@ -128,7 +128,7 @@ func (s *server) handleC2(w http.ResponseWriter, r *http.Request) {
 // appears, or the budget elapses. It writes the response (200 + Berry script, or 204). The caller has
 // already committed the cursor advance; this path only READs the queue. It waits on the in-process
 // notifier (fed by one LISTEN connection), so a held poll costs a goroutine, not a DB connection.
-func (s *server) c2LongPoll(w http.ResponseWriter, r *http.Request, serial string, applied int64, budget time.Duration) {
+func (s *Server) c2LongPoll(w http.ResponseWriter, r *http.Request, serial string, applied int64, budget time.Duration) {
 	ctx := r.Context()
 	deadline := time.After(budget)
 	for {

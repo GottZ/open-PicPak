@@ -1,4 +1,4 @@
-package main
+package ingestcore
 
 // Per-device authentication for the C2 route (Doc 15, session-only after the cutover).
 //
@@ -22,7 +22,7 @@ import (
 	"github.com/open-picpak/backend/internal/auth"
 )
 
-// Policy = data (server config). The auth-contract defaults; future: load from config/env.
+// Policy = data (Server config). The auth-contract defaults; future: load from config/env.
 const (
 	authWindow    = 8    // normal rtc-resync window
 	authWindowFar = 4096 // session bootstrap / gap look-ahead bound
@@ -34,7 +34,7 @@ var dummyAuthKey = []byte("00000000000000000000")
 // authDevice validates the session HOTP (c, otp) for serial against the device_auth row under
 // FOR UPDATE, and on success persists the new counter within the caller's tx. Returns true iff the
 // request is authentic. Never reveals why it failed.
-func (s *server) authDevice(ctx context.Context, tx pgx.Tx, serial string, q map[string][]string) bool {
+func (s *Server) authDevice(ctx context.Context, tx pgx.Tx, serial string, q map[string][]string) bool {
 	get := func(k string) string {
 		if v, ok := q[k]; ok && len(v) > 0 {
 			return v[0]

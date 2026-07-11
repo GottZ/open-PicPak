@@ -1,4 +1,4 @@
-package main
+package ingestcore
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 // the ticket key is strong enough to sign with (D20.9/D20.11). Both injectOTASignal and handleFirmware
 // gate on this — OTA is either fully on (version + downloadable ticket) or fully off (no half-state
 // where a device sees a version it can never fetch).
-func (s *server) otaArmed() bool {
+func (s *Server) otaArmed() bool {
 	return s.otaServeEnabled && otaticket.KeyStrong(s.otaKey)
 }
 
@@ -34,11 +34,11 @@ func (s *server) otaArmed() bool {
 // be set BEFORE this call — this fail-open return must not pre-empt the ack, or a committed log delta
 // is never acked (FW re-push loop → ring overrun). A20 sets no other post-commit header, so order is
 // trivially correct here; A21 inserts the ack ahead of this.
-func (s *server) injectOTASignal(ctx context.Context, w http.ResponseWriter, serial string) {
+func (s *Server) injectOTASignal(ctx context.Context, w http.ResponseWriter, serial string) {
 	if !s.otaArmed() {
 		return // serve disabled → no signal (D20.11)
 	}
-	r, err := rollout.ResolveTarget(ctx, s.pool, serial) // routes by server-side devices.channel (D20.5)
+	r, err := rollout.ResolveTarget(ctx, s.pool, serial) // routes by Server-side devices.channel (D20.5)
 	if err != nil {
 		log.Printf("ota resolve %s: %v", serial, err)
 		return // FAIL-OPEN (D20.8) — no headers, caller still writes 200
@@ -57,7 +57,7 @@ func (s *server) injectOTASignal(ctx context.Context, w http.ResponseWriter, ser
 // (D20.8): no/expired/forged ticket → 403; the SHA the FW verifies fail-closed rides this response,
 // not /pp (D20.6). Default-off and key-gated (D20.11/D20.9): disabled → 404 (looks absent), enabled
 // with a weak key → 503 (an operator misconfig to fix, never a forgeable serve).
-func (s *server) handleFirmware(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleFirmware(w http.ResponseWriter, r *http.Request) {
 	if !s.otaServeEnabled {
 		http.NotFound(w, r) // D20.11 default-off: the route reads as absent
 		return

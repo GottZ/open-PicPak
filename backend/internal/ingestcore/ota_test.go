@@ -1,4 +1,4 @@
-package main
+package ingestcore
 
 import (
 	"bytes"
@@ -59,8 +59,8 @@ func mustExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 
 // seedServeable writes a real blob, registers a firmware version whose sha256 is the ACTUAL hash of
 // those bytes (so the served SHA matches what the FW would compute, D20.7), points the stable channel
-// default at it, and returns an armed server plus the version/bytes/sha.
-func seedServeable(t *testing.T, pool *pgxpool.Pool) (s *server, version string, blob []byte, sha string) {
+// default at it, and returns an armed Server plus the version/bytes/sha.
+func seedServeable(t *testing.T, pool *pgxpool.Pool) (s *Server, version string, blob []byte, sha string) {
 	t.Helper()
 	dir := t.TempDir()
 	blob = []byte("\x00FIRMWARE-IMAGE-BYTES\xff")
@@ -75,7 +75,7 @@ func seedServeable(t *testing.T, pool *pgxpool.Pool) (s *server, version string,
 		version, sha, blobName, len(blob))
 	mustExec(t, pool, `INSERT INTO devices (serial, channel) VALUES ('dev1','stable')`)
 	mustExec(t, pool, `UPDATE channels SET default_version=$1 WHERE name='stable'`, version)
-	s = &server{pool: pool, otaServeEnabled: true, otaKey: strongKey, otaTTL: time.Minute, fwBlobDir: dir}
+	s = &Server{pool: pool, otaServeEnabled: true, otaKey: strongKey, otaTTL: time.Minute, fwBlobDir: dir}
 	return s, version, blob, sha
 }
 

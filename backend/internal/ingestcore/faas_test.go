@@ -1,4 +1,4 @@
-package main
+package ingestcore
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 // by pointing the render client at a socket with nothing listening (no DB needed).
 func TestRequestFrame_SupervisorOutage_T13(t *testing.T) {
 	dead := filepath.Join(t.TempDir(), "dead.sock") // nothing is listening here
-	s := &server{faasClient: newFaasClient(dead), faasRetryWake: 300}
+	s := &Server{faasClient: newFaasClient(dead), faasRetryWake: 300}
 	fr := s.requestFrame(context.Background(), "sn1", "stable")
 	if !bytes.Equal(fr.packed, unavailableFrame) {
 		t.Errorf("outage did not serve the unavailable frame (%d bytes)", len(fr.packed))
@@ -38,7 +38,7 @@ func TestRequestFrame_NonFrameBody_T13(t *testing.T) {
 		_, _ = w.Write([]byte("not a 30000-byte frame")) // 200 but wrong size
 	})
 	defer stop()
-	s := &server{faasClient: newFaasClient(sock), faasRetryWake: 300}
+	s := &Server{faasClient: newFaasClient(sock), faasRetryWake: 300}
 	fr := s.requestFrame(context.Background(), "sn1", "stable")
 	if !bytes.Equal(fr.packed, unavailableFrame) || fr.status != "unavailable" {
 		t.Errorf("non-frame body was not rejected (status=%q, %d bytes)", fr.status, len(fr.packed))
@@ -63,7 +63,7 @@ func TestWebhook_TokenGate_DB(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	})
 	defer stop()
-	s := &server{pool: pool, faasClient: newFaasClient(sock), faasRetryWake: 300}
+	s := &Server{pool: pool, faasClient: newFaasClient(sock), faasRetryWake: 300}
 
 	const tokenPlain = "s3cret-webhook-token"
 	sum := sha256.Sum256([]byte(tokenPlain))
@@ -118,7 +118,7 @@ func TestWebhook_TokenGate_DB(t *testing.T) {
 	}
 }
 
-// mockSupervisor starts a tiny HTTP server on a fresh UDS and returns its socket path + a stop func.
+// mockSupervisor starts a tiny HTTP Server on a fresh UDS and returns its socket path + a stop func.
 func mockSupervisor(t *testing.T, handler http.HandlerFunc) (sock string, stop func()) {
 	t.Helper()
 	sock = filepath.Join(t.TempDir(), "render.sock")

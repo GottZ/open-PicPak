@@ -1,4 +1,4 @@
-package main
+package ingestcore
 
 import _ "embed"
 

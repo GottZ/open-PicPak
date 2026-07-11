@@ -1,4 +1,4 @@
-package main
+package ingestcore
 
 // C2 auth re-key handshake (Doc 15): establishes a per-session HOTP secret authenticated by the
 // device's long-term ECDSA P-256 key. The backend holds ONLY the public key, so a DB breach cannot
@@ -49,7 +49,7 @@ func verifyRekeySig(pub []byte, sn, nonceHex string, secret, sig []byte) bool {
 	return ecdsa.VerifyASN1(pk, h[:], sig)
 }
 
-func (s *server) handleC2Challenge(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleC2Challenge(w http.ResponseWriter, r *http.Request) {
 	sn := r.URL.Query().Get("sn")
 	if sn == "" {
 		http.NotFound(w, r)
@@ -71,7 +71,7 @@ func (s *server) handleC2Challenge(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"nonce": hex.EncodeToString(nonce)})
 }
 
-func (s *server) handleC2Rekey(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleC2Rekey(w http.ResponseWriter, r *http.Request) {
 	sn := r.URL.Query().Get("sn")
 	if sn == "" {
 		http.NotFound(w, r)

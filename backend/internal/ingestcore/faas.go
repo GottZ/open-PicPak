@@ -1,4 +1,4 @@
-package main
+package ingestcore
 
 import (
 	"bytes"
@@ -34,7 +34,7 @@ const (
 
 // faasArmed reports whether the /frame + webhook arms are live: the operator wired RENDER_SOCK so a
 // render client exists. Unset → the arms 404 (route reads absent), the pausability-safe default.
-func (s *server) faasArmed() bool { return s.faasClient != nil }
+func (s *Server) faasArmed() bool { return s.faasClient != nil }
 
 // newFaasClient builds the HTTP-over-UDS client for the render-request seam, or nil when RENDER_SOCK is
 // unset (arms disabled). Every request dials the one supervisor socket regardless of the URL host.
@@ -80,14 +80,14 @@ type frameResult struct {
 	stale  string // "0" | "1"
 }
 
-func (s *server) unavailableResult() frameResult {
+func (s *Server) unavailableResult() frameResult {
 	return frameResult{packed: unavailableFrame, wake: s.faasRetryWake, status: "unavailable", stale: "1"}
 }
 
 // handleFrame is the device frame path. It persists the telemetry/log piggyback exactly as /pp (best-
-// effort — the frame is the deliverable), resolves the server-side channel (D20.5), fetches the packed
+// effort — the frame is the deliverable), resolves the Server-side channel (D20.5), fetches the packed
 // frame from the supervisor (unavailable frame on outage, T13), and layers Doc 20's OTA signal (D24.10).
-func (s *server) handleFrame(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleFrame(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	serial := first(q.Get("sn"), q.Get("id")) // sn wins; legacy id (MAC-suffix) is the fallback (main.go:127)
 	if serial == "" {
@@ -129,7 +129,7 @@ func (s *server) handleFrame(w http.ResponseWriter, r *http.Request) {
 // requestFrame calls the supervisor over the render-request seam (POST /render). The supervisor ALWAYS
 // returns a valid 30000-byte body (last-good/error frame on failure, D24.6) — so ingest only synthesises
 // a frame when the supervisor itself is unreachable or the body is not frame-shaped (T13).
-func (s *server) requestFrame(ctx context.Context, serial, channel string) frameResult {
+func (s *Server) requestFrame(ctx context.Context, serial, channel string) frameResult {
 	reqBody, _ := json.Marshal(map[string]any{
 		"serial": serial, "channel": channel, "trigger": "render", "force": false,
 	})
@@ -174,7 +174,7 @@ func (s *server) requestFrame(ctx context.Context, serial, channel string) frame
 // supervisor (the POST body as the trigger payload) and replies 202 — the device picks up the new frame
 // on its next /frame. The token check lives HERE (ingest holds the DB + the hash reader), not in the
 // supervisor; the supervisor endpoint is an internal UDS the token-check gates access to.
-func (s *server) handleWebhook(w http.ResponseWriter, r *http.Request, name string) {
+func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request, name string) {
 	if name == "" {
 		http.NotFound(w, r)
 		return
@@ -216,7 +216,7 @@ func webhookToken(r *http.Request) string {
 // triggerWebhook hands the fan-out to the supervisor (POST /webhook). The POST body becomes the trigger
 // payload: passed through verbatim when it is valid JSON, else wrapped as a JSON string so the M4 request
 // the supervisor builds is always valid JSON. An empty body carries no payload.
-func (s *server) triggerWebhook(ctx context.Context, name string, rawBody []byte) error {
+func (s *Server) triggerWebhook(ctx context.Context, name string, rawBody []byte) error {
 	var payload json.RawMessage
 	if len(rawBody) > 0 {
 		if json.Valid(rawBody) {
@@ -246,9 +246,9 @@ func (s *server) triggerWebhook(ctx context.Context, name string, rawBody []byte
 	return nil
 }
 
-// deviceChannel reads a device's operator-owned channel server-side (D20.5) — never the device header.
+// deviceChannel reads a device's operator-owned channel Server-side (D20.5) — never the device header.
 // Empty when unknown/absent; the supervisor tolerates an empty channel.
-func (s *server) deviceChannel(ctx context.Context, serial string) string {
+func (s *Server) deviceChannel(ctx context.Context, serial string) string {
 	var ch string
 	_ = s.pool.QueryRow(ctx, `SELECT channel FROM devices WHERE serial = $1`, serial).Scan(&ch)
 	return ch

@@ -1,4 +1,4 @@
-package main
+package ingestcore
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 // Replaces the snapshot-only log insert: per /pp push, derive the device's stream position from
 // (boot_count, offset), persist a byte-exact idempotent FRAGMENT, a seq-stamped viewer LOGS row, advance
 // the durable CURSOR, and echo the durably-committed high-water as X-Log-Ack-Offset — but only AFTER the
-// telemetry tx COMMITs (durable-before-ack, Doc 04 §5.4). The FW owns the offset; the server echoes it and
+// telemetry tx COMMITs (durable-before-ack, Doc 04 §5.4). The FW owns the offset; the Server echoes it and
 // never computes end = off + len (D21.2) — a '|'-mapped payload's transport length is not the raw-byte
 // count, so deriving end from it would corrupt the cursor.
 //
@@ -24,15 +24,15 @@ import (
 // device (PK = serial, 0001:60) carrying the current epoch + high-water — an epoch advance UPDATES the row
 // (D21.4), it does not key a new (sn,epoch) row.
 
-// logFrame is the server's view of one log push's metadata. The richer X-Picpak-Log-Frame is preferred
+// logFrame is the Server's view of one log push's metadata. The richer X-Picpak-Log-Frame is preferred
 // when present (explicit base/gap); else the canonical (?bc, ?off) fallback is used and the base is the
 // prior cursor ack (D21.3). Which the firmware actually emits is a HARD on-device dependency (Doc 04 /
-// F4-W3, masterplan FW-2) — this server tolerantly consumes both and does not fabricate the FW emission.
+// F4-W3, masterplan FW-2) — this Server tolerantly consumes both and does not fabricate the FW emission.
 type logFrame struct {
 	epoch    int64  // ep / ?bc — epoch discriminator, == NVS otadiag/boots (D21.4)
 	end      int64  // end / ?off — device post-delta high-water, absolute bytes, FW-owned (D21.2)
 	base     *int64 // explicit frame base, or nil (fallback derives it from the cursor ack)
-	gapClaim int64  // explicit frame gap hint, or 0 — validated, NOT used to classify (server decides)
+	gapClaim int64  // explicit frame gap hint, or 0 — validated, NOT used to classify (Server decides)
 	explicit bool   // came from X-Picpak-Log-Frame
 }
 
@@ -109,12 +109,12 @@ func reassembleLog(ctx context.Context, tx pgx.Tx, serial string, lf logFrame, p
 
 	// Fallback delta-cap (D21.6): with no explicit base, a same-epoch contiguous push's base is the
 	// prior ack; an implausibly large delta (end - prevAck) is a corrupt frame → skip. Gap/stale have no
-	// server-known base, so no size bound applies. (Done post-lock because the base IS the cursor ack.)
+	// Server-known base, so no size bound applies. (Done post-lock because the base IS the cursor ack.)
 	if !lf.explicit && lf.epoch == curEpoch && lf.end > curAck && lf.end-curAck > maxFrame {
 		return 0, false, nil
 	}
 
-	// Classify against the durable cursor (D21.4); epoch == boot_count (NVS boots). The server decides
+	// Classify against the durable cursor (D21.4); epoch == boot_count (NVS boots). The Server decides
 	// gap/suspect from (bc, off) vs the cursor — the frame's own gap claim is a hint, never authoritative.
 	gapFlag := lf.epoch > curEpoch // reboot → new stream segment
 	suspectFlag := (lf.epoch == curEpoch && lf.end < curAck) || // offset rollback WITHOUT a reboot
@@ -174,7 +174,7 @@ func reassembleLog(ctx context.Context, tx pgx.Tx, serial string, lf logFrame, p
 
 	// The ack is the read-your-write durable high-water from THIS tx, echoed only after COMMIT by the
 	// caller (Doc 04 §5.4). Any valid frame is acked — even a suspect/stale push echoes the true high-
-	// water, telling a replaying/confused device where the server actually is.
+	// water, telling a replaying/confused device where the Server actually is.
 	return newAck, true, nil
 }
 

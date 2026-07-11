@@ -1,4 +1,4 @@
-package main
+package ingestcore
 
 // C2 long-poll wakeup hub (Design 16). A single Postgres LISTEN connection receives the
 // command_queue insert NOTIFY (migration 0006) and broadcasts it in-process to every waiting C2
