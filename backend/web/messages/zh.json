@@ -311,6 +311,7 @@
   "onboard.flash": "刷入 open-picpak CFW",
   "onboard.step4": "4 · 预配",
   "onboard.provision_hint": "刷写后设备处于其设置控制台中（或三次按下以在不重新刷写的情况下重新预配）。",
+  "onboard.url_default_hint": "已根据 location.origin 预填充——请将令牌段替换为接入令牌。仅在特殊情况下才指向其他后端。",
   "onboard.field.serial": "序列号",
   "onboard.field.ssid": "Wi-Fi SSID",
   "onboard.field.password": "Wi-Fi 密码",

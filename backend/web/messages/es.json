@@ -311,6 +311,7 @@
   "onboard.flash": "Flashear open-picpak CFW",
   "onboard.step4": "4 · Provisionar",
   "onboard.provision_hint": "El dispositivo está en su consola de configuración tras un flasheo (o púlsalo tres veces para reprovisionar sin volver a flashear).",
+  "onboard.url_default_hint": "Rellenado desde location.origin: sustituye el segmento del token por el token de ingesta. Apunta a otro backend solo en casos especiales.",
   "onboard.field.serial": "Número de serie",
   "onboard.field.ssid": "SSID Wi-Fi",
   "onboard.field.password": "Contraseña Wi-Fi",

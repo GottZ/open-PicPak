@@ -311,6 +311,7 @@
   "onboard.flash": "Прошить open-picpak CFW",
   "onboard.step4": "4 · Подготовка",
   "onboard.provision_hint": "После прошивки устройство находится в консоли настройки (или нажмите кнопку трижды, чтобы переподготовить без повторной прошивки).",
+  "onboard.url_default_hint": "Заполнено из location.origin — замените сегмент токена на токен приёма. Указывайте другой сервер только в особых случаях.",
   "onboard.field.serial": "Серийный номер",
   "onboard.field.ssid": "Wi-Fi SSID",
   "onboard.field.password": "Пароль Wi-Fi",

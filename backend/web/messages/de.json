@@ -311,6 +311,7 @@
   "onboard.flash": "open-picpak-CFW flashen",
   "onboard.step4": "4 · Provisionieren",
   "onboard.provision_hint": "Das Gerät ist nach einem Flash in seiner Setup-Konsole (oder dreifach drücken, um ohne erneuten Flash neu zu provisionieren).",
+  "onboard.url_default_hint": "Aus location.origin vorausgefüllt — das Token-Segment durch den Ingest-Token ersetzen. Nur für Sonderfälle auf ein anderes Backend zeigen.",
   "onboard.field.serial": "Seriennummer",
   "onboard.field.ssid": "WLAN-SSID",
   "onboard.field.password": "WLAN-Passwort",

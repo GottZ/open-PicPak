@@ -311,6 +311,7 @@
   "onboard.flash": "Flasher le CFW open-picpak",
   "onboard.step4": "4 · Provisionnement",
   "onboard.provision_hint": "L'appareil est dans sa console de configuration après un flash (ou triple-cliquez pour le re-provisionner sans reflasher).",
+  "onboard.url_default_hint": "Prérempli depuis location.origin — remplacez le segment de jeton par le jeton d'ingestion. Ne pointez ailleurs que pour des cas particuliers.",
   "onboard.field.serial": "Numéro de série",
   "onboard.field.ssid": "SSID Wi-Fi",
   "onboard.field.password": "Mot de passe Wi-Fi",

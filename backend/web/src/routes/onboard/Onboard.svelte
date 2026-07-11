@@ -3,6 +3,7 @@
   // operator's browser over WebSerial. The USB/console engine is the framework-free lib/webusb modules (W1);
   // this component is the step UI + flow state (D26.1). Device behaviour (BOND emits a valid key, bonds e2e)
   // is the W3 on-device gate (G1-G3) — not exercisable headless.
+  import { onMount } from 'svelte'
   import { apiFetch, toApiError } from '../../lib/api'
   import { session } from '../../lib/auth.svelte'
   import { notify } from '../../lib/toasts.svelte'
@@ -20,6 +21,7 @@
   import { validateProvisionFields, hasErrors, type ProvisionFields } from '../../lib/webusb/validate'
   import { buildEnrollBody, isEnrollSuccess, canEnroll, enrollNeedsConfirm } from '../../lib/webusb/enroll'
   import { webSerialReady } from '../../lib/webusb/support'
+  import { prefilledUrlFields } from '../../lib/onboard/defaults'
   import type { FlashManifest, LogSink } from '../../lib/webusb/types'
   import type { Device } from '../../lib/api/types'
   import { m } from '../../paraglide/messages.js'
@@ -73,6 +75,19 @@
   const provisionValid = $derived(!hasErrors(fieldErrors))
   const affordance = $derived(mutationAffordance(session.is_admin))
   const enrollAllowed = $derived(canEnroll(session.is_admin, pubkeyHex !== ''))
+
+  // --- prefill (A35.3): under A35's ONE backend, location.origin IS the device endpoint (DECISIONS §A35).
+  // Pre-fill ONLY blank frame-/C2-URL + C2 period from the origin; a value the operator already typed is
+  // never overwritten (prefilledUrlFields guards each field). The token path segment is a clearly-marked
+  // placeholder — INGEST_TOKEN is server-side-only and never reaches the SPA. Fields stay editable. -------
+  onMount(() => {
+    const origin = typeof location !== 'undefined' ? location.origin : ''
+    if (!origin) return
+    const d = prefilledUrlFields(fields, origin)
+    fields.frameUrl = d.frameUrl
+    fields.c2Url = d.c2Url
+    fields.c2PeriodSeconds = d.c2PeriodSeconds
+  })
 
   // --- helpers -------------------------------------------------------------------------------------------
   /** Fetch a firmware artifact by manifest path from the same-origin /onboard-fw/ mount (D26.9). Binary, so
@@ -324,6 +339,7 @@
         {#if fieldErrors.frameUrl}<span class="fielderr">{fieldErrors.frameUrl}</span>{/if}
         <label>{m['onboard.field.c2_url']()}<input bind:value={fields.c2Url} placeholder="https://…" /></label>
         {#if fieldErrors.c2Url}<span class="fielderr">{fieldErrors.c2Url}</span>{/if}
+        <p class="hint urlhint">{m['onboard.url_default_hint']()}</p>
         <label>{m['onboard.field.c2_period']()}<input bind:value={fields.c2PeriodSeconds} placeholder="1800" /></label>
         <label>{m['onboard.field.wake']()}<input bind:value={fields.wakeSeconds} placeholder={m['onboard.ph_optional']()} /></label>
       </div>
@@ -415,6 +431,10 @@
   .hint {
     font-size: 0.82rem;
     color: var(--muted, #666);
+  }
+  .urlhint {
+    margin: -0.15rem 0 0.15rem;
+    font-size: 0.78rem;
   }
   .ok {
     color: #2e7d32;
