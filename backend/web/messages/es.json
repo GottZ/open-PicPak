@@ -535,5 +535,13 @@
   "gallery.apply.enable_note": "La plantilla se activa inmediatamente después de confirmar.",
   "gallery.apply.device_required": "Primero elige un dispositivo.",
   "gallery.apply.summary_loading": "Cargando resumen …",
-  "gallery.apply.no_effect": "Esta plantilla no llama a comandos de dispositivo conocidos."
+  "gallery.apply.no_effect": "Esta plantilla no llama a comandos de dispositivo conocidos.",
+  "onboard.ident.serial_label": "Número de serie de fábrica",
+  "onboard.ident.no_serial_found": "ninguno encontrado",
+  "onboard.ident.fw_label": "Firmware instalado",
+  "onboard.ident.fw_unknown": "desconocido",
+  "onboard.ident.stock": "Firmware de fábrica detectado",
+  "onboard.ident.update": "Actualización disponible ({from} → {to})",
+  "onboard.ident.current": "actualizado",
+  "onboard.ident.wifi_from_device": "Configuración Wi-Fi importada del dispositivo"
 }

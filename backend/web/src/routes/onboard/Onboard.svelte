@@ -21,6 +21,8 @@
   import { validateProvisionFields, hasErrors, type ProvisionFields } from '../../lib/webusb/validate'
   import { buildEnrollBody, isEnrollSuccess, canEnroll, enrollNeedsConfirm } from '../../lib/webusb/enroll'
   import { webSerialReady } from '../../lib/webusb/support'
+  import { compareFirmware, type AppDesc } from '../../lib/webusb/appdesc'
+  import { prefillField, selectWifi, type NvsIdentity } from '../../lib/webusb/nvs-read'
   import { prefilledUrlFields, prefilledFromEndpoint } from '../../lib/onboard/defaults'
   import type { OnboardDefaultsResponse } from '../../lib/onboard/defaults'
   import type { FlashManifest, LogSink } from '../../lib/webusb/types'
@@ -58,6 +60,16 @@
   let pubkeyHex = $state('')
   let enrolled = $state(false)
   let bondState = $state<'idle' | 'waiting' | 'bonded'>('idle')
+
+  // --- USB ident (A26.10): what the post-connect flash read found. Pure display + prefill source;
+  // reading is fail-open (a null half just shows "unknown"). The c2_sk private key is deliberately
+  // never read into this state (see lib/webusb/nvs-read SECURITY BOUNDARY). ------------------------
+  let identDone = $state(false)
+  let identNvs = $state<NvsIdentity | null>(null)
+  let identFw = $state<AppDesc | null>(null)
+  let manifestVersion = $state<string | null>(null)
+  let wifiPrefilled = $state(false)
+  const fwStatus = $derived(compareFirmware(identFw, manifestVersion))
 
   // --- provision fields (Policy=Data: everything operator-entered, nothing hardcoded — D26.11 validated) -
   const fields = $state<ProvisionFields>({
@@ -145,11 +157,39 @@
       chip = await flasher.connect()
       connected = true
       log(`Connected: ${chip}`, 'ok')
+      await readIdentity()
     } catch (e) {
       log('Connect failed: ' + (e as Error).message, 'err')
       notify.warn(m['onboard.notify.connect_failed']())
     } finally {
       busy = false
+    }
+  }
+
+  // Read factory serial + provisioned Wi-Fi + installed firmware straight from flash, then prefill any
+  // BLANK field the operator hasn't touched (A35.3 prefill discipline: never overwrite a typed value).
+  // Everything here is best-effort — a read miss just leaves the panel showing "unknown".
+  async function readIdentity() {
+    if (!flasher) return
+    try {
+      const ident = await flasher.readIdent()
+      identNvs = ident.nvs
+      identFw = ident.firmware
+      identDone = true
+      const mf = await loadManifest().catch(() => null)
+      manifestVersion = mf?.version ?? null
+      if (ident.nvs) {
+        fields.serial = prefillField(fields.serial, ident.nvs.serial)
+        const wifi = selectWifi(ident.nvs)
+        if (wifi) {
+          const beforeSsid = fields.ssid
+          fields.ssid = prefillField(fields.ssid, wifi.ssid)
+          fields.password = prefillField(fields.password, wifi.pass)
+          if (fields.ssid !== beforeSsid) wifiPrefilled = true
+        }
+      }
+    } catch (e) {
+      log('Identity read skipped: ' + (e as Error).message, 'dim')
     }
   }
 
@@ -323,6 +363,28 @@
       <h2>{m['onboard.step1']()}</h2>
       <button onclick={connect} disabled={!serialReady || busy || connected}>{m['onboard.connect']()}</button>
       {#if chip}<span class="ok">{m['onboard.connected']({ chip })}</span>{/if}
+      {#if identDone}
+        <dl class="ident">
+          <dt>{m['onboard.ident.serial_label']()}</dt>
+          <dd>{identNvs?.serial ?? m['onboard.ident.no_serial_found']()}</dd>
+          <dt>{m['onboard.ident.fw_label']()}</dt>
+          <dd>
+            {#if fwStatus.kind === 'unknown'}
+              <span class="dim">{m['onboard.ident.fw_unknown']()}</span>
+            {:else}
+              <span class="fwname">{fwStatus.projectName} {fwStatus.version}</span>
+              {#if fwStatus.kind === 'stock'}
+                <span class="badge warn">{m['onboard.ident.stock']()}</span>
+              {:else if fwStatus.kind === 'update'}
+                <span class="badge warn">{m['onboard.ident.update']({ from: fwStatus.version, to: fwStatus.to })}</span>
+              {:else}
+                <span class="badge ok">{m['onboard.ident.current']()}</span>
+              {/if}
+            {/if}
+          </dd>
+        </dl>
+        {#if wifiPrefilled}<p class="hint">{m['onboard.ident.wifi_from_device']()}</p>{/if}
+      {/if}
     </li>
 
     <li class="step" class:done={backupProgress >= 100}>
@@ -453,6 +515,37 @@
   }
   .ok {
     color: #2e7d32;
+  }
+  .ident {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.15rem 0.6rem;
+    margin: 0.5rem 0 0;
+    font-size: 0.85rem;
+  }
+  .ident dt {
+    color: var(--muted, #666);
+  }
+  .ident dd {
+    margin: 0;
+  }
+  .ident .fwname {
+    font-family: ui-monospace, monospace;
+  }
+  .badge {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+  }
+  .badge.ok {
+    background: #e6f4ea;
+    color: #1e7d32;
+  }
+  .badge.warn {
+    background: #fef3e0;
+    color: #9a5b00;
   }
   progress {
     width: 100%;

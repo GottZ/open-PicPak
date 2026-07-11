@@ -535,5 +535,13 @@
   "gallery.apply.enable_note": "確認するとテンプレートはすぐに有効になります。",
   "gallery.apply.device_required": "まずデバイスを選択してください。",
   "gallery.apply.summary_loading": "概要を読み込み中 …",
-  "gallery.apply.no_effect": "このテンプレートは既知のデバイスコマンドを呼び出しません。"
+  "gallery.apply.no_effect": "このテンプレートは既知のデバイスコマンドを呼び出しません。",
+  "onboard.ident.serial_label": "工場出荷時シリアル番号",
+  "onboard.ident.no_serial_found": "見つかりません",
+  "onboard.ident.fw_label": "インストール済みファームウェア",
+  "onboard.ident.fw_unknown": "不明",
+  "onboard.ident.stock": "純正ファームウェアを検出",
+  "onboard.ident.update": "アップデートあり ({from} → {to})",
+  "onboard.ident.current": "最新",
+  "onboard.ident.wifi_from_device": "デバイスから Wi-Fi 設定を取り込みました"
 }

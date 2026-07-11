@@ -535,5 +535,13 @@
   "gallery.apply.enable_note": "Die Vorlage wird nach dem Bestätigen sofort aktiv.",
   "gallery.apply.device_required": "Bitte zuerst ein Gerät wählen.",
   "gallery.apply.summary_loading": "Zusammenfassung wird geladen …",
-  "gallery.apply.no_effect": "Diese Vorlage ruft keine bekannten Geräte-Befehle auf."
+  "gallery.apply.no_effect": "Diese Vorlage ruft keine bekannten Geräte-Befehle auf.",
+  "onboard.ident.serial_label": "Werks-Seriennummer",
+  "onboard.ident.no_serial_found": "keine gefunden",
+  "onboard.ident.fw_label": "Installierte Firmware",
+  "onboard.ident.fw_unknown": "unbekannt",
+  "onboard.ident.stock": "Stock-Firmware erkannt",
+  "onboard.ident.update": "Update verfügbar ({from} → {to})",
+  "onboard.ident.current": "aktuell",
+  "onboard.ident.wifi_from_device": "WLAN-Konfiguration vom Gerät übernommen"
 }

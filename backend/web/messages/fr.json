@@ -535,5 +535,13 @@
   "gallery.apply.enable_note": "Le modèle devient actif immédiatement après confirmation.",
   "gallery.apply.device_required": "Veuillez d'abord choisir un appareil.",
   "gallery.apply.summary_loading": "Chargement du résumé …",
-  "gallery.apply.no_effect": "Ce modèle n'appelle aucune commande d'appareil connue."
+  "gallery.apply.no_effect": "Ce modèle n'appelle aucune commande d'appareil connue.",
+  "onboard.ident.serial_label": "Numéro de série usine",
+  "onboard.ident.no_serial_found": "aucun trouvé",
+  "onboard.ident.fw_label": "Firmware installé",
+  "onboard.ident.fw_unknown": "inconnu",
+  "onboard.ident.stock": "Firmware d’origine détecté",
+  "onboard.ident.update": "Mise à jour disponible ({from} → {to})",
+  "onboard.ident.current": "à jour",
+  "onboard.ident.wifi_from_device": "Configuration Wi-Fi importée depuis l’appareil"
 }

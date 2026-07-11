@@ -6,6 +6,8 @@
 
 import { ESPLoader, Transport, type Terminal } from './vendor/esptool-js/bundle.js'
 import type { FlashManifest, LogSink, SerialLink } from './types'
+import { readNvsIdentity, type NvsIdentity } from './nvs-read'
+import { parseAppDesc, type AppDesc } from './appdesc'
 
 // Baud is overridable by the page. esptool-js hardcodes romBaudrate=115200, so any target rate != 115200
 // triggers its changeBaud after the stub loads — stable here (verified 3 Mbaud, 16 MB read in 108 s). USB-JTAG
@@ -17,7 +19,24 @@ export const BACKUP_CHUNK = 256 * 1024 // read backup in chunks: esptool-js read
 export const ESP_IMAGE_MAGIC = 0xe9
 export const ESPRESSIF_USB_VID = 0x303a // public Espressif USB VID (reuse an already-authorized C3 port)
 
+// W-A26.10 flash-read identity: the stock/CFW NVS partition (0x9000, 0x6000) and the app-partition
+// head (0x20000, first 512 B — enough for the 176 B esp_app_desc_t). Both are pure reads; flashing
+// is untouched. Offsets match firmware/partitions.csv and onboard-fw/manifest.json.
+export const NVS_OFFSET = 0x9000
+export const NVS_SIZE = 0x6000
+export const APP_OFFSET = 0x20000
+export const APP_HEAD_LEN = 512
+
 export type ProgressSink = (pct: number) => void
+
+/**
+ * What a post-connect flash read learned about the device. Fail-open: each half is independently
+ * null when its read failed, so a stock/blank/foreign device still connects and flashes normally.
+ */
+export interface FlashIdent {
+  nvs: NvsIdentity | null // factory serial + provisioned Wi-Fi/URL (never the c2_sk private key — see nvs-read)
+  firmware: AppDesc | null // installed esp_app_desc_t, or null (unreadable / bad magic)
+}
 
 /** SHA-256 as lowercase hex (Web Crypto). Used for the per-part integrity gate before writing. */
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -158,6 +177,33 @@ export class Flasher {
     }
     if (!chip) throw (lastErr as Error) ?? new Error('could not connect')
     return chip
+  }
+
+  /**
+   * Read the device's on-flash identity after connect: the NVS partition (factory serial + the
+   * provisioned Wi-Fi/URL config) and the app-partition head (installed esp_app_desc_t). ON-DEVICE
+   * (W3) — the read itself needs real silicon; the parsers (nvs-read / appdesc) are the device-free
+   * unit surface. Fail-open by design: a failed read of either region yields a null half and a dim
+   * log line, never an exception — identity read must never break the connect/flash flow. The 24 KB
+   * NVS read runs at DEFAULT_BAUD (~151 KB/s at 3 Mbaud ⇒ well under a second).
+   */
+  async readIdent(): Promise<FlashIdent> {
+    if (!this.esploader) throw new Error('not connected')
+    let nvs: NvsIdentity | null = null
+    let firmware: AppDesc | null = null
+    try {
+      const raw = await this.esploader.readFlash(NVS_OFFSET, NVS_SIZE, () => {})
+      nvs = readNvsIdentity(raw)
+    } catch (e) {
+      this.log('NVS read failed (' + (e as Error).message + ') — factory serial/Wi-Fi unknown.', 'dim')
+    }
+    try {
+      const head = await this.esploader.readFlash(APP_OFFSET, APP_HEAD_LEN, () => {})
+      firmware = parseAppDesc(head)
+    } catch (e) {
+      this.log('App-descriptor read failed (' + (e as Error).message + ') — installed firmware unknown.', 'dim')
+    }
+    return { nvs, firmware }
   }
 
   /**

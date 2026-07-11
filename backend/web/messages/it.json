@@ -535,5 +535,13 @@
   "gallery.apply.enable_note": "Il modello diventa attivo subito dopo la conferma.",
   "gallery.apply.device_required": "Seleziona prima un dispositivo.",
   "gallery.apply.summary_loading": "Caricamento del riepilogo …",
-  "gallery.apply.no_effect": "Questo modello non richiama comandi noti del dispositivo."
+  "gallery.apply.no_effect": "Questo modello non richiama comandi noti del dispositivo.",
+  "onboard.ident.serial_label": "Numero di serie di fabbrica",
+  "onboard.ident.no_serial_found": "nessuno trovato",
+  "onboard.ident.fw_label": "Firmware installato",
+  "onboard.ident.fw_unknown": "sconosciuto",
+  "onboard.ident.stock": "Firmware originale rilevato",
+  "onboard.ident.update": "Aggiornamento disponibile ({from} → {to})",
+  "onboard.ident.current": "aggiornato",
+  "onboard.ident.wifi_from_device": "Configurazione Wi-Fi importata dal dispositivo"
 }

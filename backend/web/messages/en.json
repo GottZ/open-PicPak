@@ -535,5 +535,13 @@
   "gallery.apply.enable_note": "The template becomes active immediately after you confirm.",
   "gallery.apply.device_required": "Please pick a device first.",
   "gallery.apply.summary_loading": "Loading summary …",
-  "gallery.apply.no_effect": "This template calls no known device commands."
+  "gallery.apply.no_effect": "This template calls no known device commands.",
+  "onboard.ident.serial_label": "Factory serial",
+  "onboard.ident.no_serial_found": "none found",
+  "onboard.ident.fw_label": "Installed firmware",
+  "onboard.ident.fw_unknown": "unknown",
+  "onboard.ident.stock": "Stock firmware detected",
+  "onboard.ident.update": "Update available ({from} → {to})",
+  "onboard.ident.current": "up to date",
+  "onboard.ident.wifi_from_device": "Wi-Fi configuration imported from device"
 }

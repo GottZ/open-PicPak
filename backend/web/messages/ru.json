@@ -535,5 +535,13 @@
   "gallery.apply.enable_note": "Шаблон станет активным сразу после подтверждения.",
   "gallery.apply.device_required": "Сначала выберите устройство.",
   "gallery.apply.summary_loading": "Загрузка сводки …",
-  "gallery.apply.no_effect": "Этот шаблон не вызывает известных команд устройства."
+  "gallery.apply.no_effect": "Этот шаблон не вызывает известных команд устройства.",
+  "onboard.ident.serial_label": "Заводской серийный номер",
+  "onboard.ident.no_serial_found": "не найден",
+  "onboard.ident.fw_label": "Установленная прошивка",
+  "onboard.ident.fw_unknown": "неизвестно",
+  "onboard.ident.stock": "Обнаружена заводская прошивка",
+  "onboard.ident.update": "Доступно обновление ({from} → {to})",
+  "onboard.ident.current": "актуальна",
+  "onboard.ident.wifi_from_device": "Конфигурация Wi-Fi импортирована с устройства"
 }

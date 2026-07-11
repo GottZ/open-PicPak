@@ -535,5 +535,13 @@
   "gallery.apply.enable_note": "确认后模板将立即生效。",
   "gallery.apply.device_required": "请先选择一个设备。",
   "gallery.apply.summary_loading": "正在加载摘要 …",
-  "gallery.apply.no_effect": "此模板不调用任何已知的设备命令。"
+  "gallery.apply.no_effect": "此模板不调用任何已知的设备命令。",
+  "onboard.ident.serial_label": "出厂序列号",
+  "onboard.ident.no_serial_found": "未找到",
+  "onboard.ident.fw_label": "已安装固件",
+  "onboard.ident.fw_unknown": "未知",
+  "onboard.ident.stock": "检测到原厂固件",
+  "onboard.ident.update": "有可用更新 ({from} → {to})",
+  "onboard.ident.current": "已是最新",
+  "onboard.ident.wifi_from_device": "已从设备导入 Wi-Fi 配置"
 }
