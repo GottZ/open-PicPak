@@ -492,5 +492,7 @@
   "faas.err.trigger_type": "트리거 타입은 render, schedule 또는 webhook이어야 합니다",
   "faas.blast_none": "기기 없음",
   "faas.blast_one": "기기 1대",
-  "faas.blast_many": "기기 {count}대"
+  "faas.blast_many": "기기 {count}대",
+  "templates.apply_target_aria": "적용 대상",
+  "templates.arm_broadcast_aria": "플릿 브로드캐스트 활성화"
 }

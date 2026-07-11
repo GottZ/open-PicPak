@@ -492,5 +492,7 @@
   "faas.err.trigger_type": "トリガータイプはrender、schedule、webhookのいずれかである必要があります",
   "faas.blast_none": "デバイスなし",
   "faas.blast_one": "1台のデバイス",
-  "faas.blast_many": "{count} 台のデバイス"
+  "faas.blast_many": "{count} 台のデバイス",
+  "templates.apply_target_aria": "適用先",
+  "templates.arm_broadcast_aria": "フリートブロードキャストを有効化"
 }

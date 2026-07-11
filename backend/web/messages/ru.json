@@ -492,5 +492,7 @@
   "faas.err.trigger_type": "тип триггера должен быть render, schedule или webhook",
   "faas.blast_none": "нет устройств",
   "faas.blast_one": "1 устройство",
-  "faas.blast_many": "{count} устройств"
+  "faas.blast_many": "{count} устройств",
+  "templates.apply_target_aria": "Цель применения",
+  "templates.arm_broadcast_aria": "Активировать рассылку по флоту"
 }

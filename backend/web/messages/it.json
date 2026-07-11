@@ -492,5 +492,7 @@
   "faas.err.trigger_type": "il tipo di trigger deve essere render, schedule o webhook",
   "faas.blast_none": "nessun dispositivo",
   "faas.blast_one": "1 dispositivo",
-  "faas.blast_many": "{count} dispositivi"
+  "faas.blast_many": "{count} dispositivi",
+  "templates.apply_target_aria": "Destinazione di applicazione",
+  "templates.arm_broadcast_aria": "Armare la trasmissione alla flotta"
 }

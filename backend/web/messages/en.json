@@ -492,5 +492,7 @@
   "faas.err.trigger_type": "trigger type must be render, schedule or webhook",
   "faas.blast_none": "no devices",
   "faas.blast_one": "1 device",
-  "faas.blast_many": "{count} devices"
+  "faas.blast_many": "{count} devices",
+  "templates.apply_target_aria": "Apply target",
+  "templates.arm_broadcast_aria": "Arm fleet broadcast"
 }

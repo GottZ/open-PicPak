@@ -229,7 +229,7 @@
               {/each}
 
               {#if applyFor.kind === 'berry_snippet'}
-                <div class="target" role="radiogroup" aria-label="apply target">
+                <div class="target" role="radiogroup" aria-label={m['templates.apply_target_aria']()}>
                   <span class="lbl">{m['templates.target']()}</span>
                   <label><input type="radio" name="tpl-target" value="one" bind:group={targetKind} /> {m['templates.target_one']()}</label>
                   <label><input type="radio" name="tpl-target" value="fleet" bind:group={targetKind} /> {m['templates.target_fleet']()}</label>
@@ -241,7 +241,7 @@
                     <p class="danger" role="status">{m['templates.fleet_warning']({ count: String(fleetCount) })}</p>
                     <label class="arm">
                       {m['templates.arm_label']()}
-                      <input type="text" bind:value={typedArm} aria-label="arm fleet broadcast" autocomplete="off" />
+                      <input type="text" bind:value={typedArm} aria-label={m['templates.arm_broadcast_aria']()} autocomplete="off" />
                     </label>
                   </div>
                 {/if}

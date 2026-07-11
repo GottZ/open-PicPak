@@ -73,13 +73,9 @@ const TECH_PLACEHOLDERS = new Set<string>([
 // Bewusst datei+literal-genau statt Verzeichnis-Skip, damit NEUE Literale in
 // denselben Dateien weiterhin gefangen werden. Entfernen, sobald die
 // Partnerwelle gemerged ist (dann sind die Literale weg → Einträge tot).
-const DEFERRED: ReadonlyArray<{ file: string; literal: string; owner: string }> = [
-  // src/lib/templates/ gehört Welle A34.4 (description-JSONB-Picker). Diese zwei
-  // aria-labels sind echte A34.2-Restfunde, dort zu migrieren, sobald A34.4 die
-  // Datei anfasst — A34.5 fasst src/lib/templates/ nicht an (Wellen-Grenze).
-  { file: 'src/lib/templates/TemplatePicker.svelte', literal: 'aria-label="apply target"', owner: 'A34.4' },
-  { file: 'src/lib/templates/TemplatePicker.svelte', literal: 'aria-label="arm fleet broadcast"', owner: 'A34.4' },
-]
+// Leer seit dem A34.5-Merge-Nachzug (beide TemplatePicker-aria-labels sind migriert);
+// der Mechanismus bleibt für künftige Wellen-Grenzen bestehen.
+const DEFERRED: ReadonlyArray<{ file: string; literal: string; owner: string }> = []
 
 type Finding = { file: string; line: number; col: number; literal: string; kind: string }
 

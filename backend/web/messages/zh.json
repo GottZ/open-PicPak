@@ -492,5 +492,7 @@
   "faas.err.trigger_type": "触发器类型必须是 render、schedule 或 webhook",
   "faas.blast_none": "无设备",
   "faas.blast_one": "1 台设备",
-  "faas.blast_many": "{count} 台设备"
+  "faas.blast_many": "{count} 台设备",
+  "templates.apply_target_aria": "应用目标",
+  "templates.arm_broadcast_aria": "启用机群广播"
 }
