@@ -25,6 +25,8 @@ export { locales, type Locale }
  */
 export function navLabel(path: string): string {
   switch (path) {
+    case '/gallery':
+      return m['nav.gallery']()
     case '/fleet':
       return m['nav.fleet']()
     case '/ota':

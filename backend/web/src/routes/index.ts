@@ -27,6 +27,7 @@ export interface AreaMeta {
  * here must also be an areaRoutes key (pinned by the route-namespace test).
  */
 export const AREAS: AreaMeta[] = [
+  { path: '/gallery', title: 'Templates', ships: 'Doc 33 — template gallery (laien apply flow)' },
   { path: '/fleet', title: 'Fleet', ships: 'Doc 22 — telemetry dashboard' },
   { path: '/ota', title: 'OTA', ships: 'Doc 20 — OTA serving + rollout' },
   { path: '/logs', title: 'Logs', ships: 'Doc 21 — log reassembly + viewer' },
@@ -43,6 +44,7 @@ export const AREAS: AreaMeta[] = [
  * telemetry dashboard (it replaced the Doc 19 scaffold roster).
  */
 export const areaRoutes = {
+  '/gallery': () => import('./gallery/GalleryHome.svelte'),
   '/fleet': () => import('./fleet/FleetDashboard.svelte'),
   '/ota': () => import('./AreaPlaceholder.svelte'),
   '/logs': () => import('./logs/LogViewer.svelte'),

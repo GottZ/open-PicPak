@@ -374,3 +374,40 @@ func TestTemplateApplyRenderBindN1_DB(t *testing.T) {
 		t.Errorf("n:1 apply produced %d bindings, want 3", binds)
 	}
 }
+
+// T-apply-render-enable (A33.5b probe b) — the laien gallery sends bind:true + enable:true, so the minted
+// render_fn must come out both ENABLED and BOUND. Without the enable delta (§9) faasstore.Create leaves the
+// function enabled=false (store.go:36) and the gallery flow would produce a dead, disabled function whose
+// only activation toggle lives in the advanced /functions area. Red (against the pre-delta apply, which
+// ignored the flag): enabled reads false → the assertion below fails.
+func TestTemplateApplyRenderEnable_DB(t *testing.T) {
+	pool := dbPool(t)
+	seedOperator(t, pool, "admin-tok", true)
+	h := testTemplateHandler(pool)
+	mustExec(t, pool, `INSERT INTO devices (serial, channel) VALUES ('en-a','stable')`)
+
+	id := createTemplate(t, h, `{"name":"enable-render","kind":"render_fn","source":"export default async()=>({})"}`)
+	w := do(h, "POST", "/api/templates/"+itoa(id)+"/apply", "admin-tok",
+		strings.NewReader(`{"bind":true,"enable":true,"target_serials":["en-a"]}`), "application/json")
+	if w.Code != http.StatusOK {
+		t.Fatalf("enable apply = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	fnID := int64(jsonBody(t, w)["id"].(float64))
+
+	var enabled bool
+	if err := pool.QueryRow(context.Background(),
+		`SELECT enabled FROM faas_functions WHERE id = $1`, fnID).Scan(&enabled); err != nil {
+		t.Fatalf("load enabled: %v", err)
+	}
+	if !enabled {
+		t.Error("apply with enable:true left the minted function disabled")
+	}
+	var binds int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM device_render_binding WHERE function_id = $1`, fnID).Scan(&binds); err != nil {
+		t.Fatalf("count bindings: %v", err)
+	}
+	if binds != 1 {
+		t.Errorf("enable apply produced %d bindings, want 1", binds)
+	}
+}

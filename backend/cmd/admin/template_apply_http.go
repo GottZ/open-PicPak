@@ -25,6 +25,7 @@ type applyBody struct {
 	Params         json.RawMessage `json:"params"`          // {{name}} substitution values
 	TargetSerials  []string        `json:"target_serials"`  // devices (or ["*"] fleet) to apply to
 	Bind           bool            `json:"bind"`            // render_fn: bind target_serials to the new function (W5)
+	Enable         bool            `json:"enable"`          // render_fn: activate the minted function (A33 §4.5b / §9)
 	IdempotencyKey *string         `json:"idempotency_key"` // optional override of the derived dedup key
 }
 
@@ -182,6 +183,16 @@ func (h templateHandlers) applyRenderFn(w http.ResponseWriter, r *http.Request, 
 				return
 			}
 			serials = append(serials, serial)
+		}
+	}
+	// Activation is the deliberate act (A33 §4.5b): faasstore.Create mints enabled=false (store.go:36), so
+	// the laien gallery flow (which never exposes the advanced-area enabled toggle) must ask for enable=true
+	// here or the minted function would never render. §9 delta to A30's apply body; enable is a no-op for a
+	// berry_snippet (no function is minted).
+	if body.Enable {
+		if _, err := faasstore.SetEnabled(r.Context(), h.pool, newID, true); err != nil {
+			adminhttp.WriteErr(w, r, http.StatusInternalServerError, "internal", "enable failed")
+			return
 		}
 	}
 	adminhttp.WriteOK(w, r, map[string]any{"kind": t.Kind, "id": newID, "name": name, "serials": serials})
