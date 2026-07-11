@@ -1,0 +1,15 @@
+# faas-egress: the IP-pinning egress proxy — the ONLY internet next-hop of the untrusted FaaS worker
+# (faasnet + extnet, never the DB net; A24 D24.8). Static CGO-free binary on scratch. Split out of the
+# retired generic CMD-arg Dockerfile when A35 merged ingest/admin/faas-supervisor into cmd/backend
+# (Dockerfile.backend) — egress stays a SEPARATE sandbox process by decision (DECISIONS §A35).
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/faas-egress
+
+FROM scratch
+COPY --from=build /out/app /app
+USER 65534:65534
+ENTRYPOINT ["/app"]
