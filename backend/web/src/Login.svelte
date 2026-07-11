@@ -60,7 +60,7 @@
       <div class="error" role="alert">
         <p>{errorText(error)}</p>
         {#if error.requestId}
-          <p class="request-id">request {error.requestId}</p>
+          <p class="request-id">{m['app.request']({ id: error.requestId })}</p>
         {/if}
       </div>
     {/if}

@@ -579,11 +579,11 @@
                       </select>
                     </label>
                     <label>
-                      ttl_s
+                      {m['faas.ttl_s']()}
                       <input type="number" min="0" bind:value={trigFields.ttlS} disabled={affordance.disabled} />
                     </label>
                     <label>
-                      interval_s
+                      {m['faas.interval_s']()}
                       <input type="number" min="0" bind:value={trigFields.intervalS} disabled={affordance.disabled} />
                     </label>
                   </div>
@@ -600,7 +600,7 @@
                       />
                     </label>
                     <label>
-                      interval_s
+                      {m['faas.interval_s']()}
                       <input type="number" min="0" bind:value={trigFields.intervalS} disabled={affordance.disabled} />
                     </label>
                   </div>

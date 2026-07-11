@@ -31,8 +31,8 @@
 {:else if resource.status === 'error'}
   <div class="state error" role="alert">
     <p>{resource.error?.message}</p>
-    {#if resource.error?.requestId}<p class="muted">request {resource.error.requestId}</p>{/if}
-    <button onclick={resource.reload}>retry</button>
+    {#if resource.error?.requestId}<p class="muted">{m['app.request']({ id: resource.error.requestId })}</p>{/if}
+    <button onclick={resource.reload}>{m['app.retry']()}</button>
   </div>
 {:else if resource.data !== null && isEmpty(resource.data)}
   {#if empty}{@render empty()}{:else}<p class="state muted">{emptyText}</p>{/if}

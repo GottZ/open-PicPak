@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "paraglide": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide",
     "postinstall": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide",
-    "check": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "check": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json && bun scripts/lint-i18n.ts",
     "test": "vitest run"
   },
   "devDependencies": {
