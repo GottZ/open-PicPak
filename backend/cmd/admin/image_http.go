@@ -80,6 +80,9 @@ func registerImageRoutes(mux *http.ServeMux, pool *pgxpool.Pool, blobDir string,
 	// serve). Same image:read gate — a read-only operator sees the grid preview (design §5 S9 / E-A29-4).
 	mux.Handle("GET /api/images/{id}/thumbnail", adminhttp.Auth(pool)(adminhttp.RequireScope(adminhttp.ScopeImageRead)(http.HandlerFunc(h.thumbnail))))
 	mux.Handle("DELETE /api/images/{id}", adminhttp.Auth(pool)(adminhttp.RequireScope(adminhttp.ScopeImageWrite)(http.HandlerFunc(h.delete))))
+	// "Aufs Panel" single-image shortcut (design/33 §4.5b, W-A33.7) — admin-gated fleet control, wired
+	// here (its trigger is an image card) so main.go needs no change.
+	registerPanelRoutes(mux, pool)
 }
 
 // upload — POST /api/images (image:write): accept a source image as multipart (SPA path, field "file")
@@ -397,7 +400,10 @@ func (h imageHandlers) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	pr, _ := adminhttp.PrincipalFrom(r.Context())
 
-	err := imgstore.DeleteImage(r.Context(), h.pool, h.blobDir, id)
+	// Managed-aware delete (design/33 §4.5b cleanup c): an image whose only references are "Aufs Panel"
+	// managed single-image playlists is deletable — those get unbound + reaped in the same tx; a
+	// reference from an operator-authored playlist still fails closed as a 409.
+	err := imgstore.DeleteImageManagedAware(r.Context(), h.pool, h.blobDir, id)
 	switch {
 	case errors.Is(err, imgstore.ErrNotFound):
 		adminhttp.WriteErr(w, r, http.StatusNotFound, "not_found", "no such image")

@@ -221,6 +221,13 @@ func Delete(ctx context.Context, pool *pgxpool.Pool, serial string, purgeTimeSer
 	if _, err := plrender.UnbindPlaylist(ctx, tx, serial); err != nil {
 		return false, err
 	}
+	// "Aufs Panel" cleanup (a), design/33 §4.5b: drop the serial's managed single-image playlist so a
+	// deleted device leaves no orphan managed row. UnbindPlaylist above already cleared the binding +
+	// cursor; this removes the playlist itself + its lone item (ON DELETE CASCADE). Always-on, like the
+	// other binding teardown — a managed playlist is control-plane state, not retention-managed.
+	if _, err := tx.Exec(ctx, `DELETE FROM playlist WHERE managed_serial = $1`, serial); err != nil {
+		return false, err
+	}
 	if purgeTimeSeries {
 		// both-or-neither under the one flag: telemetry (D22.11, A22) + logs (A21's half, parked here).
 		if _, err := tx.Exec(ctx, `DELETE FROM telemetry WHERE serial = $1`, serial); err != nil {

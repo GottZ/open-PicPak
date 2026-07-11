@@ -3,6 +3,7 @@ package plrender
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -481,5 +482,146 @@ func TestGCVariantCacheRefcount(t *testing.T) {
 	}
 	if n2 != 0 {
 		t.Fatalf("second GC removed=%d, want 0 (idempotent)", n2)
+	}
+}
+
+// countArg is countRows with one bind arg (the managed-playlist probes count by playlist_id).
+func countArg(t *testing.T, pool *pgxpool.Pool, sql string, arg any) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(), sql, arg).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	return n
+}
+
+// TestSetManagedImageConcurrent is the "Aufs Panel" advisory-lock probe (design/33 §4.5b, W-A33.7
+// probe a). RED: two UNGUARDED appends (the plain AddItem shape, no advisory lock and no
+// content-replace — the shape a naive SPA-orchestrated shortcut would take) leave the managed playlist
+// holding TWO images. GREEN: the production SetManagedImage, run at high concurrency for one serial,
+// converges on EXACTLY one managed playlist with EXACTLY one item, bound to it — the advisory-locked
+// upsert+replace makes the double-click race a no-op.
+func TestSetManagedImageConcurrent(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	blobDir := t.TempDir()
+	img, err := imgstore.PutImage(ctx, pool, blobDir, nil, plTinyPNG(t))
+	if err != nil {
+		t.Fatalf("PutImage: %v", err)
+	}
+
+	// --- RED: unguarded concurrent appends double the content ---
+	var redPl int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO playlist (name, managed_serial, interval_s, order_mode)
+		VALUES ('managed.red','RED',900,'sequential') RETURNING id`).Scan(&redPl); err != nil {
+		t.Fatalf("seed red playlist: %v", err)
+	}
+	racyAppend := func() {
+		_, _ = pool.Exec(ctx, `
+			INSERT INTO playlist_item (playlist_id, image_id, position, fit, dither)
+			VALUES ($1, $2, COALESCE((SELECT max(position)+1 FROM playlist_item WHERE playlist_id=$1),0), 'cover','none')`,
+			redPl, img.ID)
+	}
+	runConcurrent(2, racyAppend)
+	if n := countArg(t, pool, `SELECT count(*) FROM playlist_item WHERE playlist_id=$1`, redPl); n != 2 {
+		t.Fatalf("RED expected the double-content hazard (2 items), got %d", n)
+	}
+
+	// --- GREEN: production SetManagedImage converges on one playlist / one item under concurrency ---
+	errCh := make(chan error, 8)
+	runConcurrent(8, func() {
+		_, e := SetManagedImage(ctx, pool, "GRN", img.ID)
+		errCh <- e
+	})
+	close(errCh)
+	for e := range errCh {
+		if e != nil {
+			t.Fatalf("GREEN SetManagedImage under concurrency: %v", e)
+		}
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM playlist WHERE managed_serial='GRN'`); n != 1 {
+		t.Fatalf("GREEN: %d managed playlists for the serial, want exactly 1", n)
+	}
+	var plID int64
+	if err := pool.QueryRow(ctx, `SELECT id FROM playlist WHERE managed_serial='GRN'`).Scan(&plID); err != nil {
+		t.Fatalf("read managed playlist: %v", err)
+	}
+	if n := countArg(t, pool, `SELECT count(*) FROM playlist_item WHERE playlist_id=$1`, plID); n != 1 {
+		t.Fatalf("GREEN: managed playlist holds %d items, want exactly 1", n)
+	}
+	b, _ := ResolveBinding(ctx, pool, "GRN")
+	if b.PlaylistID != plID || b.FunctionID != 0 {
+		t.Fatalf("GREEN binding = %+v, want playlist %d only", b, plID)
+	}
+}
+
+// TestSetManagedImageClearsFnBinding is the mutual-exclusion probe (design/33 §4.5b, W-A33.7 probe b):
+// a fn-bound serial that gets the shortcut must have its device_render_binding RAZED, not shadowed —
+// otherwise a later managed-playlist removal would silently reactivate the stale fn binding.
+func TestSetManagedImageClearsFnBinding(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	blobDir := t.TempDir()
+	fnID := mkFn(t, pool)
+	img, err := imgstore.PutImage(ctx, pool, blobDir, nil, plTinyPNG(t))
+	if err != nil {
+		t.Fatalf("PutImage: %v", err)
+	}
+
+	if err := faasstore.BindDevice(ctx, pool, "FSN", fnID); err != nil {
+		t.Fatalf("bind fn: %v", err)
+	}
+	// RED precondition: the fn binding row exists — this is the row that must be razed.
+	if n := countRows(t, pool, `SELECT count(*) FROM device_render_binding WHERE serial='FSN'`); n != 1 {
+		t.Fatalf("precondition: fn binding rows = %d, want 1", n)
+	}
+	if _, err := SetManagedImage(ctx, pool, "FSN", img.ID); err != nil {
+		t.Fatalf("SetManagedImage: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM device_render_binding WHERE serial='FSN'`); n != 0 {
+		t.Fatalf("fn binding survived the shortcut = %d rows, want 0 (razed, not shadowed)", n)
+	}
+	b, _ := ResolveBinding(ctx, pool, "FSN")
+	if b.FunctionID != 0 || b.PlaylistID == 0 {
+		t.Fatalf("after shortcut: %+v, want playlist-only (fn cleared)", b)
+	}
+}
+
+// TestManagedPlaylistCleanupFreesImage is the FK-RESTRICT probe (design/33 §4.5b, W-A33.7 probe c): a
+// serial that switches from the shortcut to a REAL playlist has its managed single-image playlist reaped
+// in the same bind tx (cleanup b), so the backing image — pinned undeletable while the managed playlist
+// referenced it — becomes deletable. RED: the plain delete 409s while the managed playlist pins it.
+func TestManagedPlaylistCleanupFreesImage(t *testing.T) {
+	pool := dbPool(t)
+	ctx := context.Background()
+	blobDir := t.TempDir()
+	img, err := imgstore.PutImage(ctx, pool, blobDir, nil, plTinyPNG(t))
+	if err != nil {
+		t.Fatalf("PutImage: %v", err)
+	}
+	if _, err := SetManagedImage(ctx, pool, "CSN", img.ID); err != nil {
+		t.Fatalf("SetManagedImage: %v", err)
+	}
+
+	// RED: the managed playlist pins the image via the playlist_item FK RESTRICT.
+	if err := imgstore.DeleteImage(ctx, pool, blobDir, img.ID); !errors.Is(err, imgstore.ErrImageInUse) {
+		t.Fatalf("RED: plain delete of a managed-pinned image = %v, want ErrImageInUse", err)
+	}
+
+	// Switch to a real playlist → path-b cleanup reaps the managed playlist in the bind tx.
+	realPl, err := playliststore.CreatePlaylist(ctx, pool, playliststore.CreateParams{Name: "real-pl"})
+	if err != nil {
+		t.Fatalf("CreatePlaylist: %v", err)
+	}
+	if err := BindPlaylist(ctx, pool, "CSN", realPl.ID); err != nil {
+		t.Fatalf("BindPlaylist: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM playlist WHERE managed_serial='CSN'`); n != 0 {
+		t.Fatalf("managed playlist survived the switch to a real playlist = %d rows, want 0", n)
+	}
+	// GREEN: the freed image is now deletable.
+	if err := imgstore.DeleteImage(ctx, pool, blobDir, img.ID); err != nil {
+		t.Fatalf("GREEN: delete of the freed image = %v, want nil", err)
 	}
 }

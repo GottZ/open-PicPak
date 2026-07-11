@@ -3,6 +3,7 @@ package plrender
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"sort"
 	"time"
@@ -62,7 +63,92 @@ func BindPlaylist(ctx context.Context, pool Pool, serial string, playlistID int6
 	if _, err := tx.Exec(ctx, `DELETE FROM playlist_cursor WHERE serial = $1`, serial); err != nil {
 		return err
 	}
+	// "Aufs Panel" cleanup (b), design/33 §4.5b: a serial switching to a REAL playlist drops its managed
+	// single-image playlist — otherwise the FK RESTRICT on that playlist's lone item would keep the
+	// backing image undeletable (409 image_in_use) forever. The `id <> playlistID` guard makes this a
+	// no-op in the defensive case of binding straight to a managed playlist id (never the operator path).
+	if _, err := tx.Exec(ctx, `DELETE FROM playlist WHERE managed_serial = $1 AND id <> $2`, serial, playlistID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
+}
+
+// managedName derives the (hidden, ValidName-conform) name for a serial's managed "Aufs Panel"
+// playlist. A serial carries uppercase and may hold '~'/'/' shapes the playlist name regex forbids
+// (27:90), so the serial itself is unusable as a name; a stable per-serial fnv64 hash is both
+// regex-safe (`^[a-z0-9][a-z0-9._-]{0,127}$`) and case-collision-free across serials. The name is
+// cosmetic — managed_serial is the real upsert key; ListPlaylists hides managed rows anyway.
+func managedName(serial string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(serial))
+	return fmt.Sprintf("managed.%016x", h.Sum64())
+}
+
+// SetManagedImage is the "Aufs Panel" shortcut store op (design/33 §4.5b, E-A33-4): it points a serial
+// at a single image via a per-serial MANAGED playlist, atomically and mutually-exclusive with any
+// function binding. Everything runs in ONE tx under pg_advisory_xact_lock(hashtext(serial)) — the A27-W3
+// pattern — so two concurrent shortcut clicks (or a shortcut racing a bind) serialise:
+//
+//   1. CLEAR any device_render_binding for the serial (räumen, not shadow: a later managed-playlist
+//      removal must not silently reactivate a stale fn binding — the mutual-exclusion invariant, §5);
+//   2. UPSERT the one managed playlist for the serial keyed by managed_serial (exactly one per serial,
+//      no growth past the device count at 2000-device scale, §6) — an existing REAL playlist binding is
+//      thereby replaced (step 4), a managed one is reused in place;
+//   3. REPLACE its content with exactly the one image (position 0, cover/none);
+//   4. BIND the device to the managed playlist and RESET the rotation cursor.
+//
+// The caller pre-checks the image exists (clean 422), so the item insert never hits the FK. Returns the
+// managed playlist id.
+func SetManagedImage(ctx context.Context, pool Pool, serial string, imageID int64) (int64, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	// Serialise every bind of this serial (function OR playlist OR this shortcut) against each other.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, serial); err != nil {
+		return 0, err
+	}
+	// Mutual exclusion: drop any function binding — the serial now shows an image, and the row must be
+	// GONE so it can never resurface if the managed playlist is later removed.
+	if _, err := tx.Exec(ctx, `DELETE FROM device_render_binding WHERE serial = $1`, serial); err != nil {
+		return 0, err
+	}
+	// Upsert the one managed playlist for the serial. ON CONFLICT (managed_serial) makes a repeat click a
+	// version bump on the SAME row (never a second row), which is what makes the concurrent double-click
+	// probe converge on exactly one managed playlist.
+	var plID int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO playlist (name, managed_serial, interval_s, order_mode)
+		VALUES ($1, $2, 900, 'sequential')
+		ON CONFLICT (managed_serial) DO UPDATE SET version = playlist.version + 1, updated_at = now()
+		RETURNING id`, managedName(serial), serial).Scan(&plID); err != nil {
+		return 0, err
+	}
+	// Replace content: exactly the one image.
+	if _, err := tx.Exec(ctx, `DELETE FROM playlist_item WHERE playlist_id = $1`, plID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO playlist_item (playlist_id, image_id, position, fit, dither)
+		VALUES ($1, $2, 0, 'cover', 'none')`, plID, imageID); err != nil {
+		return 0, err
+	}
+	// Bind the device to the managed playlist (replacing any real-playlist binding) and reset the cursor.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO device_playlist_binding (serial, playlist_id) VALUES ($1, $2)
+		ON CONFLICT (serial) DO UPDATE SET playlist_id = EXCLUDED.playlist_id, bound_at = now()`,
+		serial, plID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM playlist_cursor WHERE serial = $1`, serial); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return plID, nil
 }
 
 // CountBindings returns how many devices are currently bound to a playlist — the DELETE /api/playlists/

@@ -13,7 +13,9 @@
   import { VisibilityPool } from '../../lib/media/visibilitypool.svelte'
   import Uploader from '../../lib/media/Uploader.svelte'
   import PlaylistEditor from './PlaylistEditor.svelte'
+  import DevicePicker from '../../lib/DevicePicker.svelte'
   import type { Image, ImagesResponse } from '../../lib/media/types'
+  import type { Device, DevicesResponse } from '../../lib/api/types'
   import { session } from '../../lib/auth.svelte'
   import { mutationAffordance } from '../../lib/readonly'
   import { notify } from '../../lib/toasts.svelte'
@@ -101,7 +103,50 @@
     }
   }
 
+  // W-A33.7 "Aufs Panel": put ONE image straight on a panel via the managed-playlist shortcut
+  // (design/33 §4.5b). The button opens a picker popover for one image at a time; confirming sends
+  // PUT /api/devices/{serial}/image {image_id} — an admin-only fleet mutation, so the button carries
+  // the same mutationAffordance disable-with-reason discipline as delete (probe d, SPA half). The
+  // confirm stays disabled until a target serial is chosen (no blind broadcast on a single-panel op).
+  let deviceList = $state<Device[]>([])
+  let panelFor = $state<number | null>(null) // image id being placed, or null (popover closed)
+  let panelSerial = $state<string | null>(null)
+  let sending = $state(false)
+  const canSendPanel = $derived(panelFor !== null && panelSerial !== null && !affordance.disabled && !sending)
+
+  function openPanel(id: number): void {
+    if (!session.is_admin) return
+    panelFor = id
+    panelSerial = null
+  }
+  function closePanel(): void {
+    panelFor = null
+    panelSerial = null
+  }
+
+  async function submitPanel(): Promise<void> {
+    if (panelFor === null || panelSerial === null || sending || !session.is_admin) return
+    sending = true
+    try {
+      await apiFetch(`/api/devices/${panelSerial}/image`, {
+        method: 'PUT',
+        body: JSON.stringify({ image_id: panelFor }),
+      })
+      notify.success(m['media.panel.success']({ serial: panelSerial }))
+      closePanel()
+    } catch (e) {
+      notify.error(toApiError(e))
+    } finally {
+      sending = false
+    }
+  }
+
   onMount(() => {
+    // The picker feeds on the device list; a failure leaves it empty (the popover shows the picker's
+    // own empty state — never a crash).
+    void apiFetch<DevicesResponse>('/api/devices')
+      .then((r) => (deviceList = r.devices))
+      .catch(() => (deviceList = []))
     observer = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
@@ -153,6 +198,34 @@
 
     <section class="library" aria-label={m['media.library.heading']()}>
       <h2>{m['media.library.heading']()}</h2>
+
+      {#if panelFor !== null}
+        <div
+          class="panel-pop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={m['media.panel.title']({ id: panelFor })}
+        >
+          <h3>{m['media.panel.title']({ id: panelFor })}</h3>
+          <DevicePicker devices={deviceList} bind:value={panelSerial} placeholder={m['media.panel.pick']()} />
+          {#if panelSerial === null}
+            <p class="pick-hint" role="status">{m['media.panel.device_required']()}</p>
+          {/if}
+          <div class="panel-actions">
+            <button
+              type="button"
+              class="primary"
+              disabled={!canSendPanel}
+              title={affordance.disabled ? affordance.title : ''}
+              aria-disabled={affordance['aria-disabled']}
+              onclick={submitPanel}
+            >
+              {m['media.panel.confirm']()}
+            </button>
+            <button type="button" onclick={closePanel}>{m['media.panel.cancel']()}</button>
+          </div>
+        </div>
+      {/if}
       <StateView resource={library} emptyText={m['media.library.empty']()}>
       {#snippet ready(images)}
         <ul class="grid">
@@ -175,6 +248,15 @@
               <span class="dims">{image.width}×{image.height}</span>
               {#if session.is_admin}
                 <div class="tile-actions">
+                  <button
+                    type="button"
+                    class="tile-panel"
+                    disabled={affordance.disabled || sending}
+                    title={affordance.disabled ? affordance.title : ''}
+                    onclick={() => openPanel(image.id)}
+                  >
+                    {m['media.library.to_panel']()}
+                  </button>
                   <button
                     type="button"
                     class="tile-delete"
@@ -320,7 +402,8 @@
     opacity: 1;
   }
   .tile-delete,
-  .tile-cancel {
+  .tile-cancel,
+  .tile-panel {
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 0.1rem 0.4rem;
@@ -329,9 +412,52 @@
     background: rgba(0, 0, 0, 0.6);
     color: #fff;
   }
-  .tile-delete:disabled {
+  .tile-delete:disabled,
+  .tile-panel:disabled {
     opacity: 0.6;
     cursor: default;
+  }
+  .panel-pop {
+    border: 1px solid var(--accent, #7aa2f7);
+    border-radius: 8px;
+    padding: 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-width: 30rem;
+  }
+  .panel-pop h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+  .pick-hint {
+    margin: 0;
+    color: var(--fg-muted);
+    font-size: 0.8rem;
+  }
+  .panel-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+  .panel-actions button {
+    font-size: 0.85rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fg);
+    cursor: pointer;
+  }
+  .panel-actions .primary {
+    background: var(--accent, #7aa2f7);
+    color: var(--accent-fg, #10131c);
+    border-color: transparent;
+    font-weight: 600;
+  }
+  .panel-actions .primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .tile-delete.armed {
     background: var(--danger);

@@ -48,6 +48,13 @@ type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
+// Pool is a Querier that can open a transaction — DeleteImageManagedAware needs it to run its
+// managed-playlist cleanup + image delete in one tx. *pgxpool.Pool satisfies it.
+type Pool interface {
+	Querier
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 // Image is a stored source image (metadata; the bytes live in the imgblobs volume).
 type Image struct {
 	ID            int64     `json:"id"`

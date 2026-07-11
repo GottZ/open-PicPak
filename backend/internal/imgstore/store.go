@@ -129,6 +129,69 @@ func DeleteImage(ctx context.Context, q Querier, blobDir string, id int64) error
 	return nil
 }
 
+// DeleteImageManagedAware is the "Aufs Panel"-aware image delete (design/33 §4.5b cleanup c): before
+// giving up with a 409, it clears any MANAGED single-image playlists that reference the image — those
+// exist only to hold that one image for one panel, so an image delete legitimately unbinds the panel
+// and reaps the playlist rather than pinning the image undeletable. It stays a 409 (ErrImageInUse) only
+// when a NON-managed (operator-authored) playlist still references the image: a real playlist's content
+// is operator-owned and never silently rehomed by an image delete. Runs in one tx:
+//
+//   - if any operator playlist references the image → ErrImageInUse (rolled back, no side effects);
+//   - else drop the referencing managed playlists (cascading their lone item + device binding) after
+//     clearing their FK-less rotation cursors, then delete the now-unreferenced image row + blob.
+func DeleteImageManagedAware(ctx context.Context, pool Pool, blobDir string, id int64) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	var inReal bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM playlist_item pi JOIN playlist p ON p.id = pi.playlist_id
+			WHERE pi.image_id = $1 AND p.managed_serial IS NULL)`, id).Scan(&inReal); err != nil {
+		return err
+	}
+	if inReal {
+		return ErrImageInUse
+	}
+	// Only managed playlists (or nothing) reference the image. Clear their FK-less cursors first (a
+	// playlist delete cannot cascade playlist_cursor — it has no FK), then drop the managed playlists.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM playlist_cursor WHERE serial IN (
+			SELECT p.managed_serial FROM playlist p
+			JOIN playlist_item pi ON pi.playlist_id = p.id
+			WHERE pi.image_id = $1 AND p.managed_serial IS NOT NULL)`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM playlist WHERE managed_serial IS NOT NULL AND id IN (
+			SELECT playlist_id FROM playlist_item WHERE image_id = $1)`, id); err != nil {
+		return err
+	}
+	var sha string
+	err = tx.QueryRow(ctx, `DELETE FROM image WHERE id = $1 RETURNING sha256`, id).Scan(&sha)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		if IsForeignKeyViolation(err) {
+			return ErrImageInUse // a concurrent AddItem to a real playlist beat us — stays a 409
+		}
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	// Blob after the committed row (idempotent os.Remove tolerates a missing file); the FS path comes
+	// from the CHECKed sha256, not the free blob_path (traversal defense).
+	if err := os.Remove(blobFSPath(blobDir, sha)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // LoadBlob reads an image's bytes (supervisor render read, :ro mount) plus its metadata. The FS
 // path is derived from the CHECKed sha256, not blob_path (traversal defense, §4.1).
 func LoadBlob(ctx context.Context, q Querier, blobDir string, id int64) ([]byte, Image, error) {

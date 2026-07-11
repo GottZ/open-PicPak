@@ -176,6 +176,13 @@ func BindDevice(ctx context.Context, pool Pool, serial string, fnID int64) error
 	if _, err := tx.Exec(ctx, `DELETE FROM playlist_cursor WHERE serial = $1`, serial); err != nil {
 		return err
 	}
+	// "Aufs Panel" cleanup (b), design/33 §4.5b: a serial switching to a function drops its managed
+	// single-image playlist too — otherwise the FK RESTRICT on that playlist's lone item keeps the
+	// backing image undeletable (409 image_in_use). The binding above already repointed, so the DELETE
+	// cascades only the managed playlist's own item (device_playlist_binding is already gone).
+	if _, err := tx.Exec(ctx, `DELETE FROM playlist WHERE managed_serial = $1`, serial); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO device_render_binding (serial, function_id) VALUES ($1, $2)
 		ON CONFLICT (serial) DO UPDATE SET function_id = EXCLUDED.function_id, bound_at = now()`,
