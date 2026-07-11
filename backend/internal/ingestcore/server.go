@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/open-picpak/backend/internal/adminhttp"
 	"github.com/open-picpak/backend/internal/otaticket"
 )
 
@@ -42,67 +42,40 @@ type Server struct {
 	// Log reassembly (A21). logFrameMax is the frame plausibility cap (D21.6) — policy=data, env only.
 	logFrameMax int64
 
-	// FaaS frame path (A24 §4.3). faasClient (nil ⇒ arms disabled, default) dials the faas-supervisor
-	// render-request seam over RENDER_SOCK (HTTP-over-UDS); faasRetryWake is the wake ingest sets when
-	// it serves the unavailable frame (supervisor outage). No secret/DB-render logic lives here (D24.1).
-	faasClient    *http.Client
+	// FaaS frame path (A24 §4.3 / A35 §3). frame is the in-process faascore backend reached by DIRECT
+	// method call (the render.sock transport is gone, A35). frameEnabled is the BACKEND_FAAS_FRAME_ENABLED
+	// arm: false (default) ⇒ /frame + /faas/hook read as absent (404) — the pausability-safe posture the
+	// old RENDER_SOCK-unset default carried. faasRetryWake is the wake ingest sets on the unavailable frame.
+	frame         FrameBackend
+	frameEnabled  bool
 	faasRetryWake int
 }
 
-// Main is the standalone ingest-process entrypoint (cmd/ingest). The merged cmd/backend does NOT call
-// it — it constructs the Server, wires its routes into the shared mux, and drives the C2 notifier from
-// its own supervisor goroutines. Kept only until cmd/ingest is retired (A35-W1 §2, one-truth).
-func Main() {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		// assemble from the compose POSTGRES_* vars
-		dsn = fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable",
-			env("POSTGRES_USER", "picpak"), os.Getenv("POSTGRES_PASSWORD"),
-			env("PGHOST", "timescaledb:5432"), env("POSTGRES_DB", "picpak"))
+// NewServer builds the ingest Server for the merged cmd/backend (design 35 §2). The pool is owned by
+// cmd/backend (ONE pool). frame is the in-process faascore backend (nil is tolerated: with frameEnabled
+// false the frame arm is 404 anyway); frameEnabled is the BACKEND_FAAS_FRAME_ENABLED arm. The ingest env
+// union is read HERE (design 35 §7): INGEST_TOKEN, OTA_SERVE_ENABLED, OTA_TICKET_KEY, OTA_TICKET_TTL,
+// FW_BLOB_DIR, LOG_FRAME_MAX, FAAS_RETRY_WAKE.
+func NewServer(pool *pgxpool.Pool, frame FrameBackend, frameEnabled bool) *Server {
+	return &Server{
+		pool:            pool,
+		token:           os.Getenv("INGEST_TOKEN"), // legacy path token; keep out of code (air-gap)
+		notifier:        newC2Notifier(),
+		otaServeEnabled: os.Getenv("OTA_SERVE_ENABLED") == "true", // A20 default-off (D20.11)
+		otaKey:          os.Getenv("OTA_TICKET_KEY"),
+		otaTTL:          otaTicketTTL(),
+		fwBlobDir:       env("FW_BLOB_DIR", "/fwblobs"),
+		logFrameMax:     logFrameMaxFromEnv(), // A21 frame plausibility cap (D21.6)
+		frame:           frame,
+		frameEnabled:    frameEnabled,
+		faasRetryWake:   faasRetryWakeFromEnv(),
 	}
-	addr := env("LISTEN_ADDR", ":8080")
-	token := os.Getenv("INGEST_TOKEN") // legacy path token; keep out of code (air-gap)
-
-	// OTA serving config (A20) — policy=data, env only. Default-off (D20.11); weak/empty key 503-
-	// disables the binary serve at request time (D20.9). FW_BLOB_DIR is the read-only blob mount (§4.7).
-	otaServeEnabled := os.Getenv("OTA_SERVE_ENABLED") == "true"
-	otaKey := os.Getenv("OTA_TICKET_KEY")
-	otaTTL := otaTicketTTL()
-	fwBlobDir := env("FW_BLOB_DIR", "/fwblobs")
-	logFrameMax := logFrameMaxFromEnv() // A21 frame plausibility cap (D21.6)
-
-	// FaaS frame path (A24 §4.3) — policy=data, env only. RENDER_SOCK unset ⇒ arms disabled (default,
-	// pausability-safe): /frame + /faas/hook read as absent (404). FAAS_RETRY_WAKE is the wake ingest
-	// sets on the unavailable frame (supervisor outage) — a short retry so the panel recovers fast.
-	faasClient := newFaasClient(os.Getenv("RENDER_SOCK"))
-	faasRetryWake := faasRetryWakeFromEnv()
-
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		log.Fatalf("db pool: %v", err)
-	}
-	defer pool.Close()
-	// fail fast if the DB is unreachable at boot (surfaces config drift, not a silent half-up service)
-	if err := pingWithRetry(ctx, pool, 10, time.Second); err != nil {
-		log.Fatalf("db unreachable: %v", err)
-	}
-
-	s := &Server{pool: pool, token: token, notifier: newC2Notifier(),
-		otaServeEnabled: otaServeEnabled, otaKey: otaKey, otaTTL: otaTTL, fwBlobDir: fwBlobDir,
-		logFrameMax: logFrameMax, faasClient: faasClient, faasRetryWake: faasRetryWake}
-	// One LISTEN connection feeds the C2 long-poll wakeup hub for the whole fleet (Design 16).
-	go s.notifier.listenLoop(ctx, pool)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
-	mux.HandleFunc("/", s.Handle)
-
-	log.Printf("ingest listening on %s (legacy token route %s, OTA serve %s, FaaS frame path %s)",
-		addr, routeState(token), otaServeState(otaServeEnabled, otaKey), faasState(faasClient))
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	log.Fatal(srv.ListenAndServe())
 }
+
+// StartNotifier launches the C2 long-poll LISTEN loop: one dedicated pool connection feeds the wakeup
+// hub for the whole fleet (Design 16). This is one of the two permanent LISTEN-holder conns the merged
+// pool reserves for (design 35 §6). Runs for the process lifetime.
+func (s *Server) StartNotifier(ctx context.Context) { go s.notifier.listenLoop(ctx, s.pool) }
 
 // OwnsPath reports whether the request path is under the ingest secret token prefix. The merged
 // cmd/backend root handler calls it FIRST: an owned path dispatches to Handle (which 404s an unknown
@@ -296,16 +269,11 @@ func hasExpectedKey(q map[string][]string) bool {
 	return false
 }
 
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return strings.TrimSpace(strings.Split(xff, ",")[0])
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
+// clientIP resolves the device's source IP via the SAME non-spoofable reader the admin plane uses
+// (design 35 §4 / F5 — adminhttp.RemoteIP): X-Real-IP on the public listener (the reverse proxy sets it
+// for every vhost, proxy.lua:210), the tunnel-local RemoteAddr otherwise. X-Forwarded-For is NEVER read
+// (its leftmost value is client-settable). One reader, one truth across ingest + admin telemetry.
+func clientIP(r *http.Request) string { return adminhttp.RemoteIP(r) }
 
 func first(vals ...string) string {
 	for _, v := range vals {

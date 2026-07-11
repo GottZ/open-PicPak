@@ -1,7 +1,6 @@
 package ingestcore
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -9,48 +8,34 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/open-picpak/backend/internal/faasstore"
 )
 
-// FaaS ingest arms (A24 §4.3). This binary is the single PUBLIC face of the frame path: it fronts the
-// device GET /frame and the external webhook POST, and proxies both to the faas-supervisor over the
-// render-request seam (HTTP-over-UDS, RENDER_SOCK). It carries NO secret and drives NO worker (D24.1) —
-// it only relays the packed frame the supervisor returns and layers Doc 20's OTA signal on top (D24.10).
+// FaaS ingest arms (A24 §4.3 / A35 §3). The ingest frame path fronts the device GET /frame and the
+// external webhook POST, and reaches the faascore backend by DIRECT in-process method call (the
+// render.sock/webhook UDS transport is gone, A35). ingest still carries NO secret and drives NO worker
+// inline (D24.1) — it relays the packed frame faascore returns and layers Doc 20's OTA signal (D24.10).
 
-const (
-	// faasClientTimeout bounds one render-request. The supervisor answers a sync render fast from its
-	// TTL cache / durable last-good; only a cold cache-miss drives the worker (its render timeout + M4
-	// overhead, ~18 s). 30 s is a generous outer bound — a timeout falls to the unavailable frame (T13).
-	faasClientTimeout = 30
-	// webhookBodyMax caps the inbound webhook body handed on as the trigger payload.
-	webhookBodyMax = 64 << 10
-)
-
-// faasArmed reports whether the /frame + webhook arms are live: the operator wired RENDER_SOCK so a
-// render client exists. Unset → the arms 404 (route reads absent), the pausability-safe default.
-func (s *Server) faasArmed() bool { return s.faasClient != nil }
-
-// newFaasClient builds the HTTP-over-UDS client for the render-request seam, or nil when RENDER_SOCK is
-// unset (arms disabled). Every request dials the one supervisor socket regardless of the URL host.
-func newFaasClient(sock string) *http.Client {
-	if sock == "" {
-		return nil
-	}
-	return &http.Client{
-		Timeout: faasClientTimeout * time.Second,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-			},
-		},
-	}
+// FrameBackend is the in-process faascore seam the ingest frame path calls (design 35 §3). It replaces
+// the POST /render + POST /webhook HTTP-over-UDS transport with two direct method calls;
+// faascore.Supervisor satisfies it. Render ALWAYS returns a valid 30000-byte frame + wake/status/stale;
+// Fanout launches the webhook fan-out (the token has already been validated by the ingest handler).
+type FrameBackend interface {
+	Render(ctx context.Context, serial, channel, trigger, now string, force bool) (packed []byte, status string, stale bool, wake int)
+	Fanout(ctx context.Context, name string, payload json.RawMessage) error
 }
+
+// webhookBodyMax caps the inbound webhook body handed on as the trigger payload.
+const webhookBodyMax = 64 << 10
+
+// faasArmed reports whether the /frame + webhook arms are live (BACKEND_FAAS_FRAME_ENABLED, design §3).
+// Unset (default) → the arms 404 (route reads absent), the pausability-safe posture RENDER_SOCK-unset
+// used to carry.
+func (s *Server) faasArmed() bool { return s.frameEnabled }
 
 // faasRetryWakeFromEnv parses FAAS_RETRY_WAKE (seconds); default 300 — short, so the panel recovers
 // promptly once the supervisor is back (policy=data, env only).
@@ -62,14 +47,6 @@ func faasRetryWakeFromEnv() int {
 		log.Printf("FAAS_RETRY_WAKE %q invalid, using 300", v)
 	}
 	return 300
-}
-
-// faasState describes the frame-path posture for the boot log.
-func faasState(client *http.Client) string {
-	if client == nil {
-		return "DISABLED (RENDER_SOCK unset)"
-	}
-	return "enabled"
 }
 
 // frameResult is the resolved frame + the device-facing wake/status headers.
@@ -126,46 +103,31 @@ func (s *Server) handleFrame(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(fr.packed)
 }
 
-// requestFrame calls the supervisor over the render-request seam (POST /render). The supervisor ALWAYS
-// returns a valid 30000-byte body (last-good/error frame on failure, D24.6) — so ingest only synthesises
-// a frame when the supervisor itself is unreachable or the body is not frame-shaped (T13).
+// requestFrame calls the faascore backend in-process (design 35 §3, was POST /render over render.sock).
+// faascore ALWAYS returns a valid 30000-byte body (last-good/error frame on failure, D24.6) — so ingest
+// only synthesises the unavailable frame when the backend is absent or the body is not frame-shaped (T13,
+// defense: an in-process call cannot fail the way a socket connect did, but a wrong length still must
+// never reach the panel).
 func (s *Server) requestFrame(ctx context.Context, serial, channel string) frameResult {
-	reqBody, _ := json.Marshal(map[string]any{
-		"serial": serial, "channel": channel, "trigger": "render", "force": false,
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://faas/render", bytes.NewReader(reqBody))
-	if err != nil {
-		return s.unavailableResult()
+	if s.frame == nil {
+		return s.unavailableResult() // frame arm enabled but no backend wired — misconfig, fail safe
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := s.faasClient.Do(req)
-	if err != nil {
-		log.Printf("faas render %s: %v", serial, err) // supervisor outage → unavailable frame (T13)
-		return s.unavailableResult()
-	}
-	defer resp.Body.Close() //nolint:errcheck
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("faas render %s: status %d", serial, resp.StatusCode)
-		return s.unavailableResult()
-	}
-	packed, err := io.ReadAll(io.LimitReader(resp.Body, packedFrameSize+1))
-	if err != nil || len(packed) != packedFrameSize {
-		log.Printf("faas render %s: non-frame body %d bytes (err %v)", serial, len(packed), err)
+	packed, status, stale, wake := s.frame.Render(ctx, serial, channel, "render", "", false)
+	if len(packed) != packedFrameSize {
+		log.Printf("faas render %s: non-frame body %d bytes", serial, len(packed))
 		return s.unavailableResult() // a non-frame body must never reach the panel (T13)
 	}
-	wake, _ := strconv.Atoi(resp.Header.Get("X-Faas-Wake"))
 	if wake <= 0 {
 		wake = s.faasRetryWake
 	}
-	status := resp.Header.Get("X-Faas-Status")
 	if status == "" {
 		status = "ok"
 	}
-	stale := "0"
-	if resp.Header.Get("X-Faas-Stale") == "1" {
-		stale = "1"
+	staleStr := "0"
+	if stale {
+		staleStr = "1"
 	}
-	return frameResult{packed: packed, wake: wake, status: status, stale: stale}
+	return frameResult{packed: packed, wake: wake, status: status, stale: staleStr}
 }
 
 // handleWebhook is the /faas/hook/{name} POST arm. It looks up the named function, verifies it is an
@@ -213,9 +175,9 @@ func webhookToken(r *http.Request) string {
 	return r.URL.Query().Get("token")
 }
 
-// triggerWebhook hands the fan-out to the supervisor (POST /webhook). The POST body becomes the trigger
-// payload: passed through verbatim when it is valid JSON, else wrapped as a JSON string so the M4 request
-// the supervisor builds is always valid JSON. An empty body carries no payload.
+// triggerWebhook hands the fan-out to faascore in-process (design 35 §3, was POST /webhook). The POST
+// body becomes the trigger payload: passed through verbatim when it is valid JSON, else wrapped as a
+// JSON string so the M4 request faascore builds is always valid JSON. An empty body carries no payload.
 func (s *Server) triggerWebhook(ctx context.Context, name string, rawBody []byte) error {
 	var payload json.RawMessage
 	if len(rawBody) > 0 {
@@ -226,24 +188,10 @@ func (s *Server) triggerWebhook(ctx context.Context, name string, rawBody []byte
 			payload = json.RawMessage(enc)
 		}
 	}
-	reqBody, _ := json.Marshal(struct {
-		Name    string          `json:"name"`
-		Payload json.RawMessage `json:"payload,omitempty"`
-	}{Name: name, Payload: payload})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://faas/webhook", bytes.NewReader(reqBody))
-	if err != nil {
-		return err
+	if s.frame == nil {
+		return fmt.Errorf("frame backend not configured")
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := s.faasClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close() //nolint:errcheck
-	if resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("supervisor webhook status %d", resp.StatusCode)
-	}
-	return nil
+	return s.frame.Fanout(ctx, name, payload)
 }
 
 // deviceChannel reads a device's operator-owned channel Server-side (D20.5) — never the device header.

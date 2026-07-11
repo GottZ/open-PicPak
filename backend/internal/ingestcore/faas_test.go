@@ -5,10 +5,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,54 +14,77 @@ import (
 	"github.com/open-picpak/backend/internal/faasstore"
 )
 
-// T13 — supervisor outage: the frame path serves the embedded 30000-byte unavailable frame with a short
-// retry wake and status "unavailable" — never a blank body, a garbage body, or a 500 to the panel. Probed
-// by pointing the render client at a socket with nothing listening (no DB needed).
-func TestRequestFrame_SupervisorOutage_T13(t *testing.T) {
-	dead := filepath.Join(t.TempDir(), "dead.sock") // nothing is listening here
-	s := &Server{faasClient: newFaasClient(dead), faasRetryWake: 300}
+// fakeFrame is an in-process FrameBackend stub (design 35 §3 replaced the render.sock transport with a
+// direct method call). render lets a probe shape the returned frame; fanout captures the fan-out name.
+type fakeFrame struct {
+	render    func(serial, channel string) (packed []byte, status string, stale bool, wake int)
+	fanout    chan string
+	fanoutErr error
+}
+
+func (f *fakeFrame) Render(_ context.Context, serial, channel, _, _ string, _ bool) ([]byte, string, bool, int) {
+	if f.render != nil {
+		return f.render(serial, channel)
+	}
+	return bytes.Repeat([]byte{0x11}, packedFrameSize), "ok", false, 100
+}
+
+func (f *fakeFrame) Fanout(_ context.Context, name string, _ json.RawMessage) error {
+	if f.fanout != nil {
+		f.fanout <- name
+	}
+	return f.fanoutErr
+}
+
+// T13 — no frame backend wired (the in-process analogue of the old supervisor outage): the frame path
+// serves the embedded 30000-byte unavailable frame with the short retry wake and status "unavailable" —
+// never a blank/garbage body or a 500 to the panel.
+func TestRequestFrame_NoBackend_T13(t *testing.T) {
+	s := &Server{frame: nil, faasRetryWake: 300}
 	fr := s.requestFrame(context.Background(), "sn1", "stable")
 	if !bytes.Equal(fr.packed, unavailableFrame) {
-		t.Errorf("outage did not serve the unavailable frame (%d bytes)", len(fr.packed))
+		t.Errorf("no backend did not serve the unavailable frame (%d bytes)", len(fr.packed))
 	}
 	if fr.status != "unavailable" || fr.stale != "1" || fr.wake != 300 {
-		t.Errorf("outage headers = status=%q stale=%q wake=%d, want unavailable/1/300", fr.status, fr.stale, fr.wake)
+		t.Errorf("headers = status=%q stale=%q wake=%d, want unavailable/1/300", fr.status, fr.stale, fr.wake)
 	}
 }
 
-// T13b — a supervisor that returns a NON-frame body (wrong length) is also treated as an outage: the
-// unavailable frame is served, never the malformed body. Red: a truncated/oversized body reaches the panel.
+// T13b — a backend that returns a NON-frame body (wrong length) is treated as an outage: the unavailable
+// frame is served, never the malformed body. Red: a truncated/oversized body reaches the panel.
 func TestRequestFrame_NonFrameBody_T13(t *testing.T) {
-	sock, stop := mockSupervisor(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("not a 30000-byte frame")) // 200 but wrong size
-	})
-	defer stop()
-	s := &Server{faasClient: newFaasClient(sock), faasRetryWake: 300}
+	s := &Server{faasRetryWake: 300, frame: &fakeFrame{
+		render: func(_, _ string) ([]byte, string, bool, int) {
+			return []byte("not a 30000-byte frame"), "ok", false, 42 // 200 but wrong size
+		},
+	}}
 	fr := s.requestFrame(context.Background(), "sn1", "stable")
 	if !bytes.Equal(fr.packed, unavailableFrame) || fr.status != "unavailable" {
 		t.Errorf("non-frame body was not rejected (status=%q, %d bytes)", fr.status, len(fr.packed))
 	}
 }
 
+// T13c — a well-formed backend frame is relayed verbatim with its wake/status/stale triplet.
+func TestRequestFrame_Relayed(t *testing.T) {
+	good := bytes.Repeat([]byte{0x7E}, packedFrameSize)
+	s := &Server{faasRetryWake: 300, frame: &fakeFrame{
+		render: func(_, _ string) ([]byte, string, bool, int) { return good, "stale", true, 1800 },
+	}}
+	fr := s.requestFrame(context.Background(), "sn1", "stable")
+	if !bytes.Equal(fr.packed, good) || fr.status != "stale" || fr.stale != "1" || fr.wake != 1800 {
+		t.Errorf("relay = status=%q stale=%q wake=%d, want stale/1/1800", fr.status, fr.stale, fr.wake)
+	}
+}
+
 // Webhook token gate (D24.13) — the RCE-adjacent authz: only a valid per-function token fans out. Probed
 // negatively: no token / wrong token → 401 (no fan-out); unknown / disabled function → 404; a valid token
-// → 202 AND the supervisor receives the named fan-out. The compare is sha256 + constant-time.
+// → 202 AND the backend receives the named fan-out. The compare is sha256 + constant-time.
 func TestWebhook_TokenGate_DB(t *testing.T) {
 	pool := dbPool(t)
 	ctx := context.Background()
 
 	fanout := make(chan string, 1)
-	sock, stop := mockSupervisor(t, func(w http.ResponseWriter, r *http.Request) {
-		var b struct {
-			Name    string          `json:"name"`
-			Payload json.RawMessage `json:"payload"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&b)
-		fanout <- b.Name
-		w.WriteHeader(http.StatusAccepted)
-	})
-	defer stop()
-	s := &Server{pool: pool, faasClient: newFaasClient(sock), faasRetryWake: 300}
+	s := &Server{pool: pool, faasRetryWake: 300, frame: &fakeFrame{fanout: fanout}}
 
 	const tokenPlain = "s3cret-webhook-token"
 	sum := sha256.Sum256([]byte(tokenPlain))
@@ -104,29 +125,16 @@ func TestWebhook_TokenGate_DB(t *testing.T) {
 	if got := call("hook-off", tokenPlain); got != http.StatusNotFound {
 		t.Errorf("disabled webhook = %d, want 404", got)
 	}
-	// valid → 202, and the supervisor received the fan-out for THIS function.
+	// valid → 202, and the backend received the fan-out for THIS function.
 	if got := call("hook", tokenPlain); got != http.StatusAccepted {
 		t.Fatalf("valid token = %d, want 202", got)
 	}
 	select {
 	case name := <-fanout:
 		if name != "hook" {
-			t.Errorf("supervisor fan-out name = %q, want hook", name)
+			t.Errorf("backend fan-out name = %q, want hook", name)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("supervisor did not receive the fan-out within 2s")
+		t.Fatal("backend did not receive the fan-out within 2s")
 	}
-}
-
-// mockSupervisor starts a tiny HTTP Server on a fresh UDS and returns its socket path + a stop func.
-func mockSupervisor(t *testing.T, handler http.HandlerFunc) (sock string, stop func()) {
-	t.Helper()
-	sock = filepath.Join(t.TempDir(), "render.sock")
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatalf("listen %s: %v", sock, err)
-	}
-	srv := &http.Server{Handler: handler}
-	go func() { _ = srv.Serve(ln) }()
-	return sock, func() { _ = srv.Close() }
 }

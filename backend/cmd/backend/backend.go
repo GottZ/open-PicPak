@@ -1,16 +1,20 @@
-// Command admin is the operator control plane for the open-picpak fleet: bearer-authenticated CRUD,
-// command enqueue, rollout/secret/FaaS management. It runs in a separate process and address space
-// from the public ingest binary (the secret/rollout write path must never sit in the public parser).
+// Command backend is the ONE open-picpak backend process (A35 / DECISIONS §A35): the operator control
+// plane (bearer-authenticated CRUD, command enqueue, rollout/secret/FaaS management, SPA), the public
+// device ingest (telemetry/OTA/C2/frame), and the faas-supervisor logic (scheduler, render, test-render/
+// preview) all in ONE process, ONE pool, ONE mux, behind ONE origin. The M5 address-space split is
+// retired by decision (design 35 §5); the defence is now handler discipline + per-request recover, not a
+// process boundary. faas-worker + faas-egress stay separate (sandbox), reached as a client (m4.sock /
+// egress-ctl.sock, byte-identical).
 //
-// Run with no arguments to serve the admin API. The operator-key management subcommands bootstrap and
-// revoke bearer keys out-of-band (no chicken-and-egg HTTP auth needed for the first key):
+// Run with no arguments to serve. The operator-key management subcommands bootstrap and revoke bearer
+// keys out-of-band (no chicken-and-egg HTTP auth needed for the first key):
 //
-//	admin create-operator -label <name> [-admin]   # mint a key, print the token ONCE
-//	admin list-operators                           # list keys (never the token/hash)
-//	admin disable-operator -id <n>                 # soft-revoke a key (SEC-M1)
-//	admin rotate-operator -id <n> [-expires-in d]  # mint a replacement, retire the old on a grace window
-//	admin create-user -username <name> [-admin]    # create a human admin_users account (password prompt)
-//	admin create-api-token -label <name> ...       # mint a machine api_token, print the token ONCE
+//	backend create-operator -label <name> [-admin]   # mint a key, print the token ONCE
+//	backend list-operators                           # list keys (never the token/hash)
+//	backend disable-operator -id <n>                 # soft-revoke a key (SEC-M1)
+//	backend rotate-operator -id <n> [-expires-in d]  # mint a replacement, retire the old on a grace window
+//	backend create-user -username <name> [-admin]    # create a human admin_users account (password prompt)
+//	backend create-api-token -label <name> ...       # mint a machine api_token, print the token ONCE
 package main
 
 import (
@@ -20,11 +24,15 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/open-picpak/backend/internal/adminhttp"
+	"github.com/open-picpak/backend/internal/faascore"
+	"github.com/open-picpak/backend/internal/ingestcore"
 	"github.com/open-picpak/backend/internal/sealbox"
 	"github.com/open-picpak/backend/internal/secrets"
 	"github.com/open-picpak/backend/internal/templatestore"
@@ -47,9 +55,11 @@ func main() {
 	runServer()
 }
 
-// openPool assembles the DSN (env DATABASE_URL, else the compose POSTGRES_* vars — same shape as
-// ingest) and returns a pool that has passed a fail-fast boot ping (surfaces config drift, not a
-// silent half-up service).
+// openPool assembles the DSN (env DATABASE_URL, else the compose POSTGRES_* vars) and returns a pool that
+// has passed a fail-fast boot ping (surfaces config drift, not a silent half-up service). MaxConns is
+// dimensioned for the MERGED union (design 35 §6): two permanent LISTEN holders (c2_cmd, and — default-
+// off — playlist_changed) plus C2-longpoll @ fleet scale + admin + render. Startup default is
+// max(16, 4×NumCPU), overridable via BACKEND_MAX_CONNS; Postgres max_connections must be sized above it.
 func openPool(ctx context.Context) (*pgxpool.Pool, error) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -57,7 +67,12 @@ func openPool(ctx context.Context) (*pgxpool.Pool, error) {
 			env("POSTGRES_USER", "picpak"), os.Getenv("POSTGRES_PASSWORD"),
 			env("PGHOST", "timescaledb:5432"), env("POSTGRES_DB", "picpak"))
 	}
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxConns = int32(maxConns())
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +81,22 @@ func openPool(ctx context.Context) (*pgxpool.Pool, error) {
 		return nil, err
 	}
 	return pool, nil
+}
+
+// maxConns is the merged pool ceiling (design 35 §6): BACKEND_MAX_CONNS if a positive override is set,
+// else max(16, 4×NumCPU). Two of these are permanently held by the LISTEN loops (c2notify + the default-
+// off playlist warmer); the rest carry the vereinigte request load.
+func maxConns() int {
+	if v := os.Getenv("BACKEND_MAX_CONNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+		log.Printf("BACKEND_MAX_CONNS %q invalid, using default", v)
+	}
+	if n := 4 * runtime.NumCPU(); n > 16 {
+		return n
+	}
+	return 16
 }
 
 func runServer() {
@@ -110,9 +141,22 @@ func runServer() {
 			res.Inserted, res.Updated, res.Unchanged)
 	}
 
-	// Operator zone binds to loopback/VPN by default — NEVER the public ingest interface. TLS
-	// terminates at the reverse proxy, as with ingest.
-	addr := env("ADMIN_ADDR", "127.0.0.1:8081")
+	// The merged backend binds ONE public listener (BACKEND_ADDR, wildcard = OriginPublic — device +
+	// admin + SPA behind both host labels) plus a distinct loopback break-glass listener
+	// (BACKEND_LOOPBACK_ADDR); the W7 operator_key fallback rides the loopback origin (design 35 §4). TLS
+	// terminates at the reverse proxy.
+	addr := env("BACKEND_ADDR", ":8080")
+
+	// FaaS in-process supervisor (design 35 §2/§3): scheduler + render/webhook/test-render seams, reached
+	// by DIRECT method call (no render.sock/test.sock). It shares the ONE pool + Box (M5 collapsed).
+	sup := faascore.New(pool, box)
+	sup.Start(ctx) // scheduler + (default-off) playlist warmer LISTEN goroutines (§6)
+
+	// Arm flags (design 35 §3) replace the old socket-presence gates:
+	//   BACKEND_FAAS_FRAME_ENABLED — false (default) ⇒ /frame + /faas/hook 404 ("absent"), was RENDER_SOCK.
+	//   BACKEND_TEST_RENDER_ENABLED — false (default) ⇒ test-run 503 + preview degrades, was FAAS_TEST_SOCK.
+	faasFrameEnabled := os.Getenv("BACKEND_FAAS_FRAME_ENABLED") == "true"
+	testRenderEnabled := faascore.TestRenderArmed()
 
 	dh := deviceHandlers{pool: pool, purgeTelemetry: envBool("ADMIN_DELETE_PURGES_TELEMETRY", false)}
 	ch := commandHandlers{pool: pool}
@@ -210,15 +254,15 @@ func runServer() {
 	// source (registerTemplateRoutes); registered before the SPA catch-all.
 	registerTemplateRoutes(mux, pool)
 	// Template preview backend (W-A33.5a): GET /api/templates/{id}/preview (durable PNG cache, ETag/304)
-	// + builtin warmup under a single fleet-slot budget. Same test-render seam as the FaaS test-run arm,
-	// but egress-DENIED (EgressAllow=[]). Kept in the template block so main.go's change stays one line.
-	registerTemplatePreviewRoutes(ctx, mux, pool, env("FAAS_TEST_SOCK", ""))
+	// + builtin warmup under a single fleet-slot budget. Uses the in-process faascore test-render seam
+	// (egress-DENIED, EgressAllow=[]); gated by BACKEND_TEST_RENDER_ENABLED (unset ⇒ previews degrade).
+	registerTemplatePreviewRoutes(ctx, mux, pool, sup, testRenderEnabled)
 
 	// FaaS editor support (A25 W1): the binding READS A24 left to the editor wave — forward
 	// (which function a device renders) + reverse (a function's blast radius, D25.9) + the unbind.
-	// Reads auth-gated; the unbind + test-run requireAdmin. test-run forwards to the supervisor's
-	// test-render arm over FAAS_TEST_SOCK (unset ⇒ the route 503s — pausability-safe, arm dark).
-	registerFaasUIRoutes(mux, pool, env("FAAS_TEST_SOCK", ""))
+	// Reads auth-gated; the unbind + test-run requireAdmin. test-run drives the in-process faascore
+	// test-render arm; BACKEND_TEST_RENDER_ENABLED unset ⇒ the route 503s (pausability-safe, arm dark).
+	registerFaasUIRoutes(mux, pool, sup, testRenderEnabled)
 
 	// Web-USB onboarding firmware artifacts (A26 W2): serve the open-picpak CFW manifest + bin parts for the
 	// /onboard page's WebSerial flash. Traversal-safe, read-only, same-origin (D26.9). Default off —
@@ -232,12 +276,23 @@ func runServer() {
 	eh := newEventsHandler(ctx, pool)
 	mux.Handle("GET /api/events", adminhttp.Auth(pool)(http.HandlerFunc(eh.handle)))
 
-	// SPA catch-all (D19.1): the embedded Svelte admin UI on "/". Registered LAST —
-	// stdlib ServeMux longest-pattern precedence keeps every "/api/..." and "/healthz"
-	// route ahead of "/", so a wrong-method hit on a known API path stays its own 4xx,
-	// not the SPA. A binary built without the bun frontend stage serves a 503 hint here
-	// while all /api routes stay functional (D19.3).
-	mux.Handle("/", web.Handler())
+	// Root catch-all (design 35 §2): token-dispatch BEFORE the SPA. The ingest Server owns the device
+	// secret-token paths (/<token>/{pp|c2|frame|firmware.bin|faas/hook}); a token-prefixed hit dispatches
+	// to it (an unknown subpath stays a 404 — the noise-404 semantic the legacy sink carried, preserved),
+	// and every non-token "/" hit falls through to the embedded Svelte SPA. Registered LAST — stdlib
+	// ServeMux longest-pattern precedence keeps every "/api/..." and "/healthz" route ahead of "/", so a
+	// wrong-method hit on a known API path stays its own 4xx. A binary built without the bun frontend
+	// stage serves a 503 hint from web.Handler while all /api routes stay functional (D19.3).
+	ingestSrv := ingestcore.NewServer(pool, sup, faasFrameEnabled)
+	ingestSrv.StartNotifier(ctx) // C2 long-poll LISTEN hub — one dedicated pool conn (§6)
+	spa := web.Handler()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if ingestSrv.OwnsPath(r) {
+			ingestSrv.Handle(w, r)
+			return
+		}
+		spa.ServeHTTP(w, r)
+	})
 
 	// Pre-auth IP rate limit wraps the whole mux (design §4.4): an IP over the limit is 429'd before the
 	// mux dispatches, so a credential/login flood is stopped ahead of the argon2 verify it targets, and
@@ -246,15 +301,15 @@ func runServer() {
 	// adminhttp.Auth, already on every gated route.
 	handler := adminhttp.WithRequestID(adminhttp.IPRateLimit(mux))
 
-	// Bind one http.Server per listener spec (design §4.1 / §5 B8, W8). The ADMIN_ADDR listener is
-	// tagged by its own origin; once ADMIN_ADDR is PUBLIC (the post-W8 flip state, when the reversed
-	// SSO label is gone) a second loopback listener on ADMIN_LOOPBACK_ADDR is added so the operator_key
-	// break-glass + Basic tunnel path stays reachable off the public socket — its OriginLoopback tag is
-	// what opens the W7-gated operator_key bearer fallback. When ADMIN_ADDR is itself loopback (dev) one
-	// listener already IS the loopback zone, so adminListeners collapses to a single bind (no double
-	// bind on the same semantics). Each server tags every request on it with its listener origin —
-	// non-spoofable, from the bind address, never a client header (§4.1 / §5 B8).
-	specs := adminListeners(addr, env("ADMIN_LOOPBACK_ADDR", "127.0.0.1:8081"))
+	// Bind one http.Server per listener spec (design 35 §4, W7-Modell = adminListeners logic unchanged).
+	// The BACKEND_ADDR listener is tagged by its own origin; when it is PUBLIC a second loopback listener
+	// on BACKEND_LOOPBACK_ADDR is added so the operator_key break-glass + Basic tunnel path stays reachable
+	// off the public socket — its OriginLoopback tag is what opens the W7-gated operator_key bearer
+	// fallback. When BACKEND_ADDR is itself loopback (dev) one listener already IS the loopback zone, so
+	// adminListeners collapses to a single bind. Each server tags every request on it with its listener
+	// origin — non-spoofable, from the bind address, never a client header. This origin also drives the
+	// ingest telemetry IP reader (adminhttp.RemoteIP, design 35 §4/F5).
+	specs := adminListeners(addr, env("BACKEND_LOOPBACK_ADDR", "127.0.0.1:8081"))
 	srvCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	servers := make([]*http.Server, 0, len(specs))
@@ -263,12 +318,12 @@ func runServer() {
 		srv := &http.Server{Addr: sp.addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 		srv.BaseContext = adminhttp.ListenerBaseContext(srvCtx, sp.origin)
 		servers = append(servers, srv)
-		log.Printf("admin listening on %s (%s)", sp.addr, sp.origin)
+		log.Printf("backend listening on %s (%s)", sp.addr, sp.origin)
 		go func(s *http.Server) { errc <- s.ListenAndServe() }(srv)
 	}
 	// The first server to return (a bind failure or a closed listener) tears the others down so the
 	// process exits as a unit rather than limping on a half-open control plane. Shutdown drains the
-	// still-serving listeners before the fatal exit (clean shutdown of both, W8 deliverable 3).
+	// still-serving listeners before the fatal exit.
 	exitErr := <-errc
 	cancel()
 	shutCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
@@ -276,7 +331,7 @@ func runServer() {
 	for _, s := range servers {
 		_ = s.Shutdown(shutCtx)
 	}
-	log.Fatalf("admin server exited: %v", exitErr)
+	log.Fatalf("backend server exited: %v", exitErr)
 }
 
 // listenerSpec is one socket the admin process binds: its bind address and the non-spoofable origin

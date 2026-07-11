@@ -31,7 +31,7 @@ func ct(s string) string {
 func testFaasUIHandler(pool *pgxpool.Pool) http.Handler {
 	mux := http.NewServeMux()
 	registerFaasRoutes(mux, pool)
-	registerFaasUIRoutes(mux, pool, "") // no test-render seam in the unit test (the route 503s)
+	registerFaasUIRoutes(mux, pool, nil, false) // test-render arm dark in the unit test (the route 503s)
 	return adminhttp.WithRequestID(mux)
 }
 
@@ -56,7 +56,7 @@ func TestFaasUIGating_DB(t *testing.T) {
 		if w := do(h, m.method, m.path, "ro-tok", reader(m.body), ct(m.body)); w.Code != http.StatusForbidden {
 			t.Errorf("%s %s readonly = %d, want 403", m.method, m.path, w.Code)
 		}
-		// admin clears the gate. test-run then 503s (no FAAS_TEST_SOCK in this handler) — that IS
+		// admin clears the gate. test-run then 503s (test-render arm dark in this handler) — that IS
 		// past-the-gate; the point is it is neither 401 nor 403 for an admin.
 		if w := do(h, m.method, m.path, "admin-tok", reader(m.body), ct(m.body)); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
 			t.Errorf("%s %s admin = %d, want past-the-gate", m.method, m.path, w.Code)

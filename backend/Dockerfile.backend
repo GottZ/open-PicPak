@@ -1,17 +1,15 @@
-# Admin operator-plane image: the Go control-plane binary (cmd/admin) with the
-# Svelte 5 SPA (backend/web) embedded via //go:embed all:dist. A bun frontend
-# stage builds web/dist ahead of the Go build (D19.8 — svelte-check is the hard
-# gate, run before vite build so type errors never reach the image). The public
-# ingest image (Dockerfile) is untouched and never enters web/ (D19.2). Both
-# binaries stay CGO-free statics on scratch (no shell, no packages).
+# The ONE open-picpak backend image (A35 / DECISIONS §A35): the merged Go binary (cmd/backend —
+# admin control plane + public device ingest + faas-supervisor logic) with the Svelte 5 SPA
+# (backend/web) embedded via //go:embed all:dist. A bun frontend stage builds web/dist ahead of the
+# Go build (svelte-check is the hard gate, run before vite build so type errors never reach the image).
+# faas-worker + faas-egress stay separate images (sandbox). CGO-free static on scratch (no shell).
 
 # --- frontend stage: build the SPA ---
 FROM oven/bun:1-alpine AS frontend
 WORKDIR /web
 # deps first (cache layer): only re-installs when package.json / bun.lock / project.inlang move.
 # project.inlang must ride this layer: the paraglide-js postinstall hook compiles the inlang
-# project on install, so a deps-only layer without it fails the whole build (pre-existing
-# since the A34.1 paraglide setup — surfaced by the W-A33.8 image gate, lead finding #12).
+# project on install, so a deps-only layer without it fails the whole build (lead finding #12).
 COPY web/package.json web/bun.lock ./
 COPY web/project.inlang ./project.inlang
 RUN bun install --frozen-lockfile
@@ -28,7 +26,7 @@ COPY . .
 # Overlay the built SPA over the committed dist/.gitkeep placeholder, so
 # //go:embed all:dist embeds the real production build (not the 503 stub).
 COPY --from=frontend /web/dist ./web/dist
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/admin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/backend
 
 FROM scratch
 COPY --from=build /out/app /app

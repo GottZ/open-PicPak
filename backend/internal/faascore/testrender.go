@@ -1,6 +1,7 @@
 package faascore
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"net/http"
@@ -72,23 +73,46 @@ func clampLimits(prod faasproto.Limits, req *faasproto.Limits) faasproto.Limits 
 	return out
 }
 
-// handleTestRender executes one test render and writes u32be metaLen | meta JSON | packed(30000) | raw
-// (raw on success only). It NEVER writes cache/last-good/DB (D25.4).
+// TestRenderSeam is the in-process admin→supervisor test-render seam (design 35 §3, replaces the
+// FAAS_TEST_SOCK transport). It decodes the SAME seam JSON body cmd/admin builds and returns the
+// BYTE-IDENTICAL framed response (u32be metaLen | meta | packed(30000) | raw) plus an HTTP-style status
+// (200 ok, 404 unknown saved fn, 400 bad body). The browser-facing wire frame is unchanged (design §3);
+// cmd/admin forwards `out` verbatim to the browser / parses the packed slot for a preview.
+func (s *Supervisor) TestRenderSeam(ctx context.Context, seam []byte) (out []byte, status int) {
+	var body testRenderReq
+	if err := json.Unmarshal(seam, &body); err != nil {
+		return nil, http.StatusBadRequest
+	}
+	return s.testRender(ctx, body)
+}
+
+// handleTestRender is the thin HTTP wrapper retained for the in-package tests. Production reaches
+// TestRenderSeam() directly (no test.sock).
 func (s *Supervisor) handleTestRender(w http.ResponseWriter, r *http.Request) {
 	var body testRenderReq
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&body); err != nil {
 		http.Error(w, "bad test-render request", http.StatusBadRequest)
 		return
 	}
-	ctx := r.Context()
+	out, status := s.testRender(r.Context(), body)
+	if status != http.StatusOK {
+		http.Error(w, "no such function", status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
+}
 
+// testRender executes one test render and returns the framed response bytes + an HTTP-style status. It
+// NEVER writes cache/last-good/DB (D25.4). Shared by the HTTP wrapper and the in-process seam.
+func (s *Supervisor) testRender(ctx context.Context, body testRenderReq) (out []byte, status int) {
 	// resolve the function: a saved row (by id) or the ad-hoc draft (unsaved source — D25.3).
 	var fn *faasstore.Function
 	if body.ID != nil {
 		f, err := faasstore.LoadFunction(ctx, s.pool, *body.ID)
 		if err != nil {
-			http.Error(w, "no such function", http.StatusNotFound)
-			return
+			return nil, http.StatusNotFound
 		}
 		fn = f
 	} else {
@@ -155,7 +179,11 @@ func (s *Supervisor) handleTestRender(w http.ResponseWriter, r *http.Request) {
 	} else {
 		packed = errorFrame // always a valid 30000-byte frame for the preview slot (§4.2 step 7)
 	}
-	writeTestFrame(w, meta, packed, raw)
+	frame, err := encodeTestFrame(meta, packed, raw)
+	if err != nil {
+		return nil, http.StatusInternalServerError
+	}
+	return frame, http.StatusOK
 }
 
 func statusOf(err *faasproto.RenderErr) string {
@@ -165,24 +193,21 @@ func statusOf(err *faasproto.RenderErr) string {
 	return "ok"
 }
 
-// writeTestFrame emits u32be metaLen | meta JSON | packed | raw as the HTTP body; cmd/admin forwards it
-// verbatim to the browser, which decodes packed→canvas + raw→canvas (bwrydecode.ts).
-func writeTestFrame(w http.ResponseWriter, meta testMeta, packed, raw []byte) {
+// encodeTestFrame builds u32be metaLen | meta JSON | packed | raw — the browser-facing wire frame
+// (bwrydecode.ts). cmd/admin forwards it verbatim to the browser or parses the packed slot for a preview.
+func encodeTestFrame(meta testMeta, packed, raw []byte) ([]byte, error) {
 	mj, err := json.Marshal(meta)
 	if err != nil {
-		http.Error(w, "meta encode", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.WriteHeader(http.StatusOK)
+	buf := make([]byte, 0, 4+len(mj)+len(packed)+len(raw))
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(mj)))
-	_, _ = w.Write(hdr[:])
-	_, _ = w.Write(mj)
-	_, _ = w.Write(packed)
-	if raw != nil {
-		_, _ = w.Write(raw)
-	}
+	buf = append(buf, hdr[:]...)
+	buf = append(buf, mj...)
+	buf = append(buf, packed...)
+	buf = append(buf, raw...)
+	return buf, nil
 }
 
 // redactSecretValues masks every resolved bound-secret VALUE out of the response log[] + err.msg by exact

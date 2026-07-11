@@ -69,20 +69,13 @@ type Supervisor struct {
 	warmLimit int // max concurrent pre-pack variant renders (K5 staffel); < 1 → 1
 }
 
-// Main is the standalone faas-supervisor entrypoint (cmd/faas-supervisor). The merged cmd/backend does
-// NOT call it — it constructs the Supervisor via New, drives the scheduler/warmer from its own goroutines,
-// and reaches the render/webhook/test-render seams by direct in-process method call (no render.sock /
-// test.sock). Kept only until cmd/faas-supervisor is retired in A35-W1 step 4 (one-truth).
-func Main() {
-	ctx := context.Background()
-	pool := openPool(ctx)
-	defer pool.Close()
-
-	box, err := sealbox.FromEnv() // SECRETS_KEY lives here (+ cmd/admin only, M5)
-	if err != nil {
-		log.Fatalf("faas-supervisor: sealbox: %v", err)
-	}
-
+// New builds the in-process Supervisor for the merged cmd/backend (design 35 §2). pool + box are owned
+// by cmd/backend (ONE pool, the M5 address-space split collapsed by A35). The FaaS env union is read
+// here (design 35 §7 checklist): NIGHT_START_HOUR / NIGHT_END_HOUR / DAY_INTERVAL / MAX_WAKE /
+// FAAS_M4_SOCK / DITHER_DEFAULT / FAAS_TIMEOUT_MS / FAAS_MEM_MB / RETRY_WAKE / EGRESS_CONTROL_SOCK /
+// RENDER_TTL / FAAS_SCHED_TICK / IMG_BLOB_DIR / FAAS_WARM_LIMIT. There is NO render.sock / test.sock
+// listener anymore: ingest reaches Render/Fanout and admin reaches TestRenderSeam by direct method call.
+func New(pool *pgxpool.Pool, box *sealbox.Box) *Supervisor {
 	s := &Supervisor{
 		pool: pool,
 		box:  box,
@@ -108,68 +101,78 @@ func Main() {
 	}
 	s.render = s.doRender                 // the real M4 render drive (tests inject a stub)
 	s.renderPlaylist = s.doRenderPlaylist // the built-in __playlist M4 drive (tests inject a stub)
+	return s
+}
+
+// Start launches the supervisor's background LISTEN goroutines: the scheduler scan loop and — only when
+// FAAS_PLAYLIST_PUSH is armed (default-off, K10/HOTP) — the pre-pack warmer + refresh fan-out. These are
+// the two permanent LISTEN-holder connections the merged pool reserves for (design 35 §6).
+func (s *Supervisor) Start(ctx context.Context) {
 	go s.runScheduler(ctx)
-	// A27 W4: the pre-pack warmer + direct-display refresh fan-out ride a LISTEN on playlist_changed.
-	// DEFAULT-OFF (K10/HOTP) — nothing warms or fans out until FAAS_PLAYLIST_PUSH is armed.
 	if playlistPushEnabled() {
 		go s.runPlaylistWarmer(ctx)
-		log.Printf("faas-supervisor: playlist push (pre-pack warmer + refresh fan-out) enabled")
+		log.Printf("backend: faas playlist push (pre-pack warmer + refresh fan-out) enabled")
 	}
+}
 
-	renderSock := env("RENDER_SOCK", "/run/faas/render.sock")
-	_ = os.Remove(renderSock)
-	l, err := net.Listen("unix", renderSock)
+// TestRenderArmed reports whether the test-render/preview arm is enabled (BACKEND_TEST_RENDER_ENABLED).
+// It replaces the old FAAS_TEST_SOCK-presence gate: unset ⇒ admin test-run 503s and preview degrades.
+func TestRenderArmed() bool { return os.Getenv("BACKEND_TEST_RENDER_ENABLED") == "true" }
+
+// Render is the in-process render-request seam (design 35 §3, replaces POST /render over render.sock).
+// It ALWAYS returns a valid 30000-byte frame + the wake/status/stale triplet; the ingest frame handler
+// layers Doc 20's OTA signal on top. Byte-identical to the old handleRender logic (§4.3 preserved).
+func (s *Supervisor) Render(ctx context.Context, serial, channel, trigger, now string, force bool) (packed []byte, status string, stale bool, wake int) {
+	// A27 W3: resolve BOTH bindings in one round-trip (§4.3). A playlist binding takes precedence
+	// (playlist-first); the advisory-locked bind paths guarantee at most one binding exists, so this
+	// ordering is defense-in-depth, not the correctness anchor.
+	bind, err := plrender.ResolveBinding(ctx, s.pool, serial)
 	if err != nil {
-		log.Fatalf("faas-supervisor: render listen %s: %v", renderSock, err)
+		log.Printf("faas-supervisor: resolve binding %s: %v", serial, err)
+		return errorFrame, "error", true, s.retryWake
 	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
-	mux.HandleFunc("POST /render", s.handleRender)
-	mux.HandleFunc("POST /webhook", s.handleWebhookFanout)
-
-	// admin→supervisor test-render seam (Doc 25) — a SEPARATE UDS (dbnet, admin↔supervisor) from the
-	// ingest render seam, so ingest can never reach test-render and admin can never reach /render. Opt-in
-	// via FAAS_TEST_SOCK (unset → no test-render arm, pausability-safe; cmd/admin then 503s the route).
-	if testSock := env("FAAS_TEST_SOCK", ""); testSock != "" {
-		_ = os.Remove(testSock)
-		tl, terr := net.Listen("unix", testSock)
-		if terr != nil {
-			log.Fatalf("faas-supervisor: test-render listen %s: %v", testSock, terr)
+	if bind.PlaylistID != 0 {
+		return s.buildPlaylistFrame(ctx, serial, bind.PlaylistID, time.Now())
+	}
+	if bind.FunctionID == 0 {
+		// no function AND no playlist bound to this device — nothing to render; serve the error frame.
+		return errorFrame, "error", true, s.retryWake
+	}
+	fnID := bind.FunctionID
+	fn, err := faasstore.LoadFunction(ctx, s.pool, fnID)
+	if err != nil {
+		if !errors.Is(err, faasstore.ErrNotFound) {
+			log.Printf("faas-supervisor: load fn %d: %v", fnID, err)
 		}
-		// cross-UID: admin (a different user) connects to this socket the supervisor (65534) created —
-		// chmod 0777 so the connect is permitted, mirroring the worker's m4.sock (compose faas-sock-init).
-		_ = os.Chmod(testSock, 0o777)
-		tmux := http.NewServeMux()
-		tmux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
-		tmux.HandleFunc("POST /test-render", s.handleTestRender)
-		go func() {
-			log.Printf("faas-supervisor: test-render seam on %s", testSock)
-			log.Fatalf("faas-supervisor: test-render serve: %v",
-				(&http.Server{Handler: tmux, ReadHeaderTimeout: 10 * time.Second}).Serve(tl))
-		}()
+		return errorFrame, "error", true, s.retryWake
 	}
 
-	log.Printf("faas-supervisor: render-request seam on %s, M4 %s", renderSock, s.m4Sock)
-	log.Fatalf("faas-supervisor: serve: %v", (&http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}).Serve(l))
+	rctx := faasproto.RequestCtx{
+		Serial:  serial,
+		Channel: channel,
+		Trigger: faasproto.Trigger{Type: triggerOrRender(trigger)},
+		Now:     nowOrDefault(now),
+	}
+	// K15 — unified enabled semantics: enabled=false = frozen. A disabled function is served its
+	// durable last-good flagged stale WITHOUT rendering inline and WITHOUT driving the worker (no
+	// last-good → error frame + retry-wake). This aligns the sync render path with the webhook-409 and
+	// scheduler-skip, which already gate on fn.Enabled; before K15 this path rendered disabled
+	// functions regardless. Checked here, immediately after LoadFunction, so neither buildFrame nor
+	// serveLastGood can drive the worker for a frozen function.
+	if !fn.Enabled {
+		return s.serveFrozen(ctx, fn, rctx)
+	}
+	// Trigger routing (D24.2/D24.12): render/sync renders inline (TTL cache + fallback); every other
+	// trigger (render/prerender, schedule, webhook) serves the last-good the timer/cron wrote — the
+	// device request never drives the worker inline.
+	if s.syncInline(fn) {
+		return s.buildFrame(ctx, fn, rctx, force)
+	}
+	return s.serveLastGood(ctx, fn, rctx)
 }
 
-func openPool(ctx context.Context) *pgxpool.Pool {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable",
-			env("POSTGRES_USER", "picpak"), os.Getenv("POSTGRES_PASSWORD"),
-			env("PGHOST", "timescaledb:5432"), env("POSTGRES_DB", "picpak"))
-	}
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		log.Fatalf("faas-supervisor: db pool: %v", err)
-	}
-	return pool
-}
-
-// handleRender is the ingest→supervisor render-request seam (§4.3). It returns a body ALWAYS
-// (a valid 30000-byte frame) + the wake/status/stale headers; ingest layers the OTA signal on top.
+// handleRender is the thin HTTP wrapper retained for the in-package tests (enabled_test etc.) that drive
+// the render path via httptest. Production reaches Render() directly (no render.sock).
 func (s *Supervisor) handleRender(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Serial  string `json:"serial"`
@@ -182,80 +185,38 @@ func (s *Supervisor) handleRender(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad render request", http.StatusBadRequest)
 		return
 	}
-
-	ctx := r.Context()
-	// A27 W3: resolve BOTH bindings in one round-trip (§4.3). A playlist binding takes precedence
-	// (playlist-first); the advisory-locked bind paths guarantee at most one binding exists, so this
-	// ordering is defense-in-depth, not the correctness anchor.
-	bind, err := plrender.ResolveBinding(ctx, s.pool, body.Serial)
-	if err != nil {
-		log.Printf("faas-supervisor: resolve binding %s: %v", body.Serial, err)
-		s.writeFrame(w, errorFrame, "error", true, s.retryWake)
-		return
-	}
-	if bind.PlaylistID != 0 {
-		packed, status, stale, wake := s.buildPlaylistFrame(ctx, body.Serial, bind.PlaylistID, time.Now())
-		s.writeFrame(w, packed, status, stale, wake)
-		return
-	}
-	if bind.FunctionID == 0 {
-		// no function AND no playlist bound to this device — nothing to render; serve the error frame.
-		s.writeFrame(w, errorFrame, "error", true, s.retryWake)
-		return
-	}
-	fnID := bind.FunctionID
-	fn, err := faasstore.LoadFunction(ctx, s.pool, fnID)
-	if err != nil {
-		if !errors.Is(err, faasstore.ErrNotFound) {
-			log.Printf("faas-supervisor: load fn %d: %v", fnID, err)
-		}
-		s.writeFrame(w, errorFrame, "error", true, s.retryWake)
-		return
-	}
-
-	rctx := faasproto.RequestCtx{
-		Serial:  body.Serial,
-		Channel: body.Channel,
-		Trigger: faasproto.Trigger{Type: triggerOrRender(body.Trigger)},
-		Now:     nowOrDefault(body.Now),
-	}
-	// K15 — unified enabled semantics: enabled=false = frozen. A disabled function is served its
-	// durable last-good flagged stale WITHOUT rendering inline and WITHOUT driving the worker (no
-	// last-good → error frame + retry-wake). This aligns the sync render path with the webhook-409 and
-	// scheduler-skip, which already gate on fn.Enabled; before K15 this path rendered disabled
-	// functions regardless. Checked here, immediately after LoadFunction, so neither buildFrame nor
-	// serveLastGood can drive the worker for a frozen function.
-	if !fn.Enabled {
-		packed, status, stale, wake := s.serveFrozen(ctx, fn, rctx)
-		s.writeFrame(w, packed, status, stale, wake)
-		return
-	}
-	// Trigger routing (D24.2/D24.12): render/sync renders inline (TTL cache + fallback); every other
-	// trigger (render/prerender, schedule, webhook) serves the last-good the timer/cron wrote — the
-	// device request never drives the worker inline.
-	var (
-		packed []byte
-		status string
-		stale  bool
-		wake   int
-	)
-	if s.syncInline(fn) {
-		packed, status, stale, wake = s.buildFrame(ctx, fn, rctx, body.Force)
-	} else {
-		packed, status, stale, wake = s.serveLastGood(ctx, fn, rctx)
-	}
+	packed, status, stale, wake := s.Render(r.Context(), body.Serial, body.Channel, body.Trigger, body.Now, body.Force)
 	s.writeFrame(w, packed, status, stale, wake)
 }
 
-// handleWebhookFanout is the ingest→supervisor webhook seam (§4.3). ingest has ALREADY validated the
-// per-function token (sha256 + crypto/subtle.ConstantTimeCompare, D24.13) — this internal UDS endpoint
-// fans the named function out over EVERY bound serial (D24.12), the POST body carried verbatim as
-// ctx.trigger.payload. RENDER_SOCK is reachable ONLY by ingest (shared-volume UDS), so the caller is
-// trusted; the trigger_type/enabled re-check is cheap defense-in-depth, NOT the auth gate. Fan-out is
-// ASYNC: a webhook must not block on N renders (nor couple to ingest's client timeout) — the device
-// picks up the new last-good on its next /frame, so 202 the moment the function is verified and the
-// fan-out is launched. The goroutine uses context.Background() to outlive this request; a process
-// restart drops an in-flight fan-out (best-effort — the next webhook or device poll recovers).
+// ErrWebhookNotFound / ErrWebhookNotEnabled are the Fanout sentinels the ingest webhook handler maps
+// back to 404 / 503 (the caller already validated the per-function token before reaching here).
+var (
+	ErrWebhookNotFound   = errors.New("no such function")
+	ErrWebhookNotEnabled = errors.New("not an enabled webhook function")
+)
+
+// Fanout is the in-process webhook seam (design 35 §3, replaces POST /webhook over render.sock). The
+// ingest webhook handler has ALREADY validated the per-function token (sha256 + constant-time, D24.13);
+// this launches the fan-out over EVERY bound serial (D24.12), the payload carried verbatim as
+// ctx.trigger.payload. The trigger_type/enabled re-check is cheap defense-in-depth, NOT the auth gate.
+// Fan-out is ASYNC (a webhook must not block on N renders); the goroutine uses context.Background() to
+// outlive the request. Returns nil once the fan-out is launched (the ingest handler then 202s).
+func (s *Supervisor) Fanout(ctx context.Context, name string, payload json.RawMessage) error {
+	fn, err := faasstore.LoadFunctionByName(ctx, s.pool, name)
+	if err != nil {
+		// ingest looked it up moments ago, so a miss here is a delete race/misconfig — no fan-out.
+		return ErrWebhookNotFound
+	}
+	if fn.TriggerType != faasstore.TriggerWebhook || !fn.Enabled {
+		return ErrWebhookNotEnabled
+	}
+	go s.fanOut(context.Background(), fn, faasproto.Trigger{Type: "webhook", Payload: payload})
+	return nil
+}
+
+// handleWebhookFanout is the thin HTTP wrapper retained for the in-package tests. Production reaches
+// Fanout() directly (no render.sock).
 func (s *Supervisor) handleWebhookFanout(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name    string          `json:"name"`
@@ -265,18 +226,14 @@ func (s *Supervisor) handleWebhookFanout(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "bad webhook request", http.StatusBadRequest)
 		return
 	}
-	fn, err := faasstore.LoadFunctionByName(r.Context(), s.pool, body.Name)
-	if err != nil {
-		// ingest looked it up moments ago, so a miss here is a delete race/misconfig — 404, no fan-out.
+	switch err := s.Fanout(r.Context(), body.Name, body.Payload); {
+	case errors.Is(err, ErrWebhookNotFound):
 		http.Error(w, "no such function", http.StatusNotFound)
-		return
-	}
-	if fn.TriggerType != faasstore.TriggerWebhook || !fn.Enabled {
+	case errors.Is(err, ErrWebhookNotEnabled):
 		http.Error(w, "not an enabled webhook function", http.StatusConflict)
-		return
+	default:
+		w.WriteHeader(http.StatusAccepted)
 	}
-	go s.fanOut(context.Background(), fn, faasproto.Trigger{Type: "webhook", Payload: body.Payload})
-	w.WriteHeader(http.StatusAccepted)
 }
 
 // runScheduler periodically fans out the enabled prerender/schedule functions whose interval has

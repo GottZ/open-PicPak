@@ -1,22 +1,19 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
-	"net"
 	"net/http"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/open-picpak/backend/internal/adminhttp"
 	"github.com/open-picpak/backend/internal/bwry"
+	"github.com/open-picpak/backend/internal/faascore"
 	"github.com/open-picpak/backend/internal/templatestore"
 )
 
@@ -29,10 +26,6 @@ import (
 // the function's allowlist, testrender.go:99/131; an empty list ⇒ deny, faas-egress decide()), and
 // secrets are STUBBED by the supervisor test-render arm (testrender.go:123). Fetch builtins whose live
 // render would egress-deny to the error frame carry a curated preview_fixture PNG instead (§4.5a).
-
-// previewRenderTimeout bounds one preview render (worker cold-start ~18 s; a generous outer bound,
-// parity testRunTimeout). The warmup walks builtins one at a time under this bound.
-const previewRenderTimeout = 40 * time.Second
 
 // previewRenderer produces preview PNGs for templates. The single-element `sem` is the fleet-slot
 // budget (§4.5a): EVERY live preview render — warmup and on-demand alike — acquires it, so previews
@@ -127,7 +120,7 @@ type templatePreviewHandlers struct {
 // warmup. The route is Auth-gated (any valid key) — a builtin preview is any-read (E-A33-6); the
 // handler additionally requires admin for an operator-authored template's on-demand render (admin-only,
 // E-A33-6). Single call from main.go's template block keeps that file's change to one line.
-func registerTemplatePreviewRoutes(ctx context.Context, mux *http.ServeMux, pool *pgxpool.Pool, testSock string) {
+func registerTemplatePreviewRoutes(ctx context.Context, mux *http.ServeMux, pool *pgxpool.Pool, faas *faascore.Supervisor, testEnabled bool) {
 	fixtures, err := templatestore.PreviewFixtures()
 	if err != nil {
 		log.Printf("templatestore: WARN preview fixtures unavailable (fetch-builtin cards will degrade): %v", err)
@@ -137,7 +130,7 @@ func registerTemplatePreviewRoutes(ctx context.Context, mux *http.ServeMux, pool
 		pool:     pool,
 		sem:      make(chan struct{}, 1), // the single fleet-slot budget
 		fixtures: fixtures,
-		render:   newPreviewSeamRender(testSock),
+		render:   newPreviewSeamRender(faas, testEnabled),
 	}
 	h := templatePreviewHandlers{pool: pool, rndr: rndr}
 	mux.Handle("GET /api/templates/{id}/preview", adminhttp.Auth(pool)(http.HandlerFunc(h.preview)))
@@ -202,21 +195,14 @@ func (h templatePreviewHandlers) preview(w http.ResponseWriter, r *http.Request)
 	_, _ = w.Write(png)
 }
 
-// newPreviewSeamRender builds the packed-frame producer over the supervisor test-render arm
-// (FAAS_TEST_SOCK). The seam sets egress_allow=[] EXPLICITLY (fail-closed — not the template's own
-// allowlist) and trigger=render; the supervisor stubs secrets. Returns nil when the socket is unset
-// (no live render possible — previews degrade, pausability-safe like the test-run arm).
-func newPreviewSeamRender(sock string) func(context.Context, string) ([]byte, error) {
-	if sock == "" {
+// newPreviewSeamRender builds the packed-frame producer over the in-process faascore test-render arm
+// (design 35 §3, was FAAS_TEST_SOCK). The seam sets egress_allow=[] EXPLICITLY (fail-closed — not the
+// template's own allowlist) and trigger=render; faascore stubs secrets. Returns nil when the test-render
+// arm is disarmed (BACKEND_TEST_RENDER_ENABLED unset) or faascore is absent — previews degrade,
+// pausability-safe like the test-run arm.
+func newPreviewSeamRender(faas *faascore.Supervisor, testEnabled bool) func(context.Context, string) ([]byte, error) {
+	if !testEnabled || faas == nil {
 		return nil
-	}
-	client := &http.Client{
-		Timeout: previewRenderTimeout,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-			},
-		},
 	}
 	return func(ctx context.Context, source string) ([]byte, error) {
 		seam, _ := json.Marshal(map[string]any{
@@ -225,32 +211,19 @@ func newPreviewSeamRender(sock string) func(context.Context, string) ([]byte, er
 			"trigger":      "render",
 			"serial":       "preview0", // synthetic ctx.serial; the preview is serial-invariant
 		})
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://faas/test-render", bytes.NewReader(seam))
-		if err != nil {
-			return nil, err
+		out, status := faas.TestRenderSeam(ctx, seam)
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("%w: test-render status %d", errPreviewUnavailable, status)
 		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", errPreviewUnavailable, err)
-		}
-		defer resp.Body.Close() //nolint:errcheck
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%w: supervisor status %d", errPreviewUnavailable, resp.StatusCode)
-		}
-		return parsePackedFromTestFrame(resp.Body)
+		return parsePackedFromTestFrame(out)
 	}
 }
 
-// parsePackedFromTestFrame extracts the 30000-byte packed frame from the supervisor's framed test-render
-// response (u32be metaLen | meta JSON | packed(30000) | raw). The supervisor already substitutes the
-// error frame into the packed slot on a render error (testrender.go:156), so a fetch-builtin that
-// egress-denies here yields the error-frame PNG — exactly the fixture-less fetch-builtin behaviour.
-func parsePackedFromTestFrame(body io.Reader) ([]byte, error) {
-	all, err := io.ReadAll(io.LimitReader(body, 4<<20))
-	if err != nil {
-		return nil, err
-	}
+// parsePackedFromTestFrame extracts the 30000-byte packed frame from faascore's framed test-render
+// response (u32be metaLen | meta JSON | packed(30000) | raw). faascore already substitutes the error
+// frame into the packed slot on a render error, so a fetch-builtin that egress-denies here yields the
+// error-frame PNG — exactly the fixture-less fetch-builtin behaviour.
+func parsePackedFromTestFrame(all []byte) ([]byte, error) {
 	if len(all) < 4 {
 		return nil, fmt.Errorf("preview: framed response too short (%d bytes)", len(all))
 	}

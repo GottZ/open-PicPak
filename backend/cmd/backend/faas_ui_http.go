@@ -1,21 +1,17 @@
 package main
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log"
-	"net"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/open-picpak/backend/internal/adminhttp"
 	"github.com/open-picpak/backend/internal/devicestore"
+	"github.com/open-picpak/backend/internal/faascore"
 	"github.com/open-picpak/backend/internal/faasstore"
 )
 
@@ -26,8 +22,9 @@ import (
 // execution path.
 
 type faasUIHandlers struct {
-	pool       *pgxpool.Pool
-	testClient *http.Client // admin→supervisor test-render seam; nil ⇒ FAAS_TEST_SOCK unset ⇒ route 503s
+	pool        *pgxpool.Pool
+	faas        *faascore.Supervisor // in-process test-render seam (design 35 §3, was FAAS_TEST_SOCK)
+	testEnabled bool                 // BACKEND_TEST_RENDER_ENABLED; false ⇒ test-run 503s (pausability-safe)
 }
 
 // registerFaasUIRoutes mounts the Doc 25 §4.4 binding endpoints. Reads are auth-gated (any valid key may
@@ -35,32 +32,13 @@ type faasUIHandlers struct {
 // requireAdmin — the exact gating shape registerFaasRoutes / registerOTARoutes apply. Single source of
 // the wiring so main.go and the gating test can never drift. The GET/DELETE here share the
 // `/api/devices/{serial}/render` path with A24's PUT (distinct method patterns, no conflict).
-func registerFaasUIRoutes(mux *http.ServeMux, pool *pgxpool.Pool, testSock string) {
-	h := faasUIHandlers{pool: pool, testClient: newTestRenderClient(testSock)}
+func registerFaasUIRoutes(mux *http.ServeMux, pool *pgxpool.Pool, faas *faascore.Supervisor, testEnabled bool) {
+	h := faasUIHandlers{pool: pool, faas: faas, testEnabled: testEnabled}
 	mux.Handle("GET /api/devices/{serial}/render", adminhttp.Auth(pool)(http.HandlerFunc(h.boundFunction)))
 	mux.Handle("GET /api/functions/{id}/devices", adminhttp.Auth(pool)(http.HandlerFunc(h.boundDevices)))
 	mux.Handle("DELETE /api/devices/{serial}/render", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(h.unbind))))
 	// test-run is RCE-equivalent (it evaluates foreign code) → requireAdmin + attributed (D25.3).
 	mux.Handle("POST /api/functions/test-run", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(h.testRun))))
-}
-
-// testRunTimeout bounds one test render (worker cold-start + M4 overhead ~18 s; a generous outer bound).
-const testRunTimeout = 40 * time.Second
-
-// newTestRenderClient builds the HTTP-over-UDS client for the admin→supervisor test-render seam, or nil
-// when FAAS_TEST_SOCK is unset (the route then 503s — pausability-safe: no test-run until compose wires it).
-func newTestRenderClient(sock string) *http.Client {
-	if sock == "" {
-		return nil
-	}
-	return &http.Client{
-		Timeout: testRunTimeout,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-			},
-		},
-	}
 }
 
 // testRun — POST /api/functions/test-run (admin): the FaaS analog of the RCE-capable enqueue (D25.3). The
@@ -70,9 +48,9 @@ func newTestRenderClient(sock string) *http.Client {
 // side-effect-free (D25.4). The framed binary response (meta+packed+raw) is forwarded verbatim; the browser
 // decodes it. It grants no capability an admin lacks — it only shortens the author→see-frame loop (D25.3).
 func (h faasUIHandlers) testRun(w http.ResponseWriter, r *http.Request) {
-	if h.testClient == nil {
+	if !h.testEnabled || h.faas == nil {
 		adminhttp.WriteErr(w, r, http.StatusServiceUnavailable, "test_run_unavailable",
-			"test-run is not configured (FAAS_TEST_SOCK unset)")
+			"test-run is not configured (BACKEND_TEST_RENDER_ENABLED unset)")
 		return
 	}
 	var body struct {
@@ -133,31 +111,22 @@ func (h faasUIHandlers) testRun(w http.ResponseWriter, r *http.Request) {
 		"secret_bindings": body.Fn.SecretBindings, "egress_allow": body.Fn.EgressAllow, "limits": body.Fn.Limits,
 		"serial": body.Ctx.Serial, "channel": channel, "trigger": trigger, "now": body.Ctx.Now, "payload": body.Ctx.Payload,
 	})
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, "http://faas/test-render", bytes.NewReader(seam))
-	if err != nil {
-		adminhttp.WriteErr(w, r, http.StatusInternalServerError, "internal", "seam request build failed")
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := h.testClient.Do(req)
-	if err != nil {
-		adminhttp.WriteErr(w, r, http.StatusBadGateway, "supervisor_unreachable", "test-render supervisor unreachable")
-		return
-	}
-	defer resp.Body.Close() //nolint:errcheck
-	if resp.StatusCode == http.StatusNotFound {
+	// In-process test-render seam (design 35 §3, was POST /test-render over FAAS_TEST_SOCK). The framed
+	// binary (u32 metaLen | meta | packed | raw) is byte-identical to the old wire response; forward it
+	// verbatim to the browser, which decodes it.
+	out, status := h.faas.TestRenderSeam(r.Context(), seam)
+	if status == http.StatusNotFound {
 		adminhttp.WriteErr(w, r, http.StatusNotFound, "not_found", "no such function")
 		return
 	}
-	if resp.StatusCode != http.StatusOK {
+	if status != http.StatusOK {
 		adminhttp.WriteErr(w, r, http.StatusBadGateway, "supervisor_error", "test-render failed")
 		return
 	}
-	// forward the framed binary response verbatim (u32 metaLen | meta | packed | raw); the browser decodes it.
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, resp.Body)
+	_, _ = w.Write(out)
 }
 
 // boundFunction — GET /api/devices/{serial}/render (auth): the function a device renders (forward read,
