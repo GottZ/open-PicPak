@@ -14,6 +14,7 @@
       "ja": "URL から画像を取得してディスプレイに表示します。"
     },
     "source_file": "external-image.js",
+    "preview_fixture": "external-image.preview.png",
     "params": [
       { "name": "url", "label": "Image URL", "type": "url", "required": true }
     ],

@@ -136,6 +136,51 @@ func List(ctx context.Context, q Querier, kindFilter string, limit, afterID int6
 	return out, rows.Err()
 }
 
+// SummaryWithSource is the list projection when ?include=source is set (§4.5a): the Summary plus the
+// berry_snippet source. Source is populated ONLY for berry_snippet rows (a render_fn's JS body is not
+// carried here — the flag exists so the gallery can classify snippet effects without an N+1 of GETs).
+type SummaryWithSource struct {
+	Summary
+	Source string `json:"source,omitempty"`
+}
+
+// ListWithSource is List plus the berry_snippet source (the ?include=source projection). The caller
+// caps limit ≤50 (200 × 8191 B ≈ 1.56 MiB/page, §6); this store still clamps to [1,200] as a backstop.
+// A render_fn row carries an empty Source (only berry_snippet effects need the source client-side).
+func ListWithSource(ctx context.Context, q Querier, kindFilter string, limit, afterID int64) ([]SummaryWithSource, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	var rows pgx.Rows
+	var err error
+	if kindFilter == "" {
+		rows, err = q.Query(ctx, `
+			SELECT id, name, kind, description, builtin, version, updated_at, source FROM templates
+			WHERE id > $1 ORDER BY id LIMIT $2`, afterID, limit)
+	} else {
+		rows, err = q.Query(ctx, `
+			SELECT id, name, kind, description, builtin, version, updated_at, source FROM templates
+			WHERE kind = $1 AND id > $2 ORDER BY id LIMIT $3`, kindFilter, afterID, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SummaryWithSource{}
+	for rows.Next() {
+		var s SummaryWithSource
+		var source string
+		if err := rows.Scan(&s.ID, &s.Name, &s.Kind, &s.Description, &s.Builtin, &s.Version, &s.UpdatedAt, &source); err != nil {
+			return nil, err
+		}
+		if s.Kind == KindBerrySnippet {
+			s.Source = source // only a snippet carries its source in the list view
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // --- helpers ---
 
 func scanTemplate(row pgx.Row) (*Template, error) {

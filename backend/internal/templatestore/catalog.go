@@ -15,7 +15,7 @@ import (
 // entry (.js for render_fn, .be for berry_snippet). Data, never a hand-typed const — the same
 // go:embed discipline as internal/berry's manifest.json.
 //
-//go:embed builtins/catalog.json builtins/*.js builtins/*.be
+//go:embed builtins/catalog.json builtins/*.js builtins/*.be builtins/*.png
 var builtinsFS embed.FS
 
 // seedAdvisoryLock is the constant key SeedBuiltins holds for the duration of its tx, so concurrent
@@ -35,6 +35,10 @@ type catalogEntry struct {
 	EgressAllow    []string          `json:"egress_allow"`
 	SecretBindings []string          `json:"secret_bindings"`
 	TriggerConfig  json.RawMessage   `json:"trigger_config"`
+	// PreviewFixture names a sibling PNG (in builtins/) that IS this builtin's gallery preview: a fetch
+	// builtin whose live render would egress-deny to the error frame serves this curated "Beispiel"
+	// render instead (§4.5a / E-A33-6). Empty ⇒ the preview is a live render.
+	PreviewFixture string `json:"preview_fixture"`
 }
 
 // SeedResult reports the outcome of a SeedBuiltins run. Unchanged>0 with Inserted==Updated==0 on a

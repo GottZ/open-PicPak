@@ -209,6 +209,10 @@ func runServer() {
 	// enqueues a device script / mints a runnable function, RCE-equivalent) is a later wave. Single wiring
 	// source (registerTemplateRoutes); registered before the SPA catch-all.
 	registerTemplateRoutes(mux, pool)
+	// Template preview backend (W-A33.5a): GET /api/templates/{id}/preview (durable PNG cache, ETag/304)
+	// + builtin warmup under a single fleet-slot budget. Same test-render seam as the FaaS test-run arm,
+	// but egress-DENIED (EgressAllow=[]). Kept in the template block so main.go's change stays one line.
+	registerTemplatePreviewRoutes(ctx, mux, pool, env("FAAS_TEST_SOCK", ""))
 
 	// FaaS editor support (A25 W1): the binding READS A24 left to the editor wave — forward
 	// (which function a device renders) + reverse (a function's blast radius, D25.9) + the unbind.

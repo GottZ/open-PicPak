@@ -41,6 +41,22 @@ func (h templateHandlers) list(w http.ResponseWriter, r *http.Request) {
 	kind := q.Get("kind")
 	after, _ := strconv.ParseInt(q.Get("after"), 10, 64)
 	limit, _ := strconv.ParseInt(q.Get("limit"), 10, 64)
+	// ?include=source (§4.5a): the projection carries the berry_snippet source so the gallery can
+	// classify snippet effects without an N+1 of GETs. A page can be 200 × 8191 B ≈ 1.56 MiB, so the
+	// limit is CAPPED at 50 for this heavier projection (design "≤50 gedeckelt", §6) — a requested
+	// limit>50 is clamped, not rejected, so a naive caller still gets a bounded page.
+	if q.Get("include") == "source" {
+		if limit <= 0 || limit > previewSourceListMax {
+			limit = previewSourceListMax
+		}
+		sums, err := templatestore.ListWithSource(r.Context(), h.pool, kind, limit, after)
+		if err != nil {
+			adminhttp.WriteErr(w, r, http.StatusInternalServerError, "internal", "template list failed")
+			return
+		}
+		adminhttp.WriteOK(w, r, map[string]any{"templates": sums})
+		return
+	}
 	sums, err := templatestore.List(r.Context(), h.pool, kind, limit, after)
 	if err != nil {
 		adminhttp.WriteErr(w, r, http.StatusInternalServerError, "internal", "template list failed")
@@ -48,6 +64,10 @@ func (h templateHandlers) list(w http.ResponseWriter, r *http.Request) {
 	}
 	adminhttp.WriteOK(w, r, map[string]any{"templates": sums})
 }
+
+// previewSourceListMax caps the ?include=source page: 200 × 8191 B ≈ 1.56 MiB is too heavy a page, so
+// the source-bearing projection is clamped to 50 rows (design §4.5a / §6).
+const previewSourceListMax = 50
 
 // get — GET /api/templates/{id} (auth): the full template (source + params + trust profile). builtin=true
 // is on the payload so the SPA can badge a prefab row (its editor treats "load" as "duplicate to an
