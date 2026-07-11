@@ -312,6 +312,7 @@
   "onboard.step4": "4 · プロビジョニング",
   "onboard.provision_hint": "デバイスはフラッシュ後、セットアップコンソールにあります（またはトリプルプレスすると、再フラッシュせずに再プロビジョニングできます）。",
   "onboard.url_default_hint": "location.origin から自動入力されました。トークンセグメントをインジェストトークンに置き換えてください。特別な場合のみ別のバックエンドを指定します。",
+  "onboard.url_default_hint_tokenized": "location.origin とインジェストトークンから自動入力されました。特別な場合のみ別のバックエンドを指定します。",
   "onboard.field.serial": "シリアル",
   "onboard.field.ssid": "Wi-Fi SSID",
   "onboard.field.password": "Wi-Fiパスワード",

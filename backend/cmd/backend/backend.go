@@ -270,6 +270,11 @@ func runServer() {
 	// still work (pausability-safe, arm dark).
 	registerOnboardFWRoutes(mux, pool, env("ADMIN_ONBOARD_FW_DIR", ""))
 
+	// Web-USB onboarding defaults (A35.3b): admin-gated GET /api/onboard/defaults serves the fully
+	// tokenized device frame-/C2-URLs so an admin operator does not paste the INGEST_TOKEN by hand. The
+	// token is now HTTP-readable to admins (DECISIONS §A35-W3b: strictly weaker than an admin RCE enqueue).
+	registerOnboardDefaultsRoutes(mux, pool)
+
 	// SSE scaffold (D19.7): live roster/telemetry/log stream. auth-gated (any valid
 	// key, O1) — the generic events mirror the GET read routes. A feature channel
 	// that pushes admin-only data must additionally re-auth on is_admin (§4.5 hook).

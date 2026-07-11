@@ -312,6 +312,7 @@
   "onboard.step4": "4 · Provision",
   "onboard.provision_hint": "The device is in its setup console after a flash (or triple-press it to re-provision without reflashing).",
   "onboard.url_default_hint": "Prefilled from location.origin — replace the token segment with the ingest token. Point elsewhere only for special cases.",
+  "onboard.url_default_hint_tokenized": "Prefilled from location.origin with the ingest token. Point elsewhere only for special cases.",
   "onboard.field.serial": "Serial",
   "onboard.field.ssid": "Wi-Fi SSID",
   "onboard.field.password": "Wi-Fi password",

@@ -21,7 +21,8 @@
   import { validateProvisionFields, hasErrors, type ProvisionFields } from '../../lib/webusb/validate'
   import { buildEnrollBody, isEnrollSuccess, canEnroll, enrollNeedsConfirm } from '../../lib/webusb/enroll'
   import { webSerialReady } from '../../lib/webusb/support'
-  import { prefilledUrlFields } from '../../lib/onboard/defaults'
+  import { prefilledUrlFields, prefilledFromEndpoint } from '../../lib/onboard/defaults'
+  import type { OnboardDefaultsResponse } from '../../lib/onboard/defaults'
   import type { FlashManifest, LogSink } from '../../lib/webusb/types'
   import type { Device } from '../../lib/api/types'
   import { m } from '../../paraglide/messages.js'
@@ -76,14 +77,28 @@
   const affordance = $derived(mutationAffordance(session.is_admin))
   const enrollAllowed = $derived(canEnroll(session.is_admin, pubkeyHex !== ''))
 
-  // --- prefill (A35.3): under A35's ONE backend, location.origin IS the device endpoint (DECISIONS §A35).
-  // Pre-fill ONLY blank frame-/C2-URL + C2 period from the origin; a value the operator already typed is
-  // never overwritten (prefilledUrlFields guards each field). The token path segment is a clearly-marked
-  // placeholder — INGEST_TOKEN is server-side-only and never reaches the SPA. Fields stay editable. -------
-  onMount(() => {
+  // --- prefill (A35.3 + A35.3b): under A35's ONE backend, location.origin IS the device endpoint
+  // (DECISIONS §A35). Pre-fill ONLY blank frame-/C2-URL + C2 period; a value the operator already typed is
+  // never overwritten. Fallback chain (DECISIONS §A35-W3b): for an ADMIN session, GET /api/onboard/defaults
+  // hands the REAL tokenized URLs (the token is strictly weaker than an admin RCE enqueue); a non-admin
+  // session, or any endpoint failure, keeps the A35.3 origin-PLACEHOLDER path (INGEST_TOKEN stays
+  // server-side-only there). urlsTokenized flips the hint text once real URLs replaced the placeholder. ---
+  let urlsTokenized = $state(false)
+  onMount(async () => {
     const origin = typeof location !== 'undefined' ? location.origin : ''
     if (!origin) return
-    const d = prefilledUrlFields(fields, origin)
+    let d = prefilledUrlFields(fields, origin) // A35.3 placeholder base
+    if (session.is_admin) {
+      try {
+        const resp = await apiFetch<OnboardDefaultsResponse>(
+          '/api/onboard/defaults?origin=' + encodeURIComponent(origin),
+        )
+        d = prefilledFromEndpoint(fields, resp, origin) // real token fills blanks; blank payload → placeholder
+        urlsTokenized = !!(resp.frame_url || resp.c2_url)
+      } catch {
+        /* keep the placeholder base — endpoint dark or unreachable */
+      }
+    }
     fields.frameUrl = d.frameUrl
     fields.c2Url = d.c2Url
     fields.c2PeriodSeconds = d.c2PeriodSeconds
@@ -339,7 +354,7 @@
         {#if fieldErrors.frameUrl}<span class="fielderr">{fieldErrors.frameUrl}</span>{/if}
         <label>{m['onboard.field.c2_url']()}<input bind:value={fields.c2Url} placeholder="https://…" /></label>
         {#if fieldErrors.c2Url}<span class="fielderr">{fieldErrors.c2Url}</span>{/if}
-        <p class="hint urlhint">{m['onboard.url_default_hint']()}</p>
+        <p class="hint urlhint">{urlsTokenized ? m['onboard.url_default_hint_tokenized']() : m['onboard.url_default_hint']()}</p>
         <label>{m['onboard.field.c2_period']()}<input bind:value={fields.c2PeriodSeconds} placeholder="1800" /></label>
         <label>{m['onboard.field.wake']()}<input bind:value={fields.wakeSeconds} placeholder={m['onboard.ph_optional']()} /></label>
       </div>

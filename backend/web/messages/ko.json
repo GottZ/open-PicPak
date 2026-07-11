@@ -312,6 +312,7 @@
   "onboard.step4": "4 · 프로비저닝",
   "onboard.provision_hint": "기기는 플래시 후 설정 콘솔 상태입니다 (또는 세 번 눌러 다시 플래시하지 않고 재프로비저닝).",
   "onboard.url_default_hint": "location.origin에서 자동 입력됨 — 토큰 세그먼트를 인제스트 토큰으로 바꾸세요. 특별한 경우에만 다른 백엔드를 지정하세요.",
+  "onboard.url_default_hint_tokenized": "location.origin과 인제스트 토큰으로 자동 입력됨. 특별한 경우에만 다른 백엔드를 지정하세요.",
   "onboard.field.serial": "시리얼",
   "onboard.field.ssid": "Wi-Fi SSID",
   "onboard.field.password": "Wi-Fi 비밀번호",

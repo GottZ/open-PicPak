@@ -46,6 +46,38 @@ export function onboardUrlDefaults(origin: string): OnboardUrlDefaults {
 
 const isBlank = (v: string | undefined): boolean => (v ?? '').trim() === ''
 
+/** Shape of GET /api/onboard/defaults (A35.3b): the tokenized device URLs an ADMIN session may read. */
+export interface OnboardDefaultsResponse {
+  frame_url: string
+  c2_url: string
+  c2_period_s: number | string
+}
+
+/**
+ * A35.3b fallback chain (Endpoint → Placeholder). Resolve frame-/C2-URL + C2 period from the admin
+ * endpoint's tokenized payload, filling ONLY blank fields; any field the endpoint left empty (feature
+ * dark: INGEST_TOKEN unset ⇒ blank URLs) falls back to the origin PLACEHOLDER path, and a value the
+ * operator already typed is never overwritten. So a partial or empty payload degrades cleanly to the
+ * exact A35.3 behaviour instead of clearing a field.
+ */
+export function prefilledFromEndpoint(
+  fields: PrefillableUrlFields,
+  resp: OnboardDefaultsResponse,
+  origin: string,
+): OnboardUrlDefaults {
+  const ph = onboardUrlDefaults(origin) // placeholder fallback for any field the endpoint left blank
+  const period = String(resp.c2_period_s ?? '').trim()
+  const frame = isBlank(resp.frame_url) ? ph.frameUrl : resp.frame_url
+  const c2 = isBlank(resp.c2_url) ? ph.c2Url : resp.c2_url
+  return {
+    frameUrl: isBlank(fields.frameUrl) ? frame : fields.frameUrl,
+    c2Url: isBlank(fields.c2Url) ? c2 : fields.c2Url,
+    c2PeriodSeconds: isBlank(fields.c2PeriodSeconds)
+      ? (isBlank(period) ? ph.c2PeriodSeconds : period)
+      : (fields.c2PeriodSeconds as string),
+  }
+}
+
 /**
  * Resolve the frame-/C2-URL + C2 period, filling ONLY blank fields from the origin-derived defaults; a
  * value the operator already typed is returned unchanged (never overwritten). The caller applies the
