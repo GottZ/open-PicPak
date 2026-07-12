@@ -1,12 +1,14 @@
 <script lang="ts">
-  // /settings area shell (design 02-settings-spa §4/§5 B5/§8 E4, W2) — replaces the
-  // AreaPlaceholder slot for '/settings' (routes/index.ts). Unlike every other
-  // operator area, JEDE Secrets-Route inkl. LIST ist admin-gated (secrets_api.go,
-  // backend.go:178-182) — a non-admin's GET /api/secrets 403s. Rendering that 403
-  // as an empty Resource error row would read as "no secrets" (B5). This shell is
-  // the fail-closed fix: it holds the admin-gate state and mounts SecretsPanel
-  // ONLY for a confirmed admin; a confirmed non-admin gets an explicit
-  // "needs admin" state, never a bare/empty table.
+  // /settings area shell (design 02-settings-spa §4/§5 B5/§8 E4, W2/W4) — replaces
+  // the AreaPlaceholder slot for '/settings' (routes/index.ts). Unlike every other
+  // operator area, JEDE Secrets- UND Token-Route inkl. LIST ist admin-gated
+  // (secrets_api.go / backend.go:178-182; token_http.go:26-28 registerTokenRoutes,
+  // alle drei RequireAdmin) — a non-admin's GET /api/secrets or GET /api/tokens
+  // 403s. Rendering that 403 as an empty Resource error row would read as "no
+  // secrets"/"no tokens" (B5). This shell is the fail-closed fix: it holds the
+  // admin-gate state and mounts SecretsPanel + TokensPanel ONLY for a confirmed
+  // admin; a confirmed non-admin gets an explicit "needs admin" state, never a
+  // bare/empty table.
   //
   // RESTORE-ORDNUNG (§5 B5 restoring-Unterscheidung, §8 E4): session.is_admin is
   // `$derived(this.whoami?.is_admin ?? false)` (auth.svelte.ts:22) and falls back
@@ -16,11 +18,12 @@
   // resolves. The gate below is REACTIVE (a template {#if} bound directly to the
   // $derived fields, never a one-shot read like FunctionsEditor.svelte:61's
   // `if (session.is_admin)` at module scope): while `session.restoring` it renders
-  // a neutral idle state; SecretsPanel — and therefore its LIST-load — mounts only
-  // AFTER whoami has resolved, so a non-admin→admin transition self-heals without
-  // ever having rendered the locked state to begin with.
+  // a neutral idle state; SecretsPanel/TokensPanel — and therefore their LIST-
+  // loads — mount only AFTER whoami has resolved, so a non-admin→admin transition
+  // self-heals without ever having rendered the locked state to begin with.
   import { session } from '../../lib/auth.svelte'
   import SecretsPanel from './SecretsPanel.svelte'
+  import TokensPanel from './TokensPanel.svelte'
   import DiagnosticsPanel from './DiagnosticsPanel.svelte'
   import { m } from '../../paraglide/messages.js'
 </script>
@@ -35,6 +38,7 @@
     <p class="state muted" aria-busy="true">{m['app.restoring']()}</p>
   {:else if session.is_admin}
     <SecretsPanel />
+    <TokensPanel />
   {:else}
     <p class="state needs-admin" role="alert">{m['settings.needs_admin']()}</p>
   {/if}

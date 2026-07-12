@@ -8,15 +8,17 @@ import { describe, expect, it } from 'vitest'
 import settingsHomeSrc from './SettingsHome.svelte?raw'
 import secretsPanelSrc from './SecretsPanel.svelte?raw'
 import diagnosticsPanelSrc from './DiagnosticsPanel.svelte?raw'
+import tokensPanelSrc from './TokensPanel.svelte?raw'
 
 // N4 — {@html} ban (§5 B4/B6). Muster ota.test.ts's sibling gate; the AST gate
 // (scripts/lint-no-html.ts) covers every .svelte file structurally, this pins it
 // locally at the settings sources too.
 describe('Settings sources never render an operator string via {@html} (B4/B6, N4)', () => {
-  it('SettingsHome, SecretsPanel and DiagnosticsPanel carry no {@html} directive', () => {
+  it('SettingsHome, SecretsPanel, DiagnosticsPanel and TokensPanel carry no {@html} directive', () => {
     expect(settingsHomeSrc).not.toMatch(/\{@html[\s(]/)
     expect(secretsPanelSrc).not.toMatch(/\{@html[\s(]/)
     expect(diagnosticsPanelSrc).not.toMatch(/\{@html[\s(]/)
+    expect(tokensPanelSrc).not.toMatch(/\{@html[\s(]/)
   })
 })
 
@@ -179,5 +181,145 @@ describe('SecretsPanel meta table never renders value/length/fingerprint (§5 B3
 describe('SecretsPanel LIST-load fires on mount, not eagerly at module scope (§4/§8 E4)', () => {
   it('secrets.load() is called from onMount, mirroring the admin-gated mount ordering', () => {
     expect(secretsPanelSrc).toMatch(/onMount\(\(\) => void secrets\.load\(\)\)/)
+  })
+})
+
+// --- W4 (API-Token-Panel) ---------------------------------------------------------------------
+
+// Platzierungs-Pin analog B3 (dort: DiagnosticsPanel MUSS ausserhalb des is_admin-Zweigs sitzen, weil
+// GET /api/config auth-only ist). Hier ist der Kontrapunkt: ALLE DREI Token-Routen sind RequireAdmin
+// (token_http.go:26-28) — TokensPanel MUSS also INNERHALB des {:else if session.is_admin}-Zweigs sitzen,
+// nach SecretsPanel, wie SecretsPanel selbst. Ein TokensPanel ausserhalb dieses Zweigs waere die B5-
+// Falle: ein Nicht-Admin bekaeme auf GET /api/tokens ein 403, das als leere Tabelle liest wie "keine
+// Tokens" statt einer ehrlichen Sperre.
+describe('SettingsHome mounts TokensPanel inside the session.is_admin branch, after SecretsPanel (RequireAdmin, Muster B5)', () => {
+  it('<SecretsPanel /> is immediately followed by <TokensPanel /> inside {:else if session.is_admin}', () => {
+    expect(settingsHomeSrc).toMatch(/\{:else if session\.is_admin\}\s*<SecretsPanel \/>\s*<TokensPanel \/>/)
+  })
+
+  it('the trailing {:else} branch (confirmed non-admin) never mounts TokensPanel', () => {
+    const elseIdx = settingsHomeSrc.lastIndexOf('{:else}')
+    const endIdx = settingsHomeSrc.indexOf('{/if}', elseIdx)
+    const needsAdminBlock = settingsHomeSrc.slice(elseIdx, endIdx)
+    expect(needsAdminBlock).not.toMatch(/TokensPanel/)
+  })
+})
+
+describe('TokensPanel never drafts the minted token and clears the mint form on success (§7-W4, N2/N3)', () => {
+  it('imports neither saveDraft nor loadDraft (the minted token is never persisted to localStorage)', () => {
+    expect(tokensPanelSrc).not.toMatch(/^import\s.*\b(saveDraft|loadDraft)\b/m)
+  })
+
+  it('doMint sets mintedToken from the response before notifying success', () => {
+    const fnStart = tokensPanelSrc.indexOf('async function doMint')
+    const fn = tokensPanelSrc.slice(fnStart, tokensPanelSrc.indexOf('\n  }\n', fnStart))
+    const mintedIdx = fn.search(/mintedToken = \{ label: res\.label, token: res\.token \}/)
+    const notifyIdx = fn.indexOf('notify.success')
+    expect(mintedIdx).toBeGreaterThan(-1)
+    expect(notifyIdx).toBeGreaterThan(-1)
+  })
+
+  // N2 — the load-bearing negative probe (§7-W4 once-shown): the success toast is built from
+  // {label: res.label} ONLY — the minted plaintext (res.token) must never be interpolated into a
+  // notify.*/log call. Live-verified (§ report): temporarily changing the notify.success call to
+  // interpolate res.token makes the second assertion below fail red.
+  it('the mint success toast is built from {label: res.label} only, never from res.token', () => {
+    const fnStart = tokensPanelSrc.indexOf('async function doMint')
+    const fn = tokensPanelSrc.slice(fnStart, tokensPanelSrc.indexOf('\n  }\n', fnStart))
+    expect(fn).toMatch(/notify\.success\(\s*m\['settings\.tokens\.minted'\]\(\{ label: res\.label \}\)\)/)
+    expect(fn).not.toMatch(/notify\.success\([^)]*\bres\.token\b/)
+  })
+
+  it('the mint form fields (label, scopes, expiresLocal) are reset synchronously after a successful mint', () => {
+    const fnStart = tokensPanelSrc.indexOf('async function doMint')
+    const fn = tokensPanelSrc.slice(fnStart, tokensPanelSrc.indexOf('\n  }\n', fnStart))
+    expect(fn).toMatch(/label = ''/)
+    expect(fn).toMatch(/scopes = \[\]/)
+    expect(fn).toMatch(/expiresLocal = ''/)
+  })
+
+  it('the catch branch maps the error via tokensErrorText/tokenErrorField, never echoing the token', () => {
+    const fnStart = tokensPanelSrc.indexOf('async function doMint')
+    const fn = tokensPanelSrc.slice(fnStart, tokensPanelSrc.indexOf('\n  }\n', fnStart))
+    const catchIdx = fn.indexOf('} catch (err) {')
+    const catchBlock = fn.slice(catchIdx, fn.indexOf('} finally {', catchIdx))
+    expect(catchBlock).toMatch(/mintError = tokensErrorText\(err\)/)
+    expect(catchBlock).toMatch(/mintErrorField = tokenErrorField\(err\)/)
+    expect(catchBlock.split('//')[0]).not.toMatch(/\btoken\b/)
+  })
+})
+
+describe('TokensPanel meta table never renders a token/secret field (Muster SecretsPanel §5 B3)', () => {
+  it('the table row interpolates only label, scopes, status, created_at, expires_at and last_used from TokenMeta', () => {
+    const theadIdx = tokensPanelSrc.indexOf('<thead>')
+    const tbodyEnd = tokensPanelSrc.indexOf('</tbody>')
+    const tableBlock = tokensPanelSrc.slice(theadIdx, tbodyEnd)
+    expect(tableBlock).toMatch(/\{t\.label\}/)
+    expect(tableBlock).toMatch(/t\.scopes\.join/)
+    expect(tableBlock).toMatch(/tokenStatusText\(t\.status\)/)
+    expect(tableBlock).toMatch(/\{t\.created_at\}/)
+    expect(tableBlock).toMatch(/t\.expires_at/)
+    expect(tableBlock).toMatch(/t\.last_used/)
+    expect(tableBlock).not.toMatch(/\.token\b/)
+    expect(tableBlock).not.toMatch(/secret_hash/)
+  })
+})
+
+describe('TokensPanel revoke is two-step armed, not a single-click destroy (Muster SecretsPanel §5 B7/E3)', () => {
+  it('doRevoke arms on the first click and returns before revokeToken() runs', () => {
+    const fnStart = tokensPanelSrc.indexOf('async function doRevoke')
+    const fn = tokensPanelSrc.slice(fnStart, tokensPanelSrc.indexOf('\n  }\n', fnStart))
+    const armIdx = fn.search(/if \(armedId !== id\) \{\s*armedId = id/)
+    const revokeCallIdx = fn.indexOf('await revokeToken(id)')
+    expect(armIdx).toBeGreaterThan(-1)
+    expect(revokeCallIdx).toBeGreaterThan(-1)
+    expect(armIdx).toBeLessThan(revokeCallIdx)
+  })
+
+  it('the armed confirm label names the token label (E3-Muster), not a generic "revoke"', () => {
+    expect(tokensPanelSrc).toMatch(/m\['settings\.tokens\.revoke_confirm'\]\(\{ label: t\.label \}\)/)
+  })
+})
+
+describe('TokensPanel mutations are admin-gated and use mutationAffordance (Muster SecretsPanel)', () => {
+  it('doMint returns before minting when session.is_admin is false', () => {
+    const fnStart = tokensPanelSrc.indexOf('async function doMint')
+    const fn = tokensPanelSrc.slice(fnStart, fnStart + 300)
+    // non-greedy [\s\S]*? (not [^)]*): the guard's condition itself contains a nested-parens call
+    // (mintFormValid({ label, scopes })), so a single-)-stop class would never reach the closing ")".
+    expect(fn).toMatch(/if \(!session\.is_admin[\s\S]*?\)\s*return/)
+  })
+
+  it('doRevoke returns before revoking when session.is_admin is false', () => {
+    const fnStart = tokensPanelSrc.indexOf('async function doRevoke')
+    const fn = tokensPanelSrc.slice(fnStart, fnStart + 300)
+    expect(fn).toMatch(/if \(!session\.is_admin[^)]*\)\s*return/)
+  })
+
+  it('the mint submit button is wired to mutationAffordance (disabled/title/aria-disabled)', () => {
+    const btnStart = tokensPanelSrc.indexOf('type="submit"')
+    const btn = tokensPanelSrc.slice(btnStart, tokensPanelSrc.indexOf("{minting ? m['settings.tokens.minting']()"))
+    expect(btn).toMatch(/title=\{affordance\.disabled \? affordance\.title : ''\}/)
+    expect(btn).toMatch(/aria-disabled=\{affordance\['aria-disabled'\]/)
+  })
+
+  it('the revoke button is wired to mutationAffordance (disabled/title)', () => {
+    const btnStart = tokensPanelSrc.indexOf('class="danger"')
+    const btn = tokensPanelSrc.slice(btnStart, tokensPanelSrc.indexOf('onclick={() => doRevoke(t.id)}'))
+    expect(btn).toMatch(/disabled=\{affordance\.disabled/)
+    expect(btn).toMatch(/title=\{affordance\.disabled \? affordance\.title : ''\}/)
+  })
+})
+
+// N3 — Scope-Pflicht (structural pin; the pure-function coverage lives in lib/settings/tokens.test.ts).
+describe('TokensPanel submit is guarded by mintFormValid — never enabled without a label or a scope (N3)', () => {
+  it('canSubmit is derived from mintFormValid({ label, scopes })', () => {
+    expect(tokensPanelSrc).toMatch(/canSubmit = \$derived\(!affordance\.disabled && !minting && mintFormValid\(\{ label, scopes \}\)\)/)
+  })
+})
+
+describe('TokensPanel LIST-load fires on mount, not eagerly at module scope (Muster SecretsPanel)', () => {
+  it('tokens.load() is called from onMount', () => {
+    expect(tokensPanelSrc).toMatch(/onMount\(\(\) => void tokens\.load\(\)\)/)
   })
 })
