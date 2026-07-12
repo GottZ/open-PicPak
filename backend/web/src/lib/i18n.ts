@@ -48,14 +48,19 @@ export function navLabel(path: string): string {
   }
 }
 
-/** Localized "ships in <doc>" placeholder copy for the not-yet-built areas. */
-export function areaShips(path: string): string {
-  switch (path) {
-    case '/settings':
-      return m['nav.settings.ships']()
-    default:
-      return ''
-  }
+/**
+ * Localized "ships in <doc>" placeholder copy for the not-yet-built areas.
+ * `/settings` was the last area to use this (nav.settings.ships) — design
+ * 02-settings-spa §7-W2 replaced its AreaPlaceholder mount with SettingsHome
+ * (routes/index.ts), and §2 Naht 1 established that AreaPlaceholder.svelte:22
+ * is the ONLY caller of this function, so its case is removed here and the key
+ * deleted from all 9 locales in the same wave (paritätserhaltend). The function
+ * + AreaPlaceholder.svelte stay (no area routes through it today, but it is
+ * generic infra a future not-yet-built area can reuse without rebuilding the
+ * placeholder pattern) — kept minimal: only the dead case is removed.
+ */
+export function areaShips(_path: string): string {
+  return ''
 }
 
 const STORAGE_KEY = 'picpak.locale'
