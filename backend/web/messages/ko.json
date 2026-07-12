@@ -555,6 +555,8 @@
   "ota.fw.upload": "업로드",
   "ota.fw.uploading": "업로드 중 … {pct}%",
   "ota.fw.sha_computing": "SHA-256 계산 중 …",
+  "ota.fw.uploaded": "펌웨어 {version}이(가) 등록되었습니다.",
+  "ota.fw.leave_confirm": "업로드 진행 중 — 정말 나가시겠습니까?",
   "ota.fw.empty": "등록된 펌웨어가 아직 없습니다.",
   "ota.fw.col.version": "버전",
   "ota.fw.col.sha": "SHA-256",

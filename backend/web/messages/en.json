@@ -555,6 +555,8 @@
   "ota.fw.upload": "Upload",
   "ota.fw.uploading": "Uploading … {pct}%",
   "ota.fw.sha_computing": "Computing SHA-256 …",
+  "ota.fw.uploaded": "Firmware {version} registered.",
+  "ota.fw.leave_confirm": "Upload in progress — really leave?",
   "ota.fw.empty": "No firmware registered yet.",
   "ota.fw.col.version": "Version",
   "ota.fw.col.sha": "SHA-256",

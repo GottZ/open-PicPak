@@ -555,6 +555,8 @@
   "ota.fw.upload": "Загрузить",
   "ota.fw.uploading": "Загрузка … {pct}%",
   "ota.fw.sha_computing": "Вычисление SHA-256 …",
+  "ota.fw.uploaded": "Прошивка {version} зарегистрирована.",
+  "ota.fw.leave_confirm": "Идёт загрузка — действительно покинуть страницу?",
   "ota.fw.empty": "Прошивки ещё не зарегистрированы.",
   "ota.fw.col.version": "Версия",
   "ota.fw.col.sha": "SHA-256",

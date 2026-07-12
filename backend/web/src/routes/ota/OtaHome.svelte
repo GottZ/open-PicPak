@@ -4,10 +4,20 @@
   // Channels und Rollouts unter der einen /ota-Area bleiben. W1 mountet nur den
   // Firmware-Tab (Liste read-only); Channels/Rollouts existieren sichtbar als
   // neutraler Platzhalter, bis ihre Panels (W3/W4) landen.
+  //
+  // W2 Tab-Wechsel-Kante (§4.2): a tab click here is a LOCAL {#if}-render swap,
+  // not an sv-router navigation — FirmwarePanel's useDirtyGuard (blockNavigation)
+  // covers a real route-away / tab-close but NOT this in-shell switch, so an
+  // upload mid-flight would be silently unmounted (XHR aborted) by a bare
+  // activeTab reassignment. `uploading` is lifted here via a $bindable prop and
+  // the Channels/Rollouts tab buttons are disabled-with-reason while it is true —
+  // the same disabled-with-reason discipline mutationAffordance uses elsewhere,
+  // applied to navigation instead of a mutation.
   import FirmwarePanel from './FirmwarePanel.svelte'
   import { m } from '../../paraglide/messages.js'
 
   let activeTab = $state<'firmware' | 'channels' | 'rollouts'>('firmware')
+  let firmwareUploading = $state(false)
 </script>
 
 <section class="ota">
@@ -31,6 +41,8 @@
         class="tab"
         class:active={activeTab === 'channels'}
         aria-selected={activeTab === 'channels'}
+        disabled={firmwareUploading}
+        aria-disabled={firmwareUploading}
         onclick={() => (activeTab = 'channels')}
       >
         {m['ota.tab.channels']()}
@@ -41,6 +53,8 @@
         class="tab"
         class:active={activeTab === 'rollouts'}
         aria-selected={activeTab === 'rollouts'}
+        disabled={firmwareUploading}
+        aria-disabled={firmwareUploading}
         onclick={() => (activeTab = 'rollouts')}
       >
         {m['ota.tab.rollouts']()}
@@ -49,7 +63,7 @@
   </header>
 
   {#if activeTab === 'firmware'}
-    <FirmwarePanel />
+    <FirmwarePanel bind:uploading={firmwareUploading} />
   {:else}
     <!-- Channels/Rollouts land in W3/W4 (design 01-ota-spa §7) — a neutral
          pending state, never a blank tab. -->
@@ -92,6 +106,10 @@
     padding: 0.35rem 0.9rem;
     cursor: pointer;
     font-size: 0.875rem;
+  }
+  .tab:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .tab:hover {
     color: var(--fg);

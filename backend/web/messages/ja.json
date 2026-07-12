@@ -555,6 +555,8 @@
   "ota.fw.upload": "アップロード",
   "ota.fw.uploading": "アップロード中 … {pct}%",
   "ota.fw.sha_computing": "SHA-256 を計算中 …",
+  "ota.fw.uploaded": "ファームウェア {version} を登録しました。",
+  "ota.fw.leave_confirm": "アップロード中です — 本当に離れますか？",
   "ota.fw.empty": "登録済みのファームウェアはまだありません。",
   "ota.fw.col.version": "バージョン",
   "ota.fw.col.sha": "SHA-256",

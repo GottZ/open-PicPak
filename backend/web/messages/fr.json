@@ -555,6 +555,8 @@
   "ota.fw.upload": "Envoyer",
   "ota.fw.uploading": "Envoi en cours … {pct}%",
   "ota.fw.sha_computing": "Calcul du SHA-256 …",
+  "ota.fw.uploaded": "Firmware {version} enregistré.",
+  "ota.fw.leave_confirm": "Téléversement en cours — vraiment quitter ?",
   "ota.fw.empty": "Aucun firmware enregistré pour l’instant.",
   "ota.fw.col.version": "Version",
   "ota.fw.col.sha": "SHA-256",

@@ -555,6 +555,8 @@
   "ota.fw.upload": "Hochladen",
   "ota.fw.uploading": "Wird hochgeladen … {pct}%",
   "ota.fw.sha_computing": "SHA-256 wird berechnet …",
+  "ota.fw.uploaded": "Firmware {version} registriert.",
+  "ota.fw.leave_confirm": "Upload läuft — Seite wirklich verlassen?",
   "ota.fw.empty": "Noch keine Firmware registriert.",
   "ota.fw.col.version": "Version",
   "ota.fw.col.sha": "SHA-256",

@@ -555,6 +555,8 @@
   "ota.fw.upload": "Carica",
   "ota.fw.uploading": "Caricamento … {pct}%",
   "ota.fw.sha_computing": "Calcolo SHA-256 …",
+  "ota.fw.uploaded": "Firmware {version} registrato.",
+  "ota.fw.leave_confirm": "Caricamento in corso — uscire comunque?",
   "ota.fw.empty": "Nessun firmware registrato.",
   "ota.fw.col.version": "Versione",
   "ota.fw.col.sha": "SHA-256",

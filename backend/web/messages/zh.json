@@ -555,6 +555,8 @@
   "ota.fw.upload": "上传",
   "ota.fw.uploading": "正在上传 … {pct}%",
   "ota.fw.sha_computing": "正在计算 SHA-256 …",
+  "ota.fw.uploaded": "固件 {version} 已注册。",
+  "ota.fw.leave_confirm": "正在上传 — 确定要离开吗？",
   "ota.fw.empty": "尚未注册任何固件。",
   "ota.fw.col.version": "版本",
   "ota.fw.col.sha": "SHA-256",

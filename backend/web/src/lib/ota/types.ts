@@ -42,6 +42,18 @@ export interface Resolved {
   source: Source
 }
 
+// Source: POST /api/firmware response (ota_http.go:106 registerFirmware —
+// `WriteOK(w, r, map[string]any{"version": version, "sha256": sha, "size_bytes":
+// len(blob)})`). Bewusst OHNE created_at — der Handler liefert es nicht zurück
+// (anders als FirmwareRow aus listFirmware); ein Reload der Liste holt das
+// vollständige Row-Bild nach.
+export interface FirmwareRegistered {
+  success: true
+  version: string
+  sha256: string
+  size_bytes: number
+}
+
 // Response wrappers — every OTA read route envelopes WriteOK {success:true, …}
 // (adminhttp.go:117-141).
 export interface FirmwareResponse {
