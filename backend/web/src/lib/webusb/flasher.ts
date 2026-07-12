@@ -73,6 +73,15 @@ export async function usbJtagHardReset(transport: Transport, log: LogSink = () =
 }
 
 /**
+ * usbJtagHardReset over an already-open Web Serial port (the exit-nudge SOF fallback, design 03 §4.3): wraps
+ * the port into a fresh esptool transport and pulses EN. Keeps the vendor Transport type encapsulated here so
+ * the page never imports the esptool bundle directly. ON-DEVICE (W3).
+ */
+export async function pulseHardReset(port: SerialPort, log: LogSink = () => {}): Promise<void> {
+  await usbJtagHardReset(new Transport(port, false), log)
+}
+
+/**
  * Adapt an already-open Web Serial port into the SerialLink ConsoleSession consumes (opened at CONSOLE_BAUD by
  * the page after the flash transport is released). Holds the reader/writer for the session; close() releases
  * them so the port can be re-opened.

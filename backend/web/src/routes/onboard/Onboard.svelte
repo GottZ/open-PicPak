@@ -12,11 +12,13 @@
     Flasher,
     manifestFlashBytes,
     webSerialLink,
+    pulseHardReset,
     CONSOLE_BAUD,
     ESPRESSIF_USB_VID,
     ESP_IMAGE_MAGIC,
   } from '../../lib/webusb/flasher'
   import { ConsoleSession } from '../../lib/webusb/console'
+  import { nudgeDeviceExit, type NudgeLink, type NudgeOutcome } from '../../lib/webusb/exitNudge'
   import { runProvision } from '../../lib/webusb/provision'
   import { validateProvisionFields, hasErrors, type ProvisionFields } from '../../lib/webusb/validate'
   import { buildEnrollBody, isEnrollSuccess, canEnroll, enrollNeedsConfirm } from '../../lib/webusb/enroll'
@@ -60,6 +62,7 @@
   let pubkeyHex = $state('')
   let enrolled = $state(false)
   let bondState = $state<'idle' | 'waiting' | 'bonded'>('idle')
+  let nudgeState = $state<'idle' | 'running' | NudgeOutcome>('idle')
 
   // --- USB ident (A26.10): what the post-connect flash read found. Pure display + prefill source;
   // reading is fail-open (a null half just shows "unknown"). The c2_sk private key is deliberately
@@ -318,11 +321,65 @@
       }
       enrolled = true
       notify.success(m['onboard.notify.enrolled']({ action: res.action }))
+      // C1 (design 03 §4.3): the device is still trapped in its setup console and would never poll. Nudge it
+      // out NOW — after the pubkey landed on the server (POST above), before pollBond — so its FIRST poll
+      // finds the registered key and bonds inside the 180 s window. pollBond runs regardless of the outcome
+      // ('failed' included): the device can still bond later, e.g. via a firmware self-exit.
+      nudgeState = 'running'
+      nudgeState = await nudgeDeviceExit({ reopen: nudgeReopen, hardReset: nudgeHardReset, log })
       void pollBond()
     } catch (e) {
       notify.error(toApiError(e))
     } finally {
       busy = false
+    }
+  }
+
+  // --- exit-nudge transports (C1): the deps injected into nudgeDeviceExit. Same reopen pattern as
+  // provision() (stale handle after USB re-enumeration → re-fetch the authorized port; never requestPort —
+  // no fresh user gesture here). The reset fallback reopens the port only for the pulse. -----------------
+  async function openConsolePort(): Promise<SerialPort> {
+    let p = port ?? (await findPicpakPort())
+    if (!p) throw new Error('no authorized PicPak port')
+    try {
+      await p.open({ baudRate: CONSOLE_BAUD })
+    } catch {
+      p = await findPicpakPort()
+      if (!p) throw new Error('no authorized PicPak port')
+      await p.open({ baudRate: CONSOLE_BAUD })
+    }
+    port = p
+    return p
+  }
+
+  async function nudgeReopen(): Promise<NudgeLink> {
+    const p = await openConsolePort()
+    const link = webSerialLink(p)
+    const cs = new ConsoleSession(link, log)
+    cs.start()
+    return {
+      sendCommand: (line, opts) => cs.sendCommand(line, opts),
+      close: async () => {
+        await link.close()
+        try {
+          await p.close()
+        } catch {
+          /* already closed */
+        }
+      },
+    }
+  }
+
+  async function nudgeHardReset(): Promise<void> {
+    const p = await openConsolePort()
+    try {
+      await pulseHardReset(p, log)
+    } finally {
+      try {
+        await p.close()
+      } catch {
+        /* already closed */
+      }
     }
   }
 
@@ -435,6 +492,10 @@
       <button onclick={enroll} disabled={!enrollAllowed || busy} title={affordance.title} aria-disabled={affordance['aria-disabled']}>
         {m['onboard.enroll_btn']()}
       </button>
+      {#if nudgeState === 'running'}<span class="hint">{m['onboard.nudge.running']()}</span>{/if}
+      {#if nudgeState === 'refresh'}<span class="ok">{m['onboard.nudge.refresh']()}</span>{/if}
+      {#if nudgeState === 'hard-reset'}<span class="ok">{m['onboard.nudge.hard_reset']()}</span>{/if}
+      {#if nudgeState === 'failed'}<span class="hint">{m['onboard.nudge.failed']()}</span>{/if}
       {#if bondState === 'waiting'}<span class="hint">{m['onboard.waiting_bond']()}</span>{/if}
       {#if bondState === 'bonded'}<span class="ok">{m['onboard.bonded']()}</span>{/if}
     </li>
