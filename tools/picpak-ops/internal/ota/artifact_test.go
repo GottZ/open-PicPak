@@ -19,7 +19,7 @@ func repoRoot(t *testing.T) string {
 	return root
 }
 
-// TestScanArtifact reproduces the known version (0.6.2) and the known lowercase sha256
+// TestScanArtifact reproduces the known version (0.7.0) and the known lowercase sha256
 // of the built app binary. It skips on an unbuilt checkout (no firmware/build), matching
 // the build axis's real-tree tests.
 func TestScanArtifact(t *testing.T) {
@@ -39,8 +39,8 @@ func TestScanArtifact(t *testing.T) {
 		t.Fatalf("ScanArtifact: %v", err)
 	}
 
-	const wantVer = "0.6.2"
-	const wantSHA = "ae38392fbed513cecfee4049aafddb38df364f38cf08d7325b50a8fe9e1e2f0f"
+	const wantVer = "0.7.0"
+	const wantSHA = "36d4741b7789a4c0f25ffc2006c420bfa89415e078df04ef90c77cc5357c47d2"
 	if art.Version != wantVer {
 		t.Errorf("version = %q, want %q", art.Version, wantVer)
 	}

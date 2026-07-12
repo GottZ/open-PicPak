@@ -44,8 +44,8 @@ func TestVerify_RealArtifacts(t *testing.T) {
 	if set.AppSHA256 != want {
 		t.Fatalf("app sha256 mismatch: verify=%s independent=%s", set.AppSHA256, want)
 	}
-	if set.Version != "0.6.2" {
-		t.Errorf("expected firmware version 0.6.2, got %q", set.Version)
+	if set.Version != "0.7.0" {
+		t.Errorf("expected firmware version 0.7.0, got %q", set.Version)
 	}
 
 	// Offset cross-check evidence: every config offset resolves to the same file the
