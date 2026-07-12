@@ -574,6 +574,8 @@
   "ota.channel.default_set": "{name}: значение по умолчанию установлено на {version}.",
   "ota.channel.error.unknown_version": "Неизвестная версия.",
   "ota.channel.error.not_found": "Канал не найден.",
+  "ota.channel.versions_older": "Показать старые версии",
+  "ota.channel.versions_recent": "Показать только последние",
   "ota.rollout.heading": "Раскатки",
   "ota.rollout.target.fleet": "Раскатка на весь парк (все устройства канала)",
   "ota.rollout.target.device": "Одно устройство",

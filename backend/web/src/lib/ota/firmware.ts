@@ -71,11 +71,14 @@ export function fwGuardText(reason: FwGuardReason): string {
 }
 
 /**
- * Lokalisierter Text für eine Server-Upload-Ablehnung (§4.5), geket auf den
- * Envelope-`code` (ApiError.details['code'], Fallback e.code) statt auf den
- * HTTP-Status — so tragen `duplicate_version` 409 und `sha_mismatch` 422
- * unterscheidbare Meldungen. Fallback für Codes ohne dedizierten OTA-String:
- * die rohe ApiError-Message.
+ * Lokalisierter Text für eine Server-Upload-/Mutations-Ablehnung (§4.5), geket
+ * auf den Envelope-`code` (ApiError.details['code'], Fallback e.code) statt auf
+ * den HTTP-Status — so tragen `duplicate_version` 409 und `sha_mismatch` 422
+ * unterscheidbare Meldungen. Ein Helper für ALLE OTA-Panels (§4.3 "erweitere
+ * ihn statt einen zweiten Helper zu bauen"): `unknown_version`/`not_found`
+ * kommen von `PUT /api/channels/{name}` (ota_http.go:143,151, §4.3), die
+ * übrigen Codes vom Firmware-Upload. Fallback für Codes ohne dedizierten
+ * OTA-String: die rohe ApiError-Message.
  */
 export function otaErrorText(err: unknown): string {
   const e = toApiError(err)
@@ -91,6 +94,10 @@ export function otaErrorText(err: unknown): string {
       return m['ota.fw.error.invalid_version']()
     case 'blob_too_large':
       return m['ota.fw.error.too_large']()
+    case 'unknown_version':
+      return m['ota.channel.error.unknown_version']()
+    case 'not_found':
+      return m['ota.channel.error.not_found']()
     default:
       return e.message
   }

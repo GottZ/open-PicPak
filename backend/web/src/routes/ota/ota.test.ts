@@ -8,11 +8,43 @@
 import { describe, expect, it } from 'vitest'
 import otaHomeSrc from './OtaHome.svelte?raw'
 import firmwarePanelSrc from './FirmwarePanel.svelte?raw'
+import channelPanelSrc from './ChannelPanel.svelte?raw'
 
 describe('OTA panels never render device/operator-sourced strings via {@html} (B6)', () => {
-  it('OtaHome and FirmwarePanel carry no {@html} directive', () => {
+  it('OtaHome, FirmwarePanel and ChannelPanel carry no {@html} directive', () => {
     // match the DIRECTIVE form `{@html <expr>}` (whitespace/paren after @html), not a doc-comment `{@html}`
     expect(otaHomeSrc).not.toMatch(/\{@html[\s(]/)
     expect(firmwarePanelSrc).not.toMatch(/\{@html[\s(]/)
+    expect(channelPanelSrc).not.toMatch(/\{@html[\s(]/)
+  })
+})
+
+// W3 — ChannelPanel Nicht-Admin-Negativ-Probe (design 01-ota-spa §7-W3): "als
+// Nicht-Admin ist der Set-Button disabled mit Reason-Title (affordance) — erst
+// ohne mutationAffordance rot (Button aktiv), dann grün." No component-render
+// harness (@testing-library/svelte) exists in this repo (grep over src turns up
+// none); every other panel pins its structural invariants via source-string
+// assertions (the B6 block above), so this probe follows the same convention:
+// it greps the ACTUAL wired-up JSX/attribute strings rather than re-describing
+// them, so a regression (e.g. someone dropping the affordance off the button,
+// or the handler guard) turns the test red.
+describe('ChannelPanel Set-Default is admin-gated (§5 B1)', () => {
+  it('the Set button is wired to mutationAffordance (disabled/title/aria-disabled)', () => {
+    // the button element between `{m['ota.channel.set']()}` and its opening tag
+    const setButton = channelPanelSrc.slice(
+      channelPanelSrc.indexOf('onclick={() => setDefault('),
+      channelPanelSrc.indexOf("{m['ota.channel.set']()}"),
+    )
+    expect(setButton).toMatch(/disabled=\{affordance\.disabled/)
+    expect(setButton).toMatch(/title=\{affordance\.disabled \? affordance\.title : ''\}/)
+    expect(setButton).toMatch(/aria-disabled=\{affordance\['aria-disabled'\]\}/)
+  })
+
+  it('setDefault() returns before mutating when session.is_admin is false (handler guard, §5 B1)', () => {
+    const fn = channelPanelSrc.slice(
+      channelPanelSrc.indexOf('async function setDefault'),
+      channelPanelSrc.indexOf('async function setDefault') + 400,
+    )
+    expect(fn).toMatch(/if \(!session\.is_admin[^)]*\)\s*return/)
   })
 })

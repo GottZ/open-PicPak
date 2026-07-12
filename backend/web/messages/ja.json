@@ -574,6 +574,8 @@
   "ota.channel.default_set": "{name}: デフォルトを {version} に設定しました。",
   "ota.channel.error.unknown_version": "不明なバージョンです。",
   "ota.channel.error.not_found": "チャンネルが見つかりません。",
+  "ota.channel.versions_older": "古いバージョンを表示",
+  "ota.channel.versions_recent": "最新のみ表示",
   "ota.rollout.heading": "ロールアウト",
   "ota.rollout.target.fleet": "フリート・ロールアウト(チャンネル内の全デバイス)",
   "ota.rollout.target.device": "単一デバイス",

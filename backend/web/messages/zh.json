@@ -574,6 +574,8 @@
   "ota.channel.default_set": "{name}：默认版本已设为 {version}。",
   "ota.channel.error.unknown_version": "未知版本。",
   "ota.channel.error.not_found": "未找到该频道。",
+  "ota.channel.versions_older": "显示旧版本",
+  "ota.channel.versions_recent": "仅显示最新版本",
   "ota.rollout.heading": "分发",
   "ota.rollout.target.fleet": "全群分发（频道内所有设备）",
   "ota.rollout.target.device": "单个设备",

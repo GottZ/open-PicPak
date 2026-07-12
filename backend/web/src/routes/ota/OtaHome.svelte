@@ -1,9 +1,9 @@
 <script lang="ts">
   // /ota operator area shell (design 01-ota-spa §4, Muster MediaHome.svelte:50,
   // 170-196): EIN Route-Slot, in-Shell-Tabs statt Route-Split, damit Firmware,
-  // Channels und Rollouts unter der einen /ota-Area bleiben. W1 mountet nur den
-  // Firmware-Tab (Liste read-only); Channels/Rollouts existieren sichtbar als
-  // neutraler Platzhalter, bis ihre Panels (W3/W4) landen.
+  // Channels und Rollouts unter der einen /ota-Area bleiben. W1 mountete nur den
+  // Firmware-Tab; W3 (diese Welle) hängt ChannelPanel ein. Rollouts existiert
+  // weiterhin sichtbar als neutraler Platzhalter, bis sein Panel (W4) landet.
   //
   // W2 Tab-Wechsel-Kante (§4.2): a tab click here is a LOCAL {#if}-render swap,
   // not an sv-router navigation — FirmwarePanel's useDirtyGuard (blockNavigation)
@@ -12,8 +12,12 @@
   // activeTab reassignment. `uploading` is lifted here via a $bindable prop and
   // the Channels/Rollouts tab buttons are disabled-with-reason while it is true —
   // the same disabled-with-reason discipline mutationAffordance uses elsewhere,
-  // applied to navigation instead of a mutation.
+  // applied to navigation instead of a mutation. This same swap is what lets
+  // ChannelPanel (W3) self-load its firmware Resource instead of taking it as a
+  // prop — the {#if}-swap unmounts/remounts the panel on every tab entry, so
+  // onMount already re-fires fresh each time (see ChannelPanel.svelte header).
   import FirmwarePanel from './FirmwarePanel.svelte'
+  import ChannelPanel from './ChannelPanel.svelte'
   import { m } from '../../paraglide/messages.js'
 
   let activeTab = $state<'firmware' | 'channels' | 'rollouts'>('firmware')
@@ -64,9 +68,11 @@
 
   {#if activeTab === 'firmware'}
     <FirmwarePanel bind:uploading={firmwareUploading} />
+  {:else if activeTab === 'channels'}
+    <ChannelPanel />
   {:else}
-    <!-- Channels/Rollouts land in W3/W4 (design 01-ota-spa §7) — a neutral
-         pending state, never a blank tab. -->
+    <!-- Rollouts lands in W4 (design 01-ota-spa §7) — a neutral pending
+         state, never a blank tab. -->
     <p class="state muted">{m['area.pending']()}</p>
   {/if}
 </section>

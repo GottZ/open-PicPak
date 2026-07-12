@@ -574,6 +574,8 @@
   "ota.channel.default_set": "{name}: valor por defecto establecido en {version}.",
   "ota.channel.error.unknown_version": "Versión desconocida.",
   "ota.channel.error.not_found": "Canal no encontrado.",
+  "ota.channel.versions_older": "Mostrar versiones anteriores",
+  "ota.channel.versions_recent": "Mostrar solo las más recientes",
   "ota.rollout.heading": "Rollouts",
   "ota.rollout.target.fleet": "Rollout de flota (todos los dispositivos del canal)",
   "ota.rollout.target.device": "Un solo dispositivo",
