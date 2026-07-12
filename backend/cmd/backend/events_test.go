@@ -316,6 +316,38 @@ func TestSSEHubTelemetryFanOut(t *testing.T) {
 	}
 }
 
+// --- E2/A6: the `ota` reload-hint fans through the hub ---
+
+// TestPublishOTAFanOut pins the push path (E2/A6): publishOTA — called by the OTA mutation handlers
+// after a successful write — fans one `ota` frame carrying the kind payload to a subscriber, and
+// publishing with NO subscriber is a safe no-op (W4's RolloutPanel subscribes later; the channel must
+// already publish rollout events before any panel listens).
+func TestPublishOTAFanOut(t *testing.T) {
+	life, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := sseConfig{tick: time.Second, ping: time.Second, reauth: time.Second, writeWindow: time.Second, maxConn: 8}
+	eh := &eventsHandler{hub: newTestHub(life, nil, okAuth, cfg)}
+
+	eh.publishOTA(otaKindRollout) // no subscriber yet — must neither block nor panic
+
+	sub, ok := eh.hub.subscribe()
+	if !ok {
+		t.Fatal("subscribe failed")
+	}
+	eh.publishOTA(otaKindFirmware)
+	select {
+	case f := <-sub.ch:
+		if f.name != "ota" {
+			t.Errorf("frame name = %q, want ota", f.name)
+		}
+		if got := string(f.data); got != `{"kind":"firmware"}` {
+			t.Errorf("frame data = %s, want {\"kind\":\"firmware\"}", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no ota frame fanned to the subscriber")
+	}
+}
+
 // --- T8: periodic re-auth ends the stream on revocation ---
 
 func TestEventsReAuthEndsStream(t *testing.T) {

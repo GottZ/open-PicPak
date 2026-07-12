@@ -181,10 +181,16 @@ func runServer() {
 	mux.Handle("GET /api/secrets/{name}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.get))))
 	mux.Handle("DELETE /api/secrets/{name}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(sh.del))))
 
+	// SSE events handler is constructed BEFORE the OTA routes so their mutation handlers can publish
+	// the `ota` reload-hint (E2/A6, design 01-ota-spa §8-OQ2 (b)). Broadcasting to a hub without
+	// subscribers is a no-op, so the early hand-off is order-safe; the route itself mounts below with
+	// the other read surfaces.
+	eh := newEventsHandler(ctx, pool)
+
 	// OTA serving/rollout management (A20): firmware register (admin, blob re-hash), channel default,
 	// rollout CRUD, and the authoritative GET /api/resolve. Reads auth-gated, mutations requireAdmin.
 	// FW_BLOB_DIR is mounted :rw here (register writes), :ro in ingest (serve streams) — §4.7.
-	registerOTARoutes(mux, pool, env("FW_BLOB_DIR", "/fwblobs"))
+	registerOTARoutes(mux, pool, env("FW_BLOB_DIR", "/fwblobs"), eh.publishOTA)
 
 	// Log viewer read surface (A21): keyset query + serials picker + gapless reconstruct, all auth-gated
 	// (read-only, D21.7). Plus the minimal fragment-prune ticker (§4.7) — the fragment table has no
@@ -278,7 +284,7 @@ func runServer() {
 	// SSE scaffold (D19.7): live roster/telemetry/log stream. auth-gated (any valid
 	// key, O1) — the generic events mirror the GET read routes. A feature channel
 	// that pushes admin-only data must additionally re-auth on is_admin (§4.5 hook).
-	eh := newEventsHandler(ctx, pool)
+	// The handler itself is constructed above the OTA routes (E2/A6 reload-hint seam).
 	mux.Handle("GET /api/events", adminhttp.Auth(pool)(http.HandlerFunc(eh.handle)))
 
 	// Root catch-all (design 35 §2): token-dispatch BEFORE the SPA. The ingest Server owns the device

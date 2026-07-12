@@ -17,6 +17,16 @@ export interface RosterSnapshot {
   devices: Device[]
 }
 
+export type OtaKind = 'firmware' | 'channel' | 'rollout'
+/**
+ * `ota` reload-hint (design 01-ota-spa §8-OQ2 (b), E2/A6): WHICH OTA collection
+ * mutated — never the data itself. Panels re-fetch their own Resource via REST,
+ * so the wire stays schema-free and REST stays the single source of truth.
+ */
+export interface OtaChanged {
+  kind: OtaKind
+}
+
 export interface EventHandlers {
   /** Full current roster, sent first on every (re)connect. */
   onSnapshot?: (snapshot: RosterSnapshot) => void
@@ -28,6 +38,8 @@ export interface EventHandlers {
   onLog?: (data: unknown) => void
   /** A device's C2 cursor advanced — payload owned by Doc 23 (the Berry feedback model). */
   onC2Cursor?: (data: unknown) => void
+  /** An OTA collection mutated (E2/A6) — reload-hint; the panel re-fetches its Resource. */
+  onOta?: (hint: OtaChanged) => void
 }
 
 /** Teardown seam — the SAME teardown the 401 interceptor runs (auth.svelte.ts). */
@@ -69,6 +81,9 @@ export function dispatchEvent(
       break
     case 'c2cursor':
       handlers.onC2Cursor?.(data)
+      break
+    case 'ota':
+      handlers.onOta?.(data as OtaChanged)
       break
     case 'error':
       teardown.close()

@@ -22,9 +22,11 @@
   //
   // B6 (§5): `version`/channel `name` are free/DB-sourced strings; every value
   // below renders as a text node ({…}), never {@html} — pinned in ota.test.ts.
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import StateView from '../../lib/StateView.svelte'
   import { apiFetch } from '../../lib/api'
+  import { EventsClient } from '../../lib/events.svelte'
+  import { conn } from '../../lib/conn.svelte'
   import { Resource } from '../../lib/resource.svelte'
   import { session } from '../../lib/auth.svelte'
   import { mutationAffordance } from '../../lib/readonly'
@@ -35,6 +37,16 @@
 
   const channels = new Resource<ChannelsResponse>(() => apiFetch<ChannelsResponse>('/api/channels'))
   const firmware = new Resource<FirmwareResponse>(() => apiFetch<FirmwareResponse>('/api/firmware'))
+
+  // A6 (E2): live `ota` reload-hint — a `channel` hint re-fetches the channel list (another
+  // operator moved a default), a `firmware` hint refreshes the version <select> inventory.
+  // Mount/destroy lifecycle mirrors FirmwarePanel (in-shell tab swap unmounts this panel).
+  let events = $state<EventsClient | null>(null)
+
+  // mirror the live stream status into the shell-wide indicator (D19.14, LogViewer pattern)
+  $effect(() => {
+    conn.status = events?.status ?? 'idle'
+  })
 
   const affordance = $derived(mutationAffordance(session.is_admin))
 
@@ -85,6 +97,18 @@
   onMount(() => {
     void channels.load()
     void firmware.load()
+    events = new EventsClient({
+      onOta: (hint) => {
+        if (hint.kind === 'channel') void channels.reload()
+        if (hint.kind === 'firmware') void firmware.reload()
+      },
+    })
+    void events.connect()
+  })
+
+  onDestroy(() => {
+    events?.close()
+    conn.status = 'idle'
   })
 </script>
 

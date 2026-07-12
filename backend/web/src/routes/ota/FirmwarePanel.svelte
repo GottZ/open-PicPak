@@ -9,10 +9,12 @@
   // vector at fleet scale. Every server-delivered string below renders as a text
   // node ({…}); NEVER {@html}. The AST gate (scripts/lint-no-html.ts) enforces
   // this structurally, and ota.test.ts pins it locally for this panel.
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import StateView from '../../lib/StateView.svelte'
   import { apiFetch } from '../../lib/api'
   import { apiUpload } from '../../lib/api-binary'
+  import { EventsClient } from '../../lib/events.svelte'
+  import { conn } from '../../lib/conn.svelte'
   import { Resource } from '../../lib/resource.svelte'
   import { session } from '../../lib/auth.svelte'
   import { mutationAffordance } from '../../lib/readonly'
@@ -31,6 +33,17 @@
   let { uploading = $bindable(false) }: { uploading?: boolean } = $props()
 
   const firmware = new Resource<FirmwareResponse>(() => apiFetch<FirmwareResponse>('/api/firmware'))
+
+  // A6 (E2): live `ota` reload-hint — another operator's firmware register re-fetches this list
+  // without a manual reload. Created in onMount / closed in onDestroy: the in-shell tab swap
+  // unmounts this panel (OtaHome {#if}), so the subscription lifecycle rides the mount exactly
+  // like the LogViewer's stream does.
+  let events = $state<EventsClient | null>(null)
+
+  // mirror the live stream status into the shell-wide indicator (D19.14, LogViewer pattern)
+  $effect(() => {
+    conn.status = events?.status ?? 'idle'
+  })
 
   const affordance = $derived(mutationAffordance(session.is_admin))
 
@@ -109,6 +122,17 @@
 
   onMount(() => {
     void firmware.load()
+    events = new EventsClient({
+      onOta: (hint) => {
+        if (hint.kind === 'firmware') void firmware.reload()
+      },
+    })
+    void events.connect()
+  })
+
+  onDestroy(() => {
+    events?.close()
+    conn.status = 'idle'
   })
 </script>
 

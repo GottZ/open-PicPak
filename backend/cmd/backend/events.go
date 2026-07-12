@@ -425,6 +425,31 @@ func (h *sseHub) broadcastDelta(d rosterDelta) {
 	h.broadcastJSON("devices", d)
 }
 
+// otaChanged is the `ota` reload-hint payload (design 01-ota-spa §8-OQ2 (b), decision E2): WHICH
+// OTA collection mutated, never the data itself. The panels re-fetch their own REST list on the
+// hint, so the wire stays schema-free and REST stays the single source of truth. Auth tier: the
+// stream is auth-gated (any valid key) and the OTA list reads share that tier (D20.1) — a kind
+// hint discloses nothing an authenticated reader could not already poll.
+type otaChanged struct {
+	Kind string `json:"kind"`
+}
+
+// The otaChanged kinds — one per OTA collection an admin mutation touches.
+const (
+	otaKindFirmware = "firmware"
+	otaKindChannel  = "channel"
+	otaKindRollout  = "rollout"
+)
+
+// publishOTA fans one `ota` reload-hint to every connected operator. Unlike the tick producers
+// this path is PUSH-based: the five OTA mutation handlers (ota_http.go) call it after a successful
+// write, so a second operator's panel converges without the manual reload OQ2 option (a) would
+// have required. Broadcasting to an empty hub is a no-op — rollout events are published before any
+// panel subscribes to them (W4's RolloutPanel lands later).
+func (h *eventsHandler) publishOTA(kind string) {
+	h.hub.broadcastJSON("ota", otaChanged{Kind: kind})
+}
+
 // eventsHandler serves GET /api/events over the shared hub.
 type eventsHandler struct {
 	hub *sseHub

@@ -30,13 +30,18 @@ var (
 type otaHandlers struct {
 	pool    *pgxpool.Pool
 	blobDir string
+	// notify publishes the `ota` SSE reload-hint (eventsHandler.publishOTA, events.go — E2/A6).
+	// Reached only through notifyOTA (nil-safe), so tests that do not observe events pass nil.
+	notify func(kind string)
 }
 
 // registerOTARoutes mounts the 9 OTA serving/rollout-management routes (§4.4). Reads are auth-gated
 // (any valid key); mutations require admin — the exact gating main.go applies to the device/secret
-// routes. Single source of the wiring so main.go and the gating test (T9) can never drift.
-func registerOTARoutes(mux *http.ServeMux, pool *pgxpool.Pool, blobDir string) {
-	h := otaHandlers{pool: pool, blobDir: blobDir}
+// routes. Single source of the wiring so main.go and the gating test (T9) can never drift. notify is
+// the SSE reload-hint seam (E2/A6): every mutation handler publishes its collection kind after a
+// successful write.
+func registerOTARoutes(mux *http.ServeMux, pool *pgxpool.Pool, blobDir string, notify func(kind string)) {
+	h := otaHandlers{pool: pool, blobDir: blobDir, notify: notify}
 	mux.Handle("POST /api/firmware", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(h.registerFirmware))))
 	mux.Handle("GET /api/firmware", adminhttp.Auth(pool)(http.HandlerFunc(h.listFirmware)))
 	mux.Handle("GET /api/channels", adminhttp.Auth(pool)(http.HandlerFunc(h.listChannels)))
@@ -46,6 +51,14 @@ func registerOTARoutes(mux *http.ServeMux, pool *pgxpool.Pool, blobDir string) {
 	mux.Handle("DELETE /api/rollouts/{id}", adminhttp.Auth(pool)(adminhttp.RequireAdmin(http.HandlerFunc(h.deleteRollout))))
 	mux.Handle("GET /api/rollouts", adminhttp.Auth(pool)(http.HandlerFunc(h.listRollouts)))
 	mux.Handle("GET /api/resolve/{serial}", adminhttp.Auth(pool)(http.HandlerFunc(h.resolve)))
+}
+
+// notifyOTA fans the `ota` reload-hint after a SUCCESSFUL mutation — and only then: a refused or
+// failed write must not make every connected panel re-fetch (E2/A6).
+func (h otaHandlers) notifyOTA(kind string) {
+	if h.notify != nil {
+		h.notify(kind)
+	}
 }
 
 // registerFirmware — POST /api/firmware (admin, multipart): version,sha256,blob. Validates format at
@@ -104,6 +117,7 @@ func (h otaHandlers) registerFirmware(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminhttp.WriteOK(w, r, map[string]any{"version": version, "sha256": sha, "size_bytes": len(blob)})
+	h.notifyOTA(otaKindFirmware) // E2/A6: reload-hint after the successful register
 }
 
 func (h otaHandlers) listFirmware(w http.ResponseWriter, r *http.Request) {
@@ -152,6 +166,7 @@ func (h otaHandlers) setChannelDefault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminhttp.WriteOK(w, r, map[string]any{"channel": r.PathValue("name"), "default_version": body.Version})
+	h.notifyOTA(otaKindChannel) // E2/A6
 }
 
 // upsertRollout — POST /api/rollouts (admin): upsert a per-serial pin or the '*' fleet rollout.
@@ -196,6 +211,7 @@ func (h otaHandlers) upsertRollout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminhttp.WriteOK(w, r, map[string]any{"id": id, "serial": body.Serial, "channel": body.Channel, "version": body.Version})
+	h.notifyOTA(otaKindRollout) // E2/A6
 }
 
 // setRolloutState — PATCH /api/rollouts/{id} (admin): active|paused|done.
@@ -225,6 +241,7 @@ func (h otaHandlers) setRolloutState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminhttp.WriteOK(w, r, map[string]any{"id": id, "state": body.State})
+	h.notifyOTA(otaKindRollout) // E2/A6
 }
 
 // deleteRollout — DELETE /api/rollouts/{id} (admin).
@@ -243,6 +260,7 @@ func (h otaHandlers) deleteRollout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminhttp.WriteOK(w, r, map[string]any{"id": id, "deleted": true})
+	h.notifyOTA(otaKindRollout) // E2/A6
 }
 
 func (h otaHandlers) listRollouts(w http.ResponseWriter, r *http.Request) {

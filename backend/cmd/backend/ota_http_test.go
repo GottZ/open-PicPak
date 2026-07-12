@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -80,7 +82,7 @@ func seedOperator(t *testing.T, pool *pgxpool.Pool, token string, isAdmin bool) 
 
 func testHandler(pool *pgxpool.Pool, blobDir string) http.Handler {
 	mux := http.NewServeMux()
-	registerOTARoutes(mux, pool, blobDir)
+	registerOTARoutes(mux, pool, blobDir, nil) // nil notify — these suites do not observe events
 	return adminhttp.WithRequestID(mux)
 }
 
@@ -172,6 +174,71 @@ func TestRegisterFirmwareHTTP_DB(t *testing.T) {
 	body, ct = multipartFirmware(t, "1.0.0", sha, blob)
 	if w := do(h, "POST", "/api/firmware", "admin-tok", body, ct); w.Code != http.StatusConflict {
 		t.Errorf("duplicate version = %d, want 409", w.Code)
+	}
+}
+
+// TestOTAMutationsPublishEvents_DB — E2/A6 (design 01-ota-spa §8-OQ2 (b)): every one of the five OTA
+// mutation handlers publishes exactly one `ota` reload-hint with its collection kind after a successful
+// write, and a REFUSED mutation publishes nothing. Negatively probed: red before the notifyOTA calls
+// were wired into the handlers, green after.
+func TestOTAMutationsPublishEvents_DB(t *testing.T) {
+	pool := dbPool(t)
+	seedOperator(t, pool, "admin-tok", true)
+	var kinds []string // ServeHTTP runs synchronously here — no locking needed
+	mux := http.NewServeMux()
+	registerOTARoutes(mux, pool, t.TempDir(), func(kind string) { kinds = append(kinds, kind) })
+	h := adminhttp.WithRequestID(mux)
+
+	// 1. registerFirmware → firmware
+	blob := []byte("fw-sse-probe")
+	body, ct := multipartFirmware(t, "9.9.9", sha256hex(blob), blob)
+	if w := do(h, "POST", "/api/firmware", "admin-tok", body, ct); w.Code != http.StatusOK {
+		t.Fatalf("register = %d (%s)", w.Code, w.Body.String())
+	}
+	// 2. setChannelDefault → channel
+	if w := do(h, "PUT", "/api/channels/stable", "admin-tok", strings.NewReader(`{"version":"9.9.9"}`), "application/json"); w.Code != http.StatusOK {
+		t.Fatalf("set default = %d (%s)", w.Code, w.Body.String())
+	}
+	// 3. upsertRollout → rollout
+	mustExec(t, pool, `INSERT INTO devices (serial, channel) VALUES ('devsse','stable')`)
+	w := do(h, "POST", "/api/rollouts", "admin-tok", strings.NewReader(`{"serial":"devsse","channel":"stable","version":"9.9.9"}`), "application/json")
+	if w.Code != http.StatusOK {
+		t.Fatalf("upsert rollout = %d (%s)", w.Code, w.Body.String())
+	}
+	var upsert struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &upsert); err != nil {
+		t.Fatal(err)
+	}
+	// 4. setRolloutState → rollout
+	path := "/api/rollouts/" + strconv.FormatInt(upsert.ID, 10)
+	if w := do(h, "PATCH", path, "admin-tok", strings.NewReader(`{"state":"paused"}`), "application/json"); w.Code != http.StatusOK {
+		t.Fatalf("patch state = %d (%s)", w.Code, w.Body.String())
+	}
+	// 5. deleteRollout → rollout
+	if w := do(h, "DELETE", path, "admin-tok", nil, ""); w.Code != http.StatusOK {
+		t.Fatalf("delete = %d (%s)", w.Code, w.Body.String())
+	}
+
+	want := []string{otaKindFirmware, otaKindChannel, otaKindRollout, otaKindRollout, otaKindRollout}
+	if len(kinds) != len(want) {
+		t.Fatalf("published kinds = %v, want %v", kinds, want)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Fatalf("published kinds = %v, want %v", kinds, want)
+		}
+	}
+
+	// A refused mutation publishes NOTHING: unknown serial → 422 (edge existence check), no hint.
+	before := len(kinds)
+	w = do(h, "POST", "/api/rollouts", "admin-tok", strings.NewReader(`{"serial":"ghost01","channel":"stable","version":"9.9.9"}`), "application/json")
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown serial = %d, want 422", w.Code)
+	}
+	if len(kinds) != before {
+		t.Errorf("a refused mutation must not publish, got %v", kinds[before:])
 	}
 }
 

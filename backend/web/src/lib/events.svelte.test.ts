@@ -50,6 +50,15 @@ describe('dispatchEvent', () => {
     expect(onLog).toHaveBeenCalledWith({ line: 'x' })
   })
 
+  it('routes an ota reload-hint to onOta without tearing down (E2/A6)', () => {
+    const t = spies()
+    const onOta = vi.fn()
+    dispatchEvent('ota', { kind: 'rollout' }, { onOta }, t)
+    expect(onOta).toHaveBeenCalledWith({ kind: 'rollout' })
+    expect(t.close).not.toHaveBeenCalled()
+    expect(t.invalidate).not.toHaveBeenCalled()
+  })
+
   it('ignores an unknown event name without tearing down', () => {
     const t = spies()
     dispatchEvent('mystery', {}, {}, t)
