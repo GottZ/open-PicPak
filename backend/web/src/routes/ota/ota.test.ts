@@ -9,13 +9,15 @@ import { describe, expect, it } from 'vitest'
 import otaHomeSrc from './OtaHome.svelte?raw'
 import firmwarePanelSrc from './FirmwarePanel.svelte?raw'
 import channelPanelSrc from './ChannelPanel.svelte?raw'
+import rolloutPanelSrc from './RolloutPanel.svelte?raw'
 
 describe('OTA panels never render device/operator-sourced strings via {@html} (B6)', () => {
-  it('OtaHome, FirmwarePanel and ChannelPanel carry no {@html} directive', () => {
+  it('OtaHome, FirmwarePanel, ChannelPanel and RolloutPanel carry no {@html} directive', () => {
     // match the DIRECTIVE form `{@html <expr>}` (whitespace/paren after @html), not a doc-comment `{@html}`
     expect(otaHomeSrc).not.toMatch(/\{@html[\s(]/)
     expect(firmwarePanelSrc).not.toMatch(/\{@html[\s(]/)
     expect(channelPanelSrc).not.toMatch(/\{@html[\s(]/)
+    expect(rolloutPanelSrc).not.toMatch(/\{@html[\s(]/)
   })
 })
 
@@ -66,5 +68,78 @@ describe('ChannelPanel Set-Default is admin-gated (§5 B1)', () => {
       channelPanelSrc.indexOf('async function setDefault') + 400,
     )
     expect(fn).toMatch(/if \(!session\.is_admin[^)]*\)\s*return/)
+  })
+})
+
+// W4 — RolloutPanel (design 01-ota-spa §4.4/§7 W4). Same source-assertion
+// convention as above (no component-render harness in this repo).
+describe('RolloutPanel delete is two-step armed, not a single-click destroy (§4.4, MediaHome pattern, N1)', () => {
+  // N1 — the load-bearing negative probe: doDelete() MUST arm-and-return on an
+  // unarmed row (armed !== id) BEFORE it ever reaches the DELETE fetch call.
+  // Structurally pinned here: a single click on a fresh row can only set
+  // `armed`, never call apiFetch(..., {method:'DELETE'}) in the same
+  // invocation — verified live (§ report): a version of doDelete() with the
+  // `if (armed !== id) { armed = id; return }` guard removed makes this
+  // assertion fail red, because the DELETE fetch line then appears BEFORE any
+  // armed-check in the function body.
+  it('doDelete arms on the first click and returns before the DELETE fetch call', () => {
+    const fnStart = rolloutPanelSrc.indexOf('async function doDelete')
+    const fn = rolloutPanelSrc.slice(fnStart, rolloutPanelSrc.indexOf('\n  }\n', fnStart))
+    const armIdx = fn.search(/if \(armed !== id\) \{\s*armed = id/)
+    const deleteFetchIdx = fn.indexOf("method: 'DELETE'")
+    expect(armIdx).toBeGreaterThan(-1)
+    expect(deleteFetchIdx).toBeGreaterThan(-1)
+    expect(armIdx).toBeLessThan(deleteFetchIdx) // the arm-and-return guard sits BEFORE the DELETE call
+  })
+
+  it('a second click on the SAME armed row is required to reach the DELETE fetch (armed !== id gate)', () => {
+    const fnStart = rolloutPanelSrc.indexOf('async function doDelete')
+    const fn = rolloutPanelSrc.slice(fnStart, rolloutPanelSrc.indexOf('\n  }\n', fnStart))
+    // the guard must reference the SAME `id` the DELETE call targets, not a
+    // different identifier that would let the check drift from the mutation.
+    expect(fn).toMatch(/if \(armed !== id\)/)
+    expect(fn).toMatch(/`\/api\/rollouts\/\$\{id\}`, \{ method: 'DELETE' \}/)
+  })
+})
+
+describe('RolloutPanel mutations are admin-gated (§5 B1)', () => {
+  it('submitUpsert() returns before POSTing when session.is_admin is false', () => {
+    const fnStart = rolloutPanelSrc.indexOf('async function submitUpsert')
+    const fn = rolloutPanelSrc.slice(fnStart, fnStart + 400)
+    expect(fn).toMatch(/if \(!session\.is_admin[^)]*\)\s*return/)
+  })
+
+  it('setRolloutState() returns before PATCHing when session.is_admin is false', () => {
+    const fnStart = rolloutPanelSrc.indexOf('async function setRolloutState')
+    const fn = rolloutPanelSrc.slice(fnStart, fnStart + 400)
+    expect(fn).toMatch(/if \(!session\.is_admin[^)]*\)\s*return/)
+  })
+
+  it('doDelete() returns before mutating when session.is_admin is false', () => {
+    const fnStart = rolloutPanelSrc.indexOf('async function doDelete')
+    const fn = rolloutPanelSrc.slice(fnStart, fnStart + 400)
+    expect(fn).toMatch(/if \(!session\.is_admin[^)]*\)\s*return/)
+  })
+
+  it('the Create/Upsert button is wired to mutationAffordance (disabled/title/aria-disabled)', () => {
+    const btn = rolloutPanelSrc.slice(
+      rolloutPanelSrc.indexOf('type="submit"'),
+      rolloutPanelSrc.indexOf("{m['ota.rollout.create']()}"),
+    )
+    expect(btn).toMatch(/disabled=\{!canSubmit\}/)
+    expect(btn).toMatch(/title=\{affordance\.disabled \? affordance\.title : ''\}/)
+    expect(btn).toMatch(/aria-disabled=\{affordance\['aria-disabled'\]\}/)
+  })
+})
+
+// A6 — live reload-hint subscription (design 01-ota-spa §8-OQ2 (b), E2), same
+// convention as the FirmwarePanel/ChannelPanel pins above.
+describe('RolloutPanel subscribes to the ota reload-hint (E2/A6)', () => {
+  it('reloads rollouts/channels/firmware on their respective hints and closes on destroy', () => {
+    expect(rolloutPanelSrc).toMatch(/onOta:/)
+    expect(rolloutPanelSrc).toMatch(/hint\.kind === 'rollout'\) void rollouts\.reload\(\)/)
+    expect(rolloutPanelSrc).toMatch(/hint\.kind === 'channel'\) void channels\.reload\(\)/)
+    expect(rolloutPanelSrc).toMatch(/hint\.kind === 'firmware'\) void firmware\.reload\(\)/)
+    expect(rolloutPanelSrc).toMatch(/onDestroy\(\(\) => \{\s*events\?\.close\(\)/)
   })
 })

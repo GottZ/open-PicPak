@@ -13,11 +13,13 @@
   // the Channels/Rollouts tab buttons are disabled-with-reason while it is true —
   // the same disabled-with-reason discipline mutationAffordance uses elsewhere,
   // applied to navigation instead of a mutation. This same swap is what lets
-  // ChannelPanel (W3) self-load its firmware Resource instead of taking it as a
-  // prop — the {#if}-swap unmounts/remounts the panel on every tab entry, so
-  // onMount already re-fires fresh each time (see ChannelPanel.svelte header).
+  // ChannelPanel (W3) / RolloutPanel (W4) self-load their Resources instead of
+  // taking them as props — the {#if}-swap unmounts/remounts the panel on every
+  // tab entry, so onMount already re-fires fresh each time (see ChannelPanel.svelte
+  // header). W4 lands the last tab: no area.pending fallback branch remains.
   import FirmwarePanel from './FirmwarePanel.svelte'
   import ChannelPanel from './ChannelPanel.svelte'
+  import RolloutPanel from './RolloutPanel.svelte'
   import { m } from '../../paraglide/messages.js'
 
   let activeTab = $state<'firmware' | 'channels' | 'rollouts'>('firmware')
@@ -71,9 +73,7 @@
   {:else if activeTab === 'channels'}
     <ChannelPanel />
   {:else}
-    <!-- Rollouts lands in W4 (design 01-ota-spa §7) — a neutral pending
-         state, never a blank tab. -->
-    <p class="state muted">{m['area.pending']()}</p>
+    <RolloutPanel />
   {/if}
 </section>
 
@@ -124,11 +124,5 @@
     color: var(--fg);
     border-color: var(--accent);
     background: rgba(122, 162, 247, 0.1);
-  }
-  .state {
-    margin: 0;
-  }
-  .muted {
-    color: var(--fg-muted);
   }
 </style>

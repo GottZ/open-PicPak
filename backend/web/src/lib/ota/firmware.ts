@@ -77,8 +77,15 @@ export function fwGuardText(reason: FwGuardReason): string {
  * unterscheidbare Meldungen. Ein Helper für ALLE OTA-Panels (§4.3 "erweitere
  * ihn statt einen zweiten Helper zu bauen"): `unknown_version`/`not_found`
  * kommen von `PUT /api/channels/{name}` (ota_http.go:143,151, §4.3), die
- * übrigen Codes vom Firmware-Upload. Fallback für Codes ohne dedizierten
- * OTA-String: die rohe ApiError-Message.
+ * `unknown_serial`/`unknown_channel_or_version`-Codes von `POST /api/rollouts`
+ * (ota_http.go:177-186,190, §4.4, W4), die übrigen Codes vom Firmware-Upload.
+ * Fallback für Codes ohne dedizierten OTA-String: die rohe ApiError-Message.
+ *
+ * ACHTUNG (W4): der generische `not_found`-Case unten ist NUR für Channels
+ * korrekt (§4.3). Der Rollout-404-gone-Pfad (§4.4) MUSS ihn umgehen — siehe
+ * `rolloutErrorText`/`isRolloutGone` in `./rollouts.ts`, die den 404 VOR einem
+ * Aufruf hierher abfangen, sonst zeigt ein gelöschter Rollout fälschlich
+ * "Channel nicht gefunden".
  */
 export function otaErrorText(err: unknown): string {
   const e = toApiError(err)
@@ -98,6 +105,10 @@ export function otaErrorText(err: unknown): string {
       return m['ota.channel.error.unknown_version']()
     case 'not_found':
       return m['ota.channel.error.not_found']()
+    case 'unknown_serial':
+      return m['ota.rollout.error.unknown_serial']()
+    case 'unknown_channel_or_version':
+      return m['ota.rollout.error.unknown_target']()
     default:
       return e.message
   }
