@@ -104,7 +104,9 @@ static void safe_mode(uint8_t count)
     led_blink_start();   /* visible signal: device is in safe mode */
     for (;;) {
         uint32_t ignore = 0;
-        console_run(0, &ignore, true);   /* force_open=long window; re-open on timeout */
+        console_run(0, &ignore, true, true);   /* force_open + forced_setup: safe mode stays
+                                                * strictly disconnect-only -- no command-ready
+                                                * self-exit, no banner churn (design 03 §5 B2) */
         /* console_run can return CONSOLE_PROCEED on timeout -> just stay in safe mode. */
         vTaskDelay(pdMS_TO_TICKS(50));
     }

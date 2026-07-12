@@ -43,6 +43,12 @@ bool         c2_set_period(uint32_t secs);
  * instead of spinning on c2_poll's immediate skip-return. */
 bool         c2_keepawake_active(void);
 
+/* Design 03 §4.1: true when the device is LOCALLY command-ready -- c2_poll's local preconditions
+ * (https c2_url, parseable storage/dev_sn, bonded c2_sk) PLUS the fetch preconditions (wifi creds,
+ * frame url). Gates the console's autonomous self-exit; the server-side enroll state is deliberately
+ * not part of it (not locally checkable). */
+bool         cmd_ready_local(void);
+
 /* C2 long-term identity + session: bonding (the ECDSA keypair) lives in c2key.h; the re-key handshake
  * + session HOTP poll are internal to cmd.c. The legacy bc-composite auth (c2_compute_auth /
  * c2_set_secret) was removed at the Doc-15 cutover. */

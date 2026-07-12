@@ -16,7 +16,13 @@ typedef enum {
  * force_open: keep a long setup window (triple-press OR no config) so the web tool /
  *   CLI can provision; otherwise (config present) only a brief peek window, then a
  *   normal run.
+ * forced_setup: the setup was OPERATOR-forced (triple-press, safe mode) -- the console
+ *   then stays strictly disconnect-only. false = force_open came only from missing
+ *   config; once the device is locally command-ready (cmd_ready_local) the console
+ *   self-exits after a bounded grace window (design 03 §4.1). Passed explicitly
+ *   because force_open alone cannot separate the two origins.
  * boot_count only for the INFO output.
  * sleep_secs_out: on return CONSOLE_SLEEP the sleep duration requested via "SLEEP <s>"
  * (0 = not specified -> caller takes its default). */
-console_action_t console_run(uint32_t boot_count, uint32_t *sleep_secs_out, bool force_open);
+console_action_t console_run(uint32_t boot_count, uint32_t *sleep_secs_out, bool force_open,
+                             bool forced_setup);

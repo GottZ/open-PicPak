@@ -1,4 +1,5 @@
 #include "console.h"
+#include "console_core.h"
 #include "config.h"
 #include "logbuf.h"
 #include "net.h"
@@ -22,6 +23,13 @@
 
 #define CON_LINE_MAX 160
 #define WINDOW_MS    3000      /* brief first-char peek when config already exists */
+/* Self-exit fallback window (design 03 §4.1): once a force-open-for-missing-config console is
+ * locally command-ready (cmd_ready_local), wait this long between commands, then proceed to a
+ * normal run autonomously. Long on purpose -- well above the human enroll latency (enroll is a
+ * separate manual SPA step), so the SPA's explicit REFRESH nudge wins in the normal flow; but
+ * bounded, so an abandoned/hand-provisioned device still reaches run_cycle. A REFRESH cuts the
+ * wait short immediately (read_line returns on input, not only at the timeout). */
+#define FIELD_EXIT_GRACE_MS 90000
 #define CONSOLE_STAY (-1)      /* internal sentinel: command handled, loop continues */
 
 static bool s_io_ready;
@@ -461,7 +469,8 @@ static int handle(char *line, uint32_t boot_count)
     return CONSOLE_STAY;
 }
 
-console_action_t console_run(uint32_t boot_count, uint32_t *sleep_secs_out, bool force_open)
+console_action_t console_run(uint32_t boot_count, uint32_t *sleep_secs_out, bool force_open,
+                             bool forced_setup)
 {
     io_init();
     s_sleep_secs = 0;
@@ -497,9 +506,14 @@ console_action_t console_run(uint32_t boot_count, uint32_t *sleep_secs_out, bool
             printf("> ");
             /* Between commands: the config-exists path uses a short inactivity timeout (3s)
              * to proceed to a normal run. In setup mode (force_open) stay open while a USB
-             * host is attached and give up only on disconnect -- the device never hangs
-             * forever without a host, but the console stays usable as long as one is there. */
-            n = read_line(line, sizeof(line), force_open ? 0 : WINDOW_MS);
+             * host is attached and give up only on disconnect -- UNLESS setup was open only
+             * for missing config (not a triple-press / safe-mode operator: !forced_setup)
+             * and the device is by now locally command-ready: then a long bounded grace
+             * window lets it self-exit into the normal run (design 03 §4.1). Re-evaluated
+             * per command, so a provisioning session arms the window as it completes. */
+            n = read_line(line, sizeof(line),
+                          console_gap_ms(force_open, forced_setup, cmd_ready_local(),
+                                         FIELD_EXIT_GRACE_MS, WINDOW_MS));
             if (n < 0) {
                 printf("\r\n(console timeout -> normal run)\r\n");
                 break;

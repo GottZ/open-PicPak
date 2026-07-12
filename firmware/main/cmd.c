@@ -289,6 +289,38 @@ bool c2_keepawake_active(void)
     return has_url;
 }
 
+/* Design 03 §4.1: local command-ready predicate for the console self-exit (durable safety net).
+ * Deliberately STRICTER than c2_poll's own preconditions -- PLUS the fetch preconditions (wifi +
+ * frame url), because the self-exit lands in run_cycle, which wants to pull an image. The server-
+ * side precondition (pubkey enrolled at the backend) is NOT locally checkable and intentionally
+ * not part of this: a pre-enroll poll just fails its rekey and retries later. */
+bool cmd_ready_local(void)
+{
+    /* WiFi creds + frame URL: mirror app_main's have-check (main.c) -- cfg_load true means
+     * ssid AND url set; otherwise url + multi-WiFi store entries also count. */
+    picpak_cfg_t cfg;
+    bool have = cfg_load(&cfg);
+    if (!have && cfg.url[0] && wifi_store_has_entries()) have = true;
+    if (!have) return false;
+
+    /* c2_url set + https:// only (the C2 response is executed as code -- mirrors c2_poll). */
+    char base[200]; base[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(C2_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t l = sizeof base;
+        if (nvs_get_str(h, "c2_url", base, &l) != ESP_OK) base[0] = '\0';
+        nvs_close(h);
+    }
+    if (base[0] == '\0' || strncmp(base, "https://", 8) != 0) return false;
+
+    /* Device identity: storage/dev_sn JSON envelope must yield a serial (c2_poll's sn param). */
+    char sn[32];
+    if (!c2_device_serial(sn, sizeof sn)) return false;
+
+    /* Bonded locally: 32-B private scalar in NVS (c2key.c checks the exact blob size). */
+    return c2_key_present();
+}
+
 cmd_intent_t c2_poll(uint32_t *sleep_s, bool *ran, uint32_t wait_s)
 {
     if (ran) *ran = false;

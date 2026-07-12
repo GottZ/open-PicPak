@@ -557,8 +557,10 @@ void app_main(void)
         else if (!cfg_is_verified()) show_static_frame(screen_onboarding);
 
         /* Keep the console open (long window) on a triple-press request OR when there
-         * are no usable creds yet; otherwise just a brief 3s peek before a normal run. */
-        cact = console_run(s_boot_count, &console_arg, forced || !have);
+         * are no usable creds yet; otherwise just a brief 3s peek before a normal run.
+         * forced_setup=forced: only the operator-forced console stays disconnect-only;
+         * a missing-config console self-exits once command-ready (design 03 §4.1). */
+        cact = console_run(s_boot_count, &console_arg, forced || !have, forced);
         if (cact == CONSOLE_SLEEP) skip_fetch = true;
     }
     if (forced) cfg_set_force_setup(false);   /* triple-press request consumed */
