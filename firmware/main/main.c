@@ -51,6 +51,17 @@
 #define KEEPALIVE_POLL_MS 100  /* USB/button poll interval in keep-awake mode */
 #define C2_LONGPOLL_S     25   /* keep-awake C2 long-poll hold budget (matches the backend cap); the
                                 * loop checks USB/button after each poll return -> <=this much latency */
+#define REKEY_BACKOFF_MS  10000 /* backoff after a FAST empty c2_poll return (design 03 §4.4/B6): a
+                                 * locally bonded but server-unregistered device fails its rekey
+                                 * instantly (cmd.c rekey-fail -> CMD_INTENT_NONE) and would otherwise
+                                 * tight-loop GET /challenge + POST /rekey for wake_s -> fleet-scale
+                                 * request storm. 10 s = well above one HTTPS roundtrip (~0.5-2 s, so
+                                 * the delay dominates the cycle -> rate capped at ~6 attempts/min per
+                                 * device), well below wake_s (300+ s, so a late enroll is picked up
+                                 * within seconds). A SUCCESSFUL long-poll never pays this delay: the
+                                 * backend holds an empty poll for the full C2_LONGPOLL_S budget, so
+                                 * only the instant-failure path trips the fast-return check below. */
+#define REKEY_FAST_RETURN_MS 2000 /* poll returned quicker than this -> was NOT a held long-poll */
 #define ALWAYS_AWAKE 0         /* field build: deep-sleep between cycles. Set to 1 for a
                                   bench/test build that never sleeps (USB stays reachable;
                                   keep-awake is SOF-dependent and proved unreliable). */
@@ -438,10 +449,20 @@ static uint32_t run_keep_awake(const picpak_cfg_t *cfg, uint32_t wake_s)
              * reboot here can't loop. When C2 is off/unbonded/disconnected we idle-tick instead. */
             if (c2_keepawake_active() && net_is_connected()) {
                 uint32_t c2_sl = 0;
+                int64_t p0 = esp_timer_get_time();
                 cmd_intent_t in = c2_poll(&c2_sl, NULL, C2_LONGPOLL_S);
                 if (in == CMD_INTENT_REBOOT) esp_restart();           /* never returns */
                 if (in == CMD_INTENT_SLEEP)  return c2_sl ? c2_sl : wake_s;
                 if (in == CMD_INTENT_REFRESH) { by_c2_refresh = true; break; }  /* -> run_cycle below */
+                /* Rekey-storm backoff (design 03 §4.4 variant (a), refined; bruchpfad B6): a fast
+                 * NONE return means c2_poll failed BEFORE the server could hold the connection
+                 * (rekey fail on an unregistered device, transport error) -> without a delay this
+                 * inner loop hammers GET /challenge + POST /rekey until wake_s. A held long-poll
+                 * that comes back empty took the full ~C2_LONGPOLL_S and stays delay-free, so the
+                 * healthy bonded cadence (and command-delivery latency) is untouched. */
+                if (in == CMD_INTENT_NONE &&
+                    esp_timer_get_time() - p0 < (int64_t)REKEY_FAST_RETURN_MS * 1000)
+                    vTaskDelay(pdMS_TO_TICKS(REKEY_BACKOFF_MS));
             } else {
                 vTaskDelay(pdMS_TO_TICKS(KEEPALIVE_POLL_MS));
             }
