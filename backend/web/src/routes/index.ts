@@ -70,7 +70,7 @@ export const advancedAreas = (): AreaMeta[] => AREAS.filter((a) => a.tier === 'a
 export const areaRoutes = {
   '/gallery': () => import('./gallery/GalleryHome.svelte'),
   '/fleet': () => import('./fleet/FleetDashboard.svelte'),
-  '/ota': () => import('./AreaPlaceholder.svelte'),
+  '/ota': () => import('./ota/OtaHome.svelte'),
   '/logs': () => import('./logs/LogViewer.svelte'),
   '/berry': () => import('./berry/BerryEditor.svelte'),
   '/functions': () => import('./functions/FunctionsEditor.svelte'),

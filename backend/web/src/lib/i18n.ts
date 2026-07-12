@@ -51,8 +51,6 @@ export function navLabel(path: string): string {
 /** Localized "ships in <doc>" placeholder copy for the not-yet-built areas. */
 export function areaShips(path: string): string {
   switch (path) {
-    case '/ota':
-      return m['nav.ota.ships']()
     case '/settings':
       return m['nav.settings.ships']()
     default:
