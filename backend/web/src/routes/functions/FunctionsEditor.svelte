@@ -33,10 +33,9 @@
     FunctionsResponse,
     FunctionResponse,
     CreateFunctionResponse,
-    SecretsResponse,
     ConfigResponse,
   } from '../../lib/faas/types'
-  import type { Device, DevicesResponse } from '../../lib/api/types'
+  import type { Device, DevicesResponse, SecretsResponse } from '../../lib/api/types'
 
   // FaaS function editor (Design 25, W2) — the CM6 code editor + capability completion + the config forms
   // (trigger / egress / secrets / dither / enabled, Policy=Data over the faas_functions row) + the

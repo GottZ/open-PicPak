@@ -69,20 +69,6 @@ export interface BlastRadiusResponse {
   count: number
 }
 
-// Source: secrets.Meta via GET /api/secrets (secrets_api.go list → {secrets:[Meta]}, admin-only). The
-// binding picker reads NAME only — never value/nonce/ciphertext/fingerprint (Doc 18 D18.3 / D25.7).
-export interface SecretMeta {
-  name: string
-  key_version: number
-  created_at: string
-  rotated_at: string | null
-}
-
-export interface SecretsResponse {
-  success: true
-  secrets: SecretMeta[]
-}
-
 // Source: telemetryHandlers.config via GET /api/config (D22.13). Non-secret SPA config; empty strings
 // when the env is unset (the editor hides the webhook URL then — no hostname baked into the SPA).
 export interface ConfigResponse {
