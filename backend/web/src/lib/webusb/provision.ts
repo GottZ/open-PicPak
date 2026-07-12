@@ -6,6 +6,7 @@
 // mitigation; the durable fix is a firmware BOND-requires-RF guard (Design 26 §8 O7, on-device).
 
 import { ConsoleSession, CONSOLE_TIMEOUT_MS } from './console'
+import { DEFAULT_C2_PERIOD_SECONDS } from '../onboard/defaults'
 import {
   validateProvisionFields,
   hasErrors,
@@ -49,9 +50,24 @@ export interface ProvisionStep {
 }
 
 /**
+ * The E7 default (design 03 §4.2 / §8-E-Period): C2 PERIOD is ALWAYS written. A blank field defaults to the
+ * form's wake interval when set, else DEFAULT_C2_PERIOD_SECONDS — never to the firmware's implicit 0. With
+ * c2_period==0 a tethered device that polled before enroll NEVER retries the bond (cmd.c:282 keep-awake
+ * branch never entered → dead-end, not a slower cadence), so period>0 is a PREREQUISITE of the autonomous
+ * self-exit path (Welle 2); the Welle-3 backoff caps the resulting mis-enroll storm. An explicit operator 0
+ * stays respected (deliberate battery-only choice — the next wake cycle picks the poll up).
+ */
+export function effectiveC2Period(f: ProvisionFields): string {
+  const period = (f.c2PeriodSeconds ?? '').trim()
+  if (period !== '') return period
+  const wake = (f.wakeSeconds ?? '').trim()
+  return wake !== '' ? wake : DEFAULT_C2_PERIOD_SECONDS
+}
+
+/**
  * The ordered OK/ERR config commands (steps before NET TRY / BOND). NVSSET carries the JSON envelope (D26.5).
- * C2 PERIOD / SETWAKE are omitted when blank (Policy=Data — the operator either sets them or the firmware
- * default holds).
+ * C2 PERIOD is always emitted (E7 non-blank default, see effectiveC2Period); SETWAKE is omitted when blank
+ * (Policy=Data — the operator either sets it or the firmware default holds).
  */
 export function buildProvisionSteps(f: ProvisionFields): ProvisionStep[] {
   const steps: ProvisionStep[] = [
@@ -59,9 +75,8 @@ export function buildProvisionSteps(f: ProvisionFields): ProvisionStep[] {
     { line: `SETURL ${f.frameUrl}` },
     { line: `NVSSET storage dev_sn ${wrapSerial(f.serial)}` },
     { line: `C2 URL ${f.c2Url}` },
+    { line: `C2 PERIOD ${effectiveC2Period(f)}` },
   ]
-  const period = (f.c2PeriodSeconds ?? '').trim()
-  if (period !== '') steps.push({ line: `C2 PERIOD ${period}` })
   const wake = (f.wakeSeconds ?? '').trim()
   if (wake !== '') steps.push({ line: `SETWAKE ${wake}` })
   return steps

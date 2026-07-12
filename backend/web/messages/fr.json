@@ -318,6 +318,7 @@
   "onboard.field.frame_url": "URL du frame",
   "onboard.field.c2_url": "URL C2",
   "onboard.field.c2_period": "Période C2 (s)",
+  "onboard.c2_period_hint": "Cadence du long-poll par câble. 0 = pas de long-poll : un bond manqué n'est jamais rattrapé par le câble — seul le prochain cycle de réveil le retente (choix délibéré pour les appareils sur batterie uniquement). Vide = l'intervalle de réveil, sinon 1800 s.",
   "onboard.field.wake": "Intervalle de réveil (s)",
   "onboard.ph_optional": "facultatif",
   "onboard.provision_btn": "Provisionner + émettre la clé",

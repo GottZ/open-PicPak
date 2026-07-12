@@ -6,6 +6,7 @@ import {
   runProvision,
 } from './provision'
 import { ConsoleSession } from './console'
+import { DEFAULT_C2_PERIOD_SECONDS } from '../onboard/defaults'
 import type { SerialLink } from './types'
 import type { ProvisionFields } from './validate'
 
@@ -65,6 +66,31 @@ describe('dev_sn JSON envelope (D26.5 / F4 — the BLOCKER)', () => {
     const steps = buildProvisionSteps(fields)
     const devsn = steps.find((s) => s.line.includes('dev_sn'))
     expect(devsn?.line).toBe('NVSSET storage dev_sn {"serial_number":"PP-001"}')
+  })
+})
+
+// E7 / design 03 §4.2+§8-E-Period: c2_period==0 on a tethered device is a DEAD-END (a pre-enroll poll never
+// retries the bond — cmd.c:282 keep-awake branch never entered), so the provision path itself must write a
+// non-blank period when the operator leaves the field untouched. An explicit 0 stays an explicit operator
+// decision (battery-only devices; the next wake cycle picks the poll up) and is NEVER overridden.
+describe('C2 PERIOD non-blank default in the provision path (E7, design 03 Welle 4)', () => {
+  it('a blank period field still emits C2 PERIOD with the form default (1800)', () => {
+    const lines = buildProvisionSteps({ ...fields, c2PeriodSeconds: '' }).map((s) => s.line)
+    expect(lines).toContain(`C2 PERIOD ${DEFAULT_C2_PERIOD_SECONDS}`)
+  })
+  it('a blank period field mirrors a set wake interval (the §7-W4 preferred default)', () => {
+    const lines = buildProvisionSteps({ ...fields, c2PeriodSeconds: '  ', wakeSeconds: '900' }).map((s) => s.line)
+    expect(lines).toContain('C2 PERIOD 900')
+    expect(lines).toContain('SETWAKE 900')
+  })
+  it('an explicit 0 is respected and NOT overridden by the default (deliberate battery choice)', () => {
+    const lines = buildProvisionSteps({ ...fields, c2PeriodSeconds: '0', wakeSeconds: '900' }).map((s) => s.line)
+    expect(lines).toContain('C2 PERIOD 0')
+    expect(lines).not.toContain('C2 PERIOD 900')
+  })
+  it('an explicit operator value wins over both wake and the fixed default', () => {
+    const lines = buildProvisionSteps({ ...fields, c2PeriodSeconds: '600', wakeSeconds: '900' }).map((s) => s.line)
+    expect(lines).toContain('C2 PERIOD 600')
   })
 })
 

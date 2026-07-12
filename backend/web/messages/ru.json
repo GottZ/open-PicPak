@@ -318,6 +318,7 @@
   "onboard.field.frame_url": "URL кадра",
   "onboard.field.c2_url": "URL C2",
   "onboard.field.c2_period": "Период C2 (с)",
+  "onboard.c2_period_hint": "Такт long-poll по кабелю. 0 = без long-poll: пропущенный bond по кабелю никогда не довыполняется — его повторит только следующий цикл пробуждения (осознанный выбор для устройств только на батарее). Пусто = интервал пробуждения, иначе 1800 с.",
   "onboard.field.wake": "Интервал пробуждения (с)",
   "onboard.ph_optional": "необязательно",
   "onboard.provision_btn": "Подготовить + выпустить ключ",

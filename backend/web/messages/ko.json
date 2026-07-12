@@ -318,6 +318,7 @@
   "onboard.field.frame_url": "Frame URL",
   "onboard.field.c2_url": "C2 URL",
   "onboard.field.c2_period": "C2 주기 (s)",
+  "onboard.c2_period_hint": "케이블 연결 시 롱폴링 주기. 0 = 롱폴링 없음: 놓친 본드는 케이블로는 다시 시도되지 않으며 다음 Wake 사이클에서만 재시도됩니다(배터리 전용 기기를 위한 의도적 선택). 비워두면 Wake 간격, 없으면 1800초.",
   "onboard.field.wake": "Wake 간격 (s)",
   "onboard.ph_optional": "선택",
   "onboard.provision_btn": "프로비저닝 + 키 발급",

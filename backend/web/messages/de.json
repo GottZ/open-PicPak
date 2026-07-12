@@ -318,6 +318,7 @@
   "onboard.field.frame_url": "Frame-URL",
   "onboard.field.c2_url": "C2-URL",
   "onboard.field.c2_period": "C2-Periode (s)",
+  "onboard.c2_period_hint": "Long-Poll-Takt am Kabel. 0 = kein Long-Poll: einen verpassten Bond holt das Gerät am Kabel nie nach — erst der nächste Wake-Zyklus (bewusste Wahl für reine Batterie-Geräte). Leer = Wake-Intervall, sonst 1800 s.",
   "onboard.field.wake": "Wake-Intervall (s)",
   "onboard.ph_optional": "optional",
   "onboard.provision_btn": "Provisionieren + Schlüssel ausgeben",

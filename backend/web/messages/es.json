@@ -318,6 +318,7 @@
   "onboard.field.frame_url": "URL del frame",
   "onboard.field.c2_url": "URL C2",
   "onboard.field.c2_period": "Periodo C2 (s)",
+  "onboard.c2_period_hint": "Cadencia de long-poll por cable. 0 = sin long-poll: un bond perdido nunca se recupera por el cable — solo el siguiente ciclo de despertar lo reintenta (elección deliberada para dispositivos solo con batería). Vacío = el intervalo de despertar, si no 1800 s.",
   "onboard.field.wake": "Intervalo de despertar (s)",
   "onboard.ph_optional": "opcional",
   "onboard.provision_btn": "Provisionar + emitir clave",

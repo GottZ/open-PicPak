@@ -475,6 +475,7 @@
         {#if fieldErrors.c2Url}<span class="fielderr">{fieldErrors.c2Url}</span>{/if}
         <p class="hint urlhint">{urlsTokenized ? m['onboard.url_default_hint_tokenized']() : m['onboard.url_default_hint']()}</p>
         <label>{m['onboard.field.c2_period']()}<input bind:value={fields.c2PeriodSeconds} placeholder="1800" /></label>
+        <p class="hint urlhint">{m['onboard.c2_period_hint']()}</p>
         <label>{m['onboard.field.wake']()}<input bind:value={fields.wakeSeconds} placeholder={m['onboard.ph_optional']()} /></label>
       </div>
       <button onclick={provision} disabled={busy || !provisionValid}>{m['onboard.provision_btn']()}</button>

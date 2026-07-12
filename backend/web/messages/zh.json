@@ -318,6 +318,7 @@
   "onboard.field.frame_url": "Frame URL",
   "onboard.field.c2_url": "C2 URL",
   "onboard.field.c2_period": "C2 周期（s）",
+  "onboard.c2_period_hint": "有线连接时的长轮询节奏。0 = 不长轮询：错过的绑定不会通过线缆补上——只有下一个唤醒周期才会重试（纯电池设备的有意选择）。留空 = 唤醒间隔，否则为 1800 秒。",
   "onboard.field.wake": "唤醒间隔（s）",
   "onboard.ph_optional": "可选",
   "onboard.provision_btn": "预配 + 生成密钥",

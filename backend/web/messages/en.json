@@ -318,6 +318,7 @@
   "onboard.field.frame_url": "Frame URL",
   "onboard.field.c2_url": "C2 URL",
   "onboard.field.c2_period": "C2 period (s)",
+  "onboard.c2_period_hint": "Tethered long-poll cadence. 0 = no long-poll: a missed bond is never picked up over the cable — only the next wake cycle retries it (a deliberate choice for battery-only devices). Blank = the wake interval, else 1800 s.",
   "onboard.field.wake": "Wake interval (s)",
   "onboard.ph_optional": "optional",
   "onboard.provision_btn": "Provision + emit key",

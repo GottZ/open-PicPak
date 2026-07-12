@@ -318,6 +318,7 @@
   "onboard.field.frame_url": "URL Frame",
   "onboard.field.c2_url": "URL C2",
   "onboard.field.c2_period": "Periodo C2 (s)",
+  "onboard.c2_period_hint": "Cadenza del long-poll via cavo. 0 = nessun long-poll: un bond mancato non viene mai recuperato via cavo — solo il prossimo ciclo di wake lo ritenta (scelta deliberata per dispositivi solo a batteria). Vuoto = l'intervallo di wake, altrimenti 1800 s.",
   "onboard.field.wake": "Intervallo di wake (s)",
   "onboard.ph_optional": "facoltativo",
   "onboard.provision_btn": "Provisiona + emetti chiave",

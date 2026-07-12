@@ -318,6 +318,7 @@
   "onboard.field.frame_url": "フレームURL",
   "onboard.field.c2_url": "C2 URL",
   "onboard.field.c2_period": "C2周期（秒）",
+  "onboard.c2_period_hint": "ケーブル接続時のロングポーリング周期。0 = ロングポーリングなし：取り逃したボンドはケーブル経由では二度と再試行されず、次のWakeサイクルでのみ回復します（バッテリー専用デバイス向けの意図的な選択）。空欄 = Wake間隔、なければ1800秒。",
   "onboard.field.wake": "Wake間隔（秒）",
   "onboard.ph_optional": "任意",
   "onboard.provision_btn": "プロビジョニング + 鍵を発行",
