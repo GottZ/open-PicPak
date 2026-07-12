@@ -21,6 +21,7 @@
   // ever having rendered the locked state to begin with.
   import { session } from '../../lib/auth.svelte'
   import SecretsPanel from './SecretsPanel.svelte'
+  import DiagnosticsPanel from './DiagnosticsPanel.svelte'
   import { m } from '../../paraglide/messages.js'
 </script>
 
@@ -37,6 +38,13 @@
   {:else}
     <p class="state needs-admin" role="alert">{m['settings.needs_admin']()}</p>
   {/if}
+
+  <!-- DiagnosticsPanel: GET /api/config is AUTH-ONLY (adminhttp.Auth, NOT
+       RequireAdmin — telemetry_http.go:66), so it lives OUTSIDE the
+       session.is_admin branch above — a confirmed non-admin sees this too;
+       only SecretsPanel (a genuinely admin-gated LIST/PUT/DELETE surface)
+       stays behind the gate (B3 report §Platzierungs-Entscheidung). -->
+  <DiagnosticsPanel />
 </section>
 
 <style>

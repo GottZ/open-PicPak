@@ -631,5 +631,9 @@
   "settings.secrets.not_found": "Secret existiert nicht (mehr).",
   "settings.secrets.error.invalid_name": "Ungültiger Name — nur Kleinbuchstaben, Ziffern, Punkt, Unterstrich, Bindestrich, beginnend mit Kleinbuchstabe oder Ziffer.",
   "settings.secrets.error.empty_value": "Wert darf nicht leer sein.",
-  "settings.secrets.error.value_too_large": "Wert überschreitet das Größenlimit (64 KiB)."
+  "settings.secrets.error.value_too_large": "Wert überschreitet das Größenlimit (64 KiB).",
+  "settings.diag.heading": "Diagnose",
+  "settings.diag.not_set": "nicht gesetzt",
+  "settings.diag.field.grafana_base_url": "Grafana-Basis-URL",
+  "settings.diag.field.webhook_base_url": "Webhook-Basis-URL"
 }

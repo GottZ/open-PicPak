@@ -631,5 +631,9 @@
   "settings.secrets.not_found": "El secreto ya no existe.",
   "settings.secrets.error.invalid_name": "Nombre inválido — solo minúsculas, dígitos, punto, guion bajo, guion, debe empezar con minúscula o dígito.",
   "settings.secrets.error.empty_value": "El valor no puede estar vacío.",
-  "settings.secrets.error.value_too_large": "El valor supera el límite de tamaño (64 KiB)."
+  "settings.secrets.error.value_too_large": "El valor supera el límite de tamaño (64 KiB).",
+  "settings.diag.heading": "Diagnóstico",
+  "settings.diag.not_set": "no configurado",
+  "settings.diag.field.grafana_base_url": "URL base de Grafana",
+  "settings.diag.field.webhook_base_url": "URL base del webhook"
 }

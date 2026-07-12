@@ -631,5 +631,9 @@
   "settings.secrets.not_found": "Секрет больше не существует.",
   "settings.secrets.error.invalid_name": "Недопустимое имя — только строчные буквы, цифры, точка, подчёркивание, дефис; должно начинаться со строчной буквы или цифры.",
   "settings.secrets.error.empty_value": "Значение не может быть пустым.",
-  "settings.secrets.error.value_too_large": "Значение превышает лимит размера (64 КиБ)."
+  "settings.secrets.error.value_too_large": "Значение превышает лимит размера (64 КиБ).",
+  "settings.diag.heading": "Диагностика",
+  "settings.diag.not_set": "не задано",
+  "settings.diag.field.grafana_base_url": "Базовый URL Grafana",
+  "settings.diag.field.webhook_base_url": "Базовый URL вебхука"
 }

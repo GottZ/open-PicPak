@@ -45,3 +45,11 @@ export interface SecretsResponse {
   success: true
   secrets: SecretMeta[]
 }
+
+// Source: telemetryHandlers.config via GET /api/config (D22.13). Non-secret SPA config; empty strings
+// when the env is unset (the editor hides the webhook URL then — no hostname baked into the SPA).
+export interface ConfigResponse {
+  success: true
+  grafana_base_url: string
+  webhook_base_url: string
+}

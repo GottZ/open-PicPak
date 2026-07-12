@@ -631,5 +631,9 @@
   "settings.secrets.not_found": "シークレットは既に存在しません。",
   "settings.secrets.error.invalid_name": "不正な名前です — 小文字・数字・ピリオド・アンダースコア・ハイフンのみ使用でき、先頭は小文字か数字にしてください。",
   "settings.secrets.error.empty_value": "値を空にすることはできません。",
-  "settings.secrets.error.value_too_large": "値がサイズ上限(64 KiB)を超えています。"
+  "settings.secrets.error.value_too_large": "値がサイズ上限(64 KiB)を超えています。",
+  "settings.diag.heading": "診断",
+  "settings.diag.not_set": "未設定",
+  "settings.diag.field.grafana_base_url": "Grafana ベース URL",
+  "settings.diag.field.webhook_base_url": "Webhook ベース URL"
 }

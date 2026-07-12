@@ -631,5 +631,9 @@
   "settings.secrets.not_found": "该 secret 已不存在。",
   "settings.secrets.error.invalid_name": "名称无效 —— 仅允许小写字母、数字、点、下划线、连字符，且须以小写字母或数字开头。",
   "settings.secrets.error.empty_value": "值不能为空。",
-  "settings.secrets.error.value_too_large": "值超过大小限制（64 KiB）。"
+  "settings.secrets.error.value_too_large": "值超过大小限制（64 KiB）。",
+  "settings.diag.heading": "诊断",
+  "settings.diag.not_set": "未设置",
+  "settings.diag.field.grafana_base_url": "Grafana 基础 URL",
+  "settings.diag.field.webhook_base_url": "Webhook 基础 URL"
 }

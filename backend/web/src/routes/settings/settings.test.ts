@@ -7,14 +7,36 @@
 import { describe, expect, it } from 'vitest'
 import settingsHomeSrc from './SettingsHome.svelte?raw'
 import secretsPanelSrc from './SecretsPanel.svelte?raw'
+import diagnosticsPanelSrc from './DiagnosticsPanel.svelte?raw'
 
 // N4 — {@html} ban (§5 B4/B6). Muster ota.test.ts's sibling gate; the AST gate
 // (scripts/lint-no-html.ts) covers every .svelte file structurally, this pins it
 // locally at the settings sources too.
 describe('Settings sources never render an operator string via {@html} (B4/B6, N4)', () => {
-  it('SettingsHome and SecretsPanel carry no {@html} directive', () => {
+  it('SettingsHome, SecretsPanel and DiagnosticsPanel carry no {@html} directive', () => {
     expect(settingsHomeSrc).not.toMatch(/\{@html[\s(]/)
     expect(secretsPanelSrc).not.toMatch(/\{@html[\s(]/)
+    expect(diagnosticsPanelSrc).not.toMatch(/\{@html[\s(]/)
+  })
+})
+
+// B3 (design 02-settings-spa §7-W3): GET /api/config is auth-only (adminhttp.Auth,
+// telemetry_http.go:66), NOT RequireAdmin, so DiagnosticsPanel must sit OUTSIDE
+// the session.is_admin branch — a confirmed non-admin sees it too. Live-verified
+// (§ report): nesting <DiagnosticsPanel /> inside the `{:else if session.is_admin}`
+// branch (alongside <SecretsPanel />) makes the assertion below fail red.
+describe('SettingsHome mounts DiagnosticsPanel outside the session.is_admin branch (auth-only route, B3)', () => {
+  it('<DiagnosticsPanel /> sits after the admin-gate {#if}/{:else if}/{:else}{/if}, not nested inside it', () => {
+    const template = settingsHomeSrc.slice(settingsHomeSrc.indexOf('</script>'))
+    const adminIdx = template.indexOf('{:else if session.is_admin}')
+    const elseIdx = template.indexOf('{:else}', adminIdx)
+    const closeIfIdx = template.indexOf('{/if}', elseIdx)
+    const diagIdx = template.indexOf('<DiagnosticsPanel')
+    expect(adminIdx).toBeGreaterThan(-1)
+    expect(elseIdx).toBeGreaterThan(-1)
+    expect(closeIfIdx).toBeGreaterThan(-1)
+    expect(diagIdx).toBeGreaterThan(-1)
+    expect(diagIdx).toBeGreaterThan(closeIfIdx)
   })
 })
 

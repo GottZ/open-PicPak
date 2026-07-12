@@ -631,5 +631,9 @@
   "settings.secrets.not_found": "Secret no longer exists.",
   "settings.secrets.error.invalid_name": "Invalid name — lowercase letters, digits, dot, underscore, hyphen only, must start with a lowercase letter or digit.",
   "settings.secrets.error.empty_value": "Value must not be empty.",
-  "settings.secrets.error.value_too_large": "Value exceeds the size cap (64 KiB)."
+  "settings.secrets.error.value_too_large": "Value exceeds the size cap (64 KiB).",
+  "settings.diag.heading": "Diagnostics",
+  "settings.diag.not_set": "not set",
+  "settings.diag.field.grafana_base_url": "Grafana base URL",
+  "settings.diag.field.webhook_base_url": "Webhook base URL"
 }

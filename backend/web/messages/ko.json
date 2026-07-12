@@ -631,5 +631,9 @@
   "settings.secrets.not_found": "시크릿이 더 이상 존재하지 않습니다.",
   "settings.secrets.error.invalid_name": "잘못된 이름입니다 — 소문자, 숫자, 마침표, 밑줄, 하이픈만 사용할 수 있으며 소문자나 숫자로 시작해야 합니다.",
   "settings.secrets.error.empty_value": "값은 비워둘 수 없습니다.",
-  "settings.secrets.error.value_too_large": "값이 크기 제한(64 KiB)을 초과했습니다."
+  "settings.secrets.error.value_too_large": "값이 크기 제한(64 KiB)을 초과했습니다.",
+  "settings.diag.heading": "진단",
+  "settings.diag.not_set": "설정되지 않음",
+  "settings.diag.field.grafana_base_url": "Grafana 기본 URL",
+  "settings.diag.field.webhook_base_url": "웹훅 기본 URL"
 }
