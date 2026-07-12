@@ -605,5 +605,9 @@
   "ota.resolve.source.fleet": "全群",
   "ota.resolve.source.channel_default": "频道默认",
   "ota.resolve.source.none": "无目标",
-  "ota.resolve.version": "版本"
+  "ota.resolve.version": "版本",
+  "ota.resolve.change": "切换",
+  "ota.resolve.channel_changed": "{serial}：频道已切换为 {channel}。",
+  "ota.resolve.error.device_not_found": "未找到该设备。",
+  "ota.resolve.error.unknown_channel": "未知频道。"
 }

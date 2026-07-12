@@ -17,6 +17,17 @@
   // B6 (§5): `serial`/`channel`/`version` are free/DB-sourced strings; every
   // value below renders as a text node ({…}), never {@html} — pinned in
   // ota.test.ts.
+  //
+  // W5 + E4 (§4.4 Resolve-Vorschau, §8-OQ4 Abweichung "auch wechseln"): a
+  // DevicePicker + "Auflösen" resolves GET /api/resolve/{serial} (the SAME
+  // resolver ingest serves on /pp, D20.2/T12) into {version, source}. E4 adds
+  // the resolved device's CURRENT channel (read from the already-fetched
+  // deviceList, §6 reuse) plus an admin-gated channel-<select> + "Wechseln"
+  // that PATCHes /api/devices/{serial} (devices.go:88-117) — the same
+  // mutation Fleet is expected to carry too (design intentionally duplicates
+  // it, §8-OQ4/§9 merge-point). source='none' (fail-open, read.go:18-24) is
+  // NOT an error — it renders through the identical ready-path as every other
+  // source (N2, ota.test.ts).
   import { onMount, onDestroy } from 'svelte'
   import StateView from '../../lib/StateView.svelte'
   import DevicePicker from '../../lib/DevicePicker.svelte'
@@ -28,10 +39,17 @@
   import { mutationAffordance } from '../../lib/readonly'
   import { notify } from '../../lib/toasts.svelte'
   import { otaErrorText } from '../../lib/ota/firmware'
-  import { isRolloutGone, isValidRolloutSerial, rolloutErrorText } from '../../lib/ota/rollouts'
+  import {
+    deviceChannelErrorText,
+    isRolloutGone,
+    isValidRolloutSerial,
+    resolveSourceLabel,
+    rolloutErrorText,
+  } from '../../lib/ota/rollouts'
   import type {
     ChannelsResponse,
     FirmwareResponse,
+    ResolveResponse,
     RolloutRow,
     RolloutsResponse,
   } from '../../lib/ota/types'
@@ -85,9 +103,10 @@
     groupExpanded[channel] = !groupExpanded[channel]
   }
 
-  // §6: device roster feeds both DevicePicker surfaces below (upsert target +
-  // list filter) — same raw-apiFetch-into-array pattern as MediaHome's panel
-  // picker (no Resource wrapper: a failed fetch just leaves both pickers empty).
+  // §6: device roster feeds all three DevicePicker surfaces below (upsert
+  // target + list filter + W5 resolve-vorschau) — same raw-apiFetch-into-array
+  // pattern as MediaHome's panel picker (no Resource wrapper: a failed fetch
+  // just leaves every picker empty).
   let deviceList = $state<Device[]>([])
 
   // §6 "Default-Serial-Filter via DevicePicker": narrows every group's visible
@@ -216,6 +235,74 @@
     } finally {
       deleting = false
       armed = null
+    }
+  }
+
+  // --- Resolve-Vorschau (§4.4/§7-W5, GET /api/resolve/{serial}) + E4-Erweiterung
+  // (Device-Channel-Wechsel, PATCH /api/devices/{serial}, devices.go:88-117) ---
+  let resolveSerial = $state<string | null>(null)
+  let resolving = $state(false)
+  let resolved = $state<ResolveResponse | null>(null)
+  let resolveErr = $state<string | null>(null)
+
+  // E4: the CURRENT channel of the resolved device. Cheapest correct source —
+  // `deviceList` (fetched once via GET /api/devices onMount, §6, reused here)
+  // already carries `channel` per row (api/types.ts Device.channel); a second
+  // request would be redundant. `GET /api/resolve/{serial}` itself does NOT
+  // carry the device's channel — `Resolved = {version, source}` (types.ts:40-43)
+  // is the RESOLVER OUTPUT (which version a device gets), not device identity.
+  const resolvedDevice = $derived(deviceList.find((d) => d.serial === resolveSerial) ?? null)
+  let pickedChannel = $state('')
+  let changingChannel = $state(false)
+
+  async function resolveDevice(serial: string): Promise<void> {
+    resolving = true
+    resolveErr = null
+    try {
+      resolved = await apiFetch<ResolveResponse>(`/api/resolve/${serial}`)
+      // §7-W5 N2: source='none' (fail-open, read.go:18-24 — unknown serial or
+      // simply no target) flows through this SAME success assignment as every
+      // other source; nothing here branches on it as an error. It renders via
+      // resolveSourceLabel in the template below, same as 'serial'/'fleet'/
+      // 'channel-default'.
+      pickedChannel = resolvedDevice?.channel ?? ''
+    } catch (err) {
+      resolved = null
+      resolveErr = otaErrorText(err)
+    } finally {
+      resolving = false
+    }
+  }
+
+  function onResolveClick(): void {
+    if (resolveSerial === null) return
+    void resolveDevice(resolveSerial)
+  }
+
+  // E4 "auch wechseln" (Abweichung von der read-only-Empfehlung §8-OQ4): admin-
+  // gated Channel-Wechsel direkt aus der Vorschau. Nach Erfolg wird der Resolve
+  // NEU ausgeführt, weil der Wechsel den Resolver-Input (devices.channel,
+  // read.go:11-14) ändert — die alte {version, source}-Anzeige wäre sonst
+  // stale. `rollouts.reload()` ist bewusst NICHT dabei: rollout_targets-Rows
+  // tragen keinen Device-Channel-Bezug (RolloutRow, types.ts:24-31), ein
+  // Channel-Move ändert an der Rollout-LISTE nichts.
+  async function submitChannelChange(): Promise<void> {
+    if (!session.is_admin || resolveSerial === null || pickedChannel === '' || changingChannel) return // Handler-Guard (§5 B1)
+    changingChannel = true
+    try {
+      const res = await apiFetch<{ success: true; device: Device }>(`/api/devices/${resolveSerial}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ channel: pickedChannel }),
+      })
+      // keep the roster in sync so the picker/current-channel display reflect
+      // the move immediately, without a full GET /api/devices refetch.
+      deviceList = deviceList.map((d) => (d.serial === res.device.serial ? res.device : d))
+      notify.success(m['ota.resolve.channel_changed']({ serial: res.device.serial, channel: res.device.channel }))
+      await resolveDevice(resolveSerial)
+    } catch (err) {
+      notify.error(deviceChannelErrorText(err)) // not_found ("Gerät") / unknown_channel — NIE otaErrorText's Channel-not_found
+    } finally {
+      changingChannel = false
     }
   }
 
@@ -407,6 +494,60 @@
       </div>
     {/snippet}
   </StateView>
+
+  <section class="resolve" aria-label={m['ota.resolve.heading']()}>
+    <h2>{m['ota.resolve.heading']()}</h2>
+
+    <DevicePicker devices={deviceList} bind:value={resolveSerial} placeholder={m['ota.resolve.pick']()} />
+
+    <button type="button" onclick={onResolveClick} disabled={resolveSerial === null || resolving}>
+      {m['ota.resolve.resolve']()}
+    </button>
+
+    {#if resolveErr}
+      <p class="resolve-error" role="alert">{resolveErr}</p>
+    {/if}
+
+    {#if resolved}
+      <div class="resolve-result">
+        <p>
+          <span class="field-label">{m['ota.resolve.version']()}:</span>
+          {resolved.resolved.version || '—'}
+          <span class="source-tag">({resolveSourceLabel(resolved.resolved.source)})</span>
+        </p>
+
+        {#if resolvedDevice}
+          <p>
+            <span class="field-label">{m['ota.rollout.channel']()}:</span>
+            {resolvedDevice.channel}
+          </p>
+          <div class="channel-move">
+            <select
+              bind:value={pickedChannel}
+              disabled={affordance.disabled || changingChannel}
+              aria-label={m['ota.rollout.channel']()}
+            >
+              {#each channels.data?.channels ?? [] as ch (ch.name)}
+                <option value={ch.name}>{ch.name}</option>
+              {/each}
+            </select>
+            <button
+              type="button"
+              onclick={submitChannelChange}
+              disabled={affordance.disabled ||
+                changingChannel ||
+                pickedChannel === '' ||
+                pickedChannel === resolvedDevice.channel}
+              title={affordance.disabled ? affordance.title : ''}
+              aria-disabled={affordance['aria-disabled']}
+            >
+              {m['ota.resolve.change']()}
+            </button>
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </section>
 </section>
 
 <style>
@@ -563,5 +704,43 @@
   .delete.armed {
     color: var(--danger);
     border-color: var(--danger);
+  }
+  .resolve {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    border-top: 1px solid var(--border);
+    padding-top: 0.75rem;
+  }
+  .resolve-error {
+    color: var(--danger);
+    font-size: 0.85rem;
+    margin: 0;
+  }
+  .resolve-result {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.875rem;
+  }
+  .resolve-result p {
+    margin: 0;
+  }
+  .field-label {
+    color: var(--fg-muted);
+  }
+  .source-tag {
+    color: var(--fg-muted);
+  }
+  .channel-move {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .channel-move select {
+    font: inherit;
   }
 </style>

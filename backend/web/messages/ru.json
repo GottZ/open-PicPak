@@ -605,5 +605,9 @@
   "ota.resolve.source.fleet": "весь парк",
   "ota.resolve.source.channel_default": "по умолчанию канала",
   "ota.resolve.source.none": "нет цели",
-  "ota.resolve.version": "Версия"
+  "ota.resolve.version": "Версия",
+  "ota.resolve.change": "Сменить",
+  "ota.resolve.channel_changed": "{serial}: канал изменён на {channel}.",
+  "ota.resolve.error.device_not_found": "Устройство не найдено.",
+  "ota.resolve.error.unknown_channel": "Неизвестный канал."
 }

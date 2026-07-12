@@ -605,5 +605,9 @@
   "ota.resolve.source.fleet": "flota",
   "ota.resolve.source.channel_default": "por defecto del canal",
   "ota.resolve.source.none": "sin destino",
-  "ota.resolve.version": "Versión"
+  "ota.resolve.version": "Versión",
+  "ota.resolve.change": "Cambiar",
+  "ota.resolve.channel_changed": "{serial}: canal cambiado a {channel}.",
+  "ota.resolve.error.device_not_found": "Dispositivo no encontrado.",
+  "ota.resolve.error.unknown_channel": "Canal desconocido."
 }

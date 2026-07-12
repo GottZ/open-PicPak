@@ -5,6 +5,7 @@
 
 import { toApiError } from '../api'
 import { otaErrorText } from './firmware'
+import type { Source } from './types'
 import { m } from '../../paraglide/messages.js'
 
 // Spiegel von ota_http.go:168-175: serial ist entweder der Fleet-Wildcard '*'
@@ -42,5 +43,51 @@ export function isRolloutGone(err: unknown): boolean {
  */
 export function rolloutErrorText(err: unknown): string {
   if (isRolloutGone(err)) return m['ota.rollout.error.gone']()
+  return otaErrorText(err)
+}
+
+// §3/§4.6 Bindestrich-Falle: the resolver's wire value for the channel-default
+// source is `'channel-default'` WITH A HYPHEN (internal/rollout/types.go:15,
+// lib/ota/types.ts Source), but the i18n key is `ota.resolve.source.channel_default`
+// WITH AN UNDERSCORE. A naive `m['ota.resolve.source.' + source]()` targets the
+// non-existent key `…source.channel-default` for exactly this one source —
+// Paraglide falls back to the raw key string at runtime, not a compile error
+// (pinned in ota.test.ts N1). This Record is the explicit, exhaustive mapping;
+// TypeScript's `Record<Source, …>` makes a missing source a compile error.
+const SOURCE_LABEL: Record<Source, () => string> = {
+  serial: () => m['ota.resolve.source.serial'](),
+  fleet: () => m['ota.resolve.source.fleet'](),
+  'channel-default': () => m['ota.resolve.source.channel_default'](),
+  none: () => m['ota.resolve.source.none'](),
+}
+
+/**
+ * Lokalisiertes Label für einen Resolve-`source`-Tag (§3/§4.6). `source='none'`
+ * (unbekanntes Serial ODER kein Ziel, fail-open read.go:18-24, §7-W5) mappt
+ * genauso wie jede andere Source auf ihren Text ("kein Ziel") — es ist KEIN
+ * Fehlerzustand, siehe N2 in ota.test.ts.
+ */
+export function resolveSourceLabel(source: Source): string {
+  return SOURCE_LABEL[source]()
+}
+
+/**
+ * Lokalisierter Text für eine PATCH /api/devices/{serial}-Ablehnung (E4,
+ * §4.4-Erweiterung/Resolve-Vorschau, devices.go:88-117). KRITISCH wie
+ * rolloutErrorText oben: `not_found` heisst hier "kein solches Gerät"
+ * (devices.go:111-114, "no such device"), NICHT "Channel nicht gefunden" —
+ * otaErrorText's genereller `not_found`-Case (§4.3, Channels) wäre hier
+ * falsch und muss VOR jedem Delegieren abgefangen werden, exakt wie
+ * `isRolloutGone` den Rollout-404 vor `otaErrorText` abfängt. `unknown_channel`
+ * (FK 23503, devices.go:103-106) ist ein weiterer neuer Code, den otaErrorText
+ * nicht kennt (es kennt nur `unknown_version`/`unknown_channel_or_version` aus
+ * den Channel-/Rollout-Routen) — auch dafür ein eigener Key statt Fallback auf
+ * die rohe ApiError-Message.
+ */
+export function deviceChannelErrorText(err: unknown): string {
+  const e = toApiError(err)
+  const serverCode = typeof e.details?.['code'] === 'string' ? (e.details['code'] as string) : e.code
+  if (serverCode === 'not_found') return m['ota.resolve.error.device_not_found']()
+  if (serverCode === 'unknown_channel') return m['ota.resolve.error.unknown_channel']()
   return otaErrorText(err)
 }

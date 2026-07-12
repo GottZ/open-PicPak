@@ -605,5 +605,9 @@
   "ota.resolve.source.fleet": "フリート",
   "ota.resolve.source.channel_default": "チャンネルのデフォルト",
   "ota.resolve.source.none": "対象なし",
-  "ota.resolve.version": "バージョン"
+  "ota.resolve.version": "バージョン",
+  "ota.resolve.change": "切り替え",
+  "ota.resolve.channel_changed": "{serial}: チャンネルを {channel} に切り替えました。",
+  "ota.resolve.error.device_not_found": "デバイスが見つかりません。",
+  "ota.resolve.error.unknown_channel": "不明なチャンネルです。"
 }

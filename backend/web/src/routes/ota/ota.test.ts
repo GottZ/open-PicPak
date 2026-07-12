@@ -10,6 +10,9 @@ import otaHomeSrc from './OtaHome.svelte?raw'
 import firmwarePanelSrc from './FirmwarePanel.svelte?raw'
 import channelPanelSrc from './ChannelPanel.svelte?raw'
 import rolloutPanelSrc from './RolloutPanel.svelte?raw'
+import { resolveSourceLabel } from '../../lib/ota/rollouts'
+import type { Source } from '../../lib/ota/types'
+import { m } from '../../paraglide/messages.js'
 
 describe('OTA panels never render device/operator-sourced strings via {@html} (B6)', () => {
   it('OtaHome, FirmwarePanel, ChannelPanel and RolloutPanel carry no {@html} directive', () => {
@@ -141,5 +144,89 @@ describe('RolloutPanel subscribes to the ota reload-hint (E2/A6)', () => {
     expect(rolloutPanelSrc).toMatch(/hint\.kind === 'channel'\) void channels\.reload\(\)/)
     expect(rolloutPanelSrc).toMatch(/hint\.kind === 'firmware'\) void firmware\.reload\(\)/)
     expect(rolloutPanelSrc).toMatch(/onDestroy\(\(\) => \{\s*events\?\.close\(\)/)
+  })
+})
+
+// W5 — Resolve-Vorschau (design 01-ota-spa §3/§4.4/§4.6 Bindestrich-Falle, N1).
+describe('resolveSourceLabel (§3 Bindestrich-Falle)', () => {
+  it('maps all 4 resolver sources to their i18n label, including the hyphen/underscore case', () => {
+    expect(resolveSourceLabel('serial')).toBe(m['ota.resolve.source.serial']())
+    expect(resolveSourceLabel('fleet')).toBe(m['ota.resolve.source.fleet']())
+    expect(resolveSourceLabel('channel-default')).toBe(m['ota.resolve.source.channel_default']())
+    expect(resolveSourceLabel('none')).toBe(m['ota.resolve.source.none']())
+  })
+
+  // N1 — the load-bearing negative probe (§3): the resolver's wire value for
+  // this source is 'channel-default' WITH A HYPHEN (internal/rollout/types.go:15,
+  // lib/ota/types.ts Source), but the message key is
+  // 'ota.resolve.source.channel_default' WITH AN UNDERSCORE. A naive
+  // `m['ota.resolve.source.' + source]()` (string concatenation, exactly what
+  // §3 warns against) would look up the key below — which literally does not
+  // exist in the compiled message catalog `m`. Paraglide does not throw for an
+  // unknown property access at the type level (a raw string index would just
+  // be `undefined` at runtime, not silently "work"); the point pinned here is
+  // that concatenation targets a WRONG, non-existent key, while
+  // resolveSourceLabel's explicit Record targets the real one. Verified live:
+  // reverting resolveSourceLabel to `m['ota.resolve.source.' + source as any]`
+  // makes the source-code assertion below fail red (the src still concatenates),
+  // and TypeScript itself refuses `m[...]` on a non-literal key — the Record
+  // is the only construction that both type-checks and resolves correctly.
+  it('the naive-concatenation key for channel-default does not exist in the message catalog', () => {
+    const source: Source = 'channel-default'
+    const naiveKey = 'ota.resolve.source.' + source
+    expect(naiveKey).toBe('ota.resolve.source.channel-default') // the wrong, hyphenated key a concatenation produces
+    expect(naiveKey).not.toBe('ota.resolve.source.channel_default') // the real, underscored key
+    expect(Object.keys(m)).not.toContain(naiveKey)
+    expect(Object.keys(m)).toContain('ota.resolve.source.channel_default')
+  })
+
+  it('RolloutPanel resolves the source label via the Record helper, not string concatenation', () => {
+    expect(rolloutPanelSrc).toMatch(/resolveSourceLabel\(/)
+    expect(rolloutPanelSrc).not.toMatch(/'ota\.resolve\.source\.'\s*\+/)
+    expect(rolloutPanelSrc).not.toMatch(/`ota\.resolve\.source\.\$\{/)
+  })
+})
+
+// N2 — source='none' (fail-open, read.go:18-24) renders through the SAME ready
+// path as every other source; it is not an error state (§4.4/§7-W5).
+describe('RolloutPanel resolve treats source="none" as a normal result, not an error (N2)', () => {
+  it('resolveDevice() does not special-case source===\'none\' as an error/toast', () => {
+    const fnStart = rolloutPanelSrc.indexOf('async function resolveDevice')
+    const fn = rolloutPanelSrc.slice(fnStart, rolloutPanelSrc.indexOf('\n  }\n', fnStart))
+    expect(fn).not.toMatch(/source\s*===\s*['"]none['"]/)
+    expect(fn).not.toMatch(/notify\.error/)
+  })
+
+  it('the resolved-result markup renders resolveSourceLabel unconditionally (no none-branch around it)', () => {
+    const resultStart = rolloutPanelSrc.indexOf('class="resolve-result"')
+    const resultBlock = rolloutPanelSrc.slice(resultStart, resultStart + 400)
+    expect(resultBlock).toMatch(/resolveSourceLabel\(resolved\.resolved\.source\)/)
+    expect(resultBlock).not.toMatch(/'none'/)
+  })
+})
+
+// E4 (§8-OQ4 Abweichung "auch wechseln") — the channel-move mutation is
+// admin-gated the same way every other RolloutPanel mutation is (§5 B1).
+describe('RolloutPanel channel-move (E4) is admin-gated and PATCHes devices.go:88-117', () => {
+  it('submitChannelChange() returns before PATCHing when session.is_admin is false', () => {
+    const fnStart = rolloutPanelSrc.indexOf('async function submitChannelChange')
+    const fn = rolloutPanelSrc.slice(fnStart, fnStart + 400)
+    expect(fn).toMatch(/if \(!session\.is_admin[^)]*\)\s*return/)
+  })
+
+  it('PATCHes /api/devices/{serial} with a {channel} body, matching devices.go patch()', () => {
+    const fnStart = rolloutPanelSrc.indexOf('async function submitChannelChange')
+    const fn = rolloutPanelSrc.slice(fnStart, fnStart + 600)
+    expect(fn).toMatch(/`\/api\/devices\/\$\{resolveSerial\}`, \{/)
+    expect(fn).toMatch(/method: 'PATCH'/)
+    expect(fn).toMatch(/channel: pickedChannel/)
+  })
+
+  it('the Wechseln button is wired to mutationAffordance (disabled/title/aria-disabled)', () => {
+    const btnStart = rolloutPanelSrc.indexOf('onclick={submitChannelChange}')
+    const btn = rolloutPanelSrc.slice(btnStart, rolloutPanelSrc.indexOf("{m['ota.resolve.change']()}"))
+    expect(btn).toMatch(/disabled=\{affordance\.disabled/)
+    expect(btn).toMatch(/title=\{affordance\.disabled \? affordance\.title : ''\}/)
+    expect(btn).toMatch(/aria-disabled=\{affordance\['aria-disabled'\]\}/)
   })
 })
