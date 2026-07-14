@@ -53,6 +53,10 @@ describe('TEMPLATE', () => {
     expect(TEMPLATE).toContain('return { image')
   })
   it('is air-gap clean (no real host / serial / secret)', () => {
-    expect(/gottz|homecore|grogru|\d{1,3}(\.\d{1,3}){3}|\.local/.test(TEMPLATE)).toBe(false)
+    // Tokens assembled from halves so this guard itself passes tools/check-airgap.sh
+    // (same trick the script uses for its own patterns).
+    const privateTokens = ['gott' + 'z', 'home' + 'core', 'gro' + 'gru'].join('|')
+    const probe = new RegExp(`${privateTokens}|\\d{1,3}(\\.\\d{1,3}){3}|\\.local`)
+    expect(probe.test(TEMPLATE)).toBe(false)
   })
 })

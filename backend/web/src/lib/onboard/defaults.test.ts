@@ -11,9 +11,9 @@ import {
 // C2 = <origin>/<token>/c2, period 1800), pinned so a path-scheme drift fails red.
 describe('onboardUrlDefaults', () => {
   it('derives frame/c2/period from an origin, token as a clearly-marked placeholder', () => {
-    const d = onboardUrlDefaults('https://picpak.janetzky.cloud')
-    expect(d.frameUrl).toBe('https://picpak.janetzky.cloud/<INGEST_TOKEN>/frame')
-    expect(d.c2Url).toBe('https://picpak.janetzky.cloud/<INGEST_TOKEN>/c2')
+    const d = onboardUrlDefaults('https://picpak.example.com')
+    expect(d.frameUrl).toBe('https://picpak.example.com/<INGEST_TOKEN>/frame')
+    expect(d.c2Url).toBe('https://picpak.example.com/<INGEST_TOKEN>/c2')
     expect(d.c2PeriodSeconds).toBe('1800')
   })
 
@@ -31,19 +31,19 @@ describe('onboardUrlDefaults', () => {
 
 // Probe (b): a blank field is filled; an operator-typed value is NEVER overwritten.
 describe('prefilledUrlFields', () => {
-  const origin = 'https://picpak.janetzky.cloud'
+  const origin = 'https://picpak.example.com'
 
   it('fills every blank field from the origin defaults', () => {
     const r = prefilledUrlFields({ frameUrl: '', c2Url: '', c2PeriodSeconds: '' }, origin)
-    expect(r.frameUrl).toBe('https://picpak.janetzky.cloud/<INGEST_TOKEN>/frame')
-    expect(r.c2Url).toBe('https://picpak.janetzky.cloud/<INGEST_TOKEN>/c2')
+    expect(r.frameUrl).toBe('https://picpak.example.com/<INGEST_TOKEN>/frame')
+    expect(r.c2Url).toBe('https://picpak.example.com/<INGEST_TOKEN>/c2')
     expect(r.c2PeriodSeconds).toBe('1800')
   })
 
   it('treats a whitespace-only value as blank', () => {
     const r = prefilledUrlFields({ frameUrl: '   ', c2Url: '\t', c2PeriodSeconds: ' ' }, origin)
-    expect(r.frameUrl).toBe('https://picpak.janetzky.cloud/<INGEST_TOKEN>/frame')
-    expect(r.c2Url).toBe('https://picpak.janetzky.cloud/<INGEST_TOKEN>/c2')
+    expect(r.frameUrl).toBe('https://picpak.example.com/<INGEST_TOKEN>/frame')
+    expect(r.c2Url).toBe('https://picpak.example.com/<INGEST_TOKEN>/c2')
     expect(r.c2PeriodSeconds).toBe('1800')
   })
 
@@ -62,7 +62,7 @@ describe('prefilledUrlFields', () => {
       origin,
     )
     expect(r.frameUrl).toBe('https://typed.example/t/frame')
-    expect(r.c2Url).toBe('https://picpak.janetzky.cloud/<INGEST_TOKEN>/c2')
+    expect(r.c2Url).toBe('https://picpak.example.com/<INGEST_TOKEN>/c2')
     expect(r.c2PeriodSeconds).toBe('600')
   })
 
@@ -75,17 +75,17 @@ describe('prefilledUrlFields', () => {
 // Probe (b): the A35.3b admin path. The endpoint's tokenized URLs fill ONLY blank fields; a typed value is
 // never overwritten; an empty/failed payload degrades to the origin placeholder (Endpoint → Placeholder).
 describe('prefilledFromEndpoint', () => {
-  const origin = 'https://picpak.janetzky.cloud'
+  const origin = 'https://picpak.example.com'
   const resp = {
-    frame_url: 'https://picpak.janetzky.cloud/S3CR3T/frame',
-    c2_url: 'https://picpak.janetzky.cloud/S3CR3T/c2',
+    frame_url: 'https://picpak.example.com/S3CR3T/frame',
+    c2_url: 'https://picpak.example.com/S3CR3T/c2',
     c2_period_s: 1800,
   }
 
   it('fills blank fields with the real tokenized URLs (token replaces the placeholder)', () => {
     const r = prefilledFromEndpoint({ frameUrl: '', c2Url: '', c2PeriodSeconds: '' }, resp, origin)
-    expect(r.frameUrl).toBe('https://picpak.janetzky.cloud/S3CR3T/frame')
-    expect(r.c2Url).toBe('https://picpak.janetzky.cloud/S3CR3T/c2')
+    expect(r.frameUrl).toBe('https://picpak.example.com/S3CR3T/frame')
+    expect(r.c2Url).toBe('https://picpak.example.com/S3CR3T/c2')
     expect(r.c2PeriodSeconds).toBe('1800') // number payload stringified for the form field
   })
 
@@ -101,20 +101,20 @@ describe('prefilledFromEndpoint', () => {
   it('empty payload URLs (feature dark) fall back to the origin placeholder', () => {
     const dark = { frame_url: '', c2_url: '', c2_period_s: '' }
     const r = prefilledFromEndpoint({ frameUrl: '', c2Url: '', c2PeriodSeconds: '' }, dark, origin)
-    expect(r.frameUrl).toBe('https://picpak.janetzky.cloud/<INGEST_TOKEN>/frame')
-    expect(r.c2Url).toBe('https://picpak.janetzky.cloud/<INGEST_TOKEN>/c2')
+    expect(r.frameUrl).toBe('https://picpak.example.com/<INGEST_TOKEN>/frame')
+    expect(r.c2Url).toBe('https://picpak.example.com/<INGEST_TOKEN>/c2')
     expect(r.c2PeriodSeconds).toBe('1800')
   })
 
   it('mixes: a partial payload fills its field, the placeholder covers the blank one, typed stays', () => {
-    const partial = { frame_url: 'https://picpak.janetzky.cloud/S3CR3T/frame', c2_url: '', c2_period_s: 1800 }
+    const partial = { frame_url: 'https://picpak.example.com/S3CR3T/frame', c2_url: '', c2_period_s: 1800 }
     const r = prefilledFromEndpoint(
       { frameUrl: '', c2Url: '', c2PeriodSeconds: '600' },
       partial,
       origin,
     )
-    expect(r.frameUrl).toBe('https://picpak.janetzky.cloud/S3CR3T/frame') // from endpoint
-    expect(r.c2Url).toBe('https://picpak.janetzky.cloud/<INGEST_TOKEN>/c2') // blank payload → placeholder
+    expect(r.frameUrl).toBe('https://picpak.example.com/S3CR3T/frame') // from endpoint
+    expect(r.c2Url).toBe('https://picpak.example.com/<INGEST_TOKEN>/c2') // blank payload → placeholder
     expect(r.c2PeriodSeconds).toBe('600') // typed, never overwritten
   })
 })
