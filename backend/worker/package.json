@@ -4,7 +4,7 @@
   "type": "module",
   "description": "PicPak FaaS worker (Bun) — evaluates operator functions in a curated scope and returns raw 400x300 RGB over the M4 UDS. UNTRUSTED-by-design: no SECRETS_KEY, no DB route, no default route (egress via the policy proxy only).",
   "dependencies": {
-    "sharp": "0.35.2"
+    "sharp": "0.35.3"
   },
   "scripts": {
     "test": "bun test"
